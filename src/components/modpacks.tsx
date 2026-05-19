@@ -28,6 +28,8 @@ interface Modpack {
   description: string;
   createdBy: string;
   createdAt: string;
+  targetMcVersion: string | null;
+  targetLoader: string | null;
   mods: ModpackMod[];
 }
 
@@ -270,6 +272,16 @@ export function Modpacks() {
                     )}
                     <p className="text-xs text-muted-foreground mt-1">
                       {pack.mods.length} mod{pack.mods.length !== 1 ? "s" : ""}
+                      {pack.targetMcVersion && (
+                        <span className="ml-2 font-mono bg-muted px-1.5 py-0.5 rounded">
+                          MC {pack.targetMcVersion}
+                        </span>
+                      )}
+                      {pack.targetLoader && (
+                        <span className="ml-1 capitalize bg-muted px-1.5 py-0.5 rounded">
+                          {pack.targetLoader}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <div className="flex gap-2 flex-shrink-0">

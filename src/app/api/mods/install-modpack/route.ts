@@ -38,16 +38,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Server not configured" }, { status: 500 });
   }
 
-  // Update server version/loader if specified
-  if (mcVersion || modLoader) {
+  // Use modpack's target version/loader, or explicit overrides, or current config
+  const finalMcVersion = mcVersion || (modpack as any).targetMcVersion || serverConfig.mcVersion;
+  const finalLoader = modLoader || (modpack as any).targetLoader || serverConfig.modLoader;
+
+  if (finalMcVersion !== serverConfig.mcVersion || finalLoader !== serverConfig.modLoader) {
     await db.serverConfig.update({
       where: { id: "main" },
-      data: {
-        ...(mcVersion && { mcVersion }),
-        ...(modLoader && { modLoader }),
-      },
+      data: { mcVersion: finalMcVersion, modLoader: finalLoader },
     });
-    serverConfig = { ...serverConfig, ...(mcVersion && { mcVersion }), ...(modLoader && { modLoader }) };
+    serverConfig = { ...serverConfig, mcVersion: finalMcVersion, modLoader: finalLoader };
   }
 
   // Remove all currently installed mods

@@ -62,13 +62,15 @@ model ModRequest {
 }
 
 model Modpack {
-  id          String      @id @default(cuid())
-  name        String
-  description String      @default("")
-  createdBy   String
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  mods        ModpackMod[]
+  id              String      @id @default(cuid())
+  name            String
+  description     String      @default("")
+  createdBy       String
+  targetMcVersion String?
+  targetLoader    String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  mods            ModpackMod[]
 }
 
 model ModpackMod {

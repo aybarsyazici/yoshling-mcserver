@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -27,6 +28,7 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState("downloads");
   const [minDownloads, setMinDownloads] = useState("");
+  const [importing, setImporting] = useState<string | null>(null);
 
   const search = useCallback(
     async () => {
@@ -66,8 +68,9 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
     <div className="space-y-6">
       <div className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-3">
         <p className="text-xs text-muted-foreground">
-          Technic modpacks are pre-built and may include mods not available on Modrinth.
-          Importing creates a modpack with the mods we can identify — some may need manual addition.
+          Technic modpacks are matched against Modrinth to find downloadable mods.
+          Some mods may not be found if they&apos;re exclusive to Technic/CurseForge.
+          Most Technic packs use Forge.
         </p>
       </div>
 
@@ -150,21 +153,29 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
                 </a>
                 <Button
                   size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    toast.info("Technic import creates a placeholder — add mods manually from the Browse tab");
-                    // Create an empty modpack with the name since Technic doesn't expose individual mod info via their API
-                    fetch("/api/modpacks", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        name: pack.displayName,
-                        description: `From Technic Pack (${formatDownloads(pack.downloads)} downloads). Add mods manually.`,
-                      }),
-                    }).then(() => onImported());
+                  disabled={importing === pack.name}
+                  onClick={async () => {
+                    setImporting(pack.name);
+                    try {
+                      const res = await fetch("/api/modpacks/import-technic", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ slug: pack.name, name: pack.displayName }),
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        toast.success(`Imported "${pack.displayName}" — ${data.resolvedOnModrinth}/${data.totalModsInPack} mods found on Modrinth`);
+                        onImported();
+                      } else {
+                        const data = await res.json();
+                        toast.error(data.error || "Failed to import");
+                      }
+                    } finally {
+                      setImporting(null);
+                    }
                   }}
                 >
-                  Create Pack
+                  {importing === pack.name ? "Importing..." : "Import"}
                 </Button>
               </div>
             </div>

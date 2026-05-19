@@ -15,35 +15,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "modrinthId required" }, { status: 400 });
   }
 
-  const serverConfig = await db.serverConfig.findUnique({
-    where: { id: "main" },
-  });
-  const mcVersion = serverConfig?.mcVersion || "1.21.4";
-  const loader = serverConfig?.modLoader || "fabric";
-
   try {
-    // Get the latest version of the modpack for our MC version/loader
-    const versions = await getProjectVersions(modrinthId, {
-      loaders: [loader],
-      game_versions: [mcVersion],
-    });
+    // Get ALL versions of the modpack (no filter) and pick the latest
+    const versions = await getProjectVersions(modrinthId);
 
     const version = versions[0];
     if (!version) {
       return NextResponse.json(
-        { error: `No version found for ${mcVersion} / ${loader}` },
+        { error: "No versions found for this modpack" },
         { status: 404 }
       );
     }
 
+    const targetMcVersion = version.game_versions[0] || "unknown";
+    const targetLoader = version.loaders[0] || "fabric";
+
     // Modpack versions list their included mods as dependencies
     const modDeps = version.dependencies.filter(
-      (d) => d.dependency_type === "required" && d.project_id
+      (d: any) => d.dependency_type === "required" && d.project_id
     );
 
     // Fetch project info for each dependency
     const mods = await Promise.all(
-      modDeps.map(async (dep) => {
+      modDeps.map(async (dep: any) => {
         try {
           const project = await getProject(dep.project_id!);
           return {
@@ -63,12 +57,13 @@ export async function POST(request: NextRequest) {
       name: string;
     }[];
 
-    // Create the modpack locally
     const modpack = await db.modpack.create({
       data: {
-        name: name || `Imported Modpack`,
+        name: name || "Imported Modpack",
         description: `Imported from Modrinth. ${validMods.length} mods.`,
         createdBy: session.user.id,
+        targetMcVersion,
+        targetLoader,
         mods: {
           create: validMods.map((m) => ({
             modrinthId: m.modrinthId,
@@ -80,7 +75,11 @@ export async function POST(request: NextRequest) {
       include: { mods: true },
     });
 
-    return NextResponse.json(modpack);
+    return NextResponse.json({
+      ...modpack,
+      targetMcVersion,
+      targetLoader,
+    });
   } catch (e: any) {
     return NextResponse.json(
       { error: e.message || "Failed to import modpack" },
