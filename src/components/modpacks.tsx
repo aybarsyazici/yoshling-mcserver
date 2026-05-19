@@ -357,12 +357,49 @@ export function Modpacks() {
               Install &quot;{exportData?.modpack.name}&quot; Locally
             </DialogTitle>
             <DialogDescription>
-              Download these mods to your local Minecraft{" "}
-              <code className="text-xs bg-muted px-1 py-0.5 rounded">mods/</code>{" "}
-              folder ({exportData?.modpack.mcVersion} / {exportData?.modpack.loader}).
+              Download these mods to play on the server with your friends.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 pt-2">
+          <div className="space-y-4 pt-2">
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-2">
+              <p className="text-sm font-medium">Before you start</p>
+              <p className="text-xs text-muted-foreground">
+                You need <strong>{exportData?.modpack.loader === "fabric" ? "Fabric Loader" : "Forge"}</strong> installed
+                for Minecraft <strong>{exportData?.modpack.mcVersion}</strong>.
+                {exportData?.modpack.loader === "fabric" ? (
+                  <> We recommend using <a href="https://prismlauncher.org" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Prism Launcher</a> (free, open-source) or the official <a href="https://fabricmc.net/use/installer/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Fabric Installer</a>.</>
+                ) : (
+                  <> Download the installer from <a href="https://files.minecraftforge.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Forge</a>, or use <a href="https://prismlauncher.org" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Prism Launcher</a> (recommended).</>
+                )}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                {exportData?.mods.filter((m) => m.downloadUrl).length} mods available
+              </p>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const urls = exportData?.mods
+                    .filter((m) => m.downloadUrl)
+                    .map((m) => m.downloadUrl!) || [];
+                  for (const url of urls) {
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "";
+                    a.target = "_blank";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }
+                  toast.success(`Starting download of ${urls.length} mods...`);
+                }}
+              >
+                Download All
+              </Button>
+            </div>
+
             {exportData?.mods.map((mod) => (
               <div
                 key={mod.modrinthId}
@@ -373,6 +410,11 @@ export function Modpacks() {
                   {mod.version && (
                     <span className="text-xs text-muted-foreground ml-2">
                       v{mod.version}
+                    </span>
+                  )}
+                  {mod.fileName && (
+                    <span className="text-[10px] text-muted-foreground ml-2 font-mono">
+                      {mod.fileName}
                     </span>
                   )}
                 </div>
@@ -392,16 +434,20 @@ export function Modpacks() {
                 )}
               </div>
             ))}
-            <div className="pt-3 border-t border-border">
+            <div className="pt-3 border-t border-border space-y-2">
               <p className="text-xs text-muted-foreground">
-                Place downloaded .jar files in your Minecraft instance&apos;s{" "}
-                <code className="bg-muted px-1 py-0.5 rounded">mods/</code> folder:
+                Place all downloaded <code className="bg-muted px-1 py-0.5 rounded">.jar</code> files
+                in your <code className="bg-muted px-1 py-0.5 rounded">mods/</code> folder:
               </p>
-              <ul className="text-xs text-muted-foreground mt-2 space-y-1 list-disc list-inside">
+              <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
                 <li>Windows: <code className="bg-muted px-1 py-0.5 rounded">%appdata%\.minecraft\mods\</code></li>
                 <li>macOS: <code className="bg-muted px-1 py-0.5 rounded">~/Library/Application Support/minecraft/mods/</code></li>
                 <li>Linux: <code className="bg-muted px-1 py-0.5 rounded">~/.minecraft/mods/</code></li>
+                <li>Prism Launcher: Right-click instance &gt; Folder &gt; mods</li>
               </ul>
+              <p className="text-xs text-muted-foreground mt-2">
+                Make sure to <strong>delete any old mods</strong> in the folder before adding these, to avoid conflicts.
+              </p>
             </div>
           </div>
         </DialogContent>
