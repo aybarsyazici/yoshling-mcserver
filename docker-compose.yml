@@ -1,0 +1,43 @@
+services:
+  minecraft:
+    image: itzg/minecraft-server
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      TYPE: "FABRIC"
+      VERSION: "1.21.4"
+      MEMORY: "4G"
+      RCON_PASSWORD: "${RCON_PASSWORD:-changeme}"
+      ENABLE_RCON: "true"
+      RCON_PORT: 25575
+    volumes:
+      - mc-data:/data
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "file:./data/yoshling.db"
+      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID}"
+      DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET}"
+      AUTH_SECRET: "${AUTH_SECRET}"
+      AUTH_URL: "${AUTH_URL:-http://localhost:3000}"
+      MC_SERVER_DIR: "/minecraft"
+      RCON_HOST: "minecraft"
+      RCON_PORT: "25575"
+      RCON_PASSWORD: "${RCON_PASSWORD:-changeme}"
+    volumes:
+      - mc-data:/minecraft:ro
+      - web-data:/app/data
+    depends_on:
+      - minecraft
+    restart: unless-stopped
+
+volumes:
+  mc-data:
+  web-data:

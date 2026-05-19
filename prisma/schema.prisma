@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id          String       @id @default(cuid())
+  discordId   String       @unique
+  username    String
+  avatar      String?
+  role        String       @default("MEMBER") // ADMIN, MOD, MEMBER
+  createdAt   DateTime     @default(now())
+  activities  Activity[]
+  modRequests ModRequest[]
+}
+
+model InstalledMod {
+  id          String   @id @default(cuid())
+  modrinthId  String
+  slug        String
+  name        String
+  version     String
+  fileName    String
+  mcVersion   String
+  loader      String
+  installedBy String
+  installedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ServerConfig {
+  id           String @id @default("main")
+  mcVersion    String @default("1.21.4")
+  modLoader    String @default("fabric")
+  rconPort     Int    @default(25575)
+  rconPassword String @default("changeme")
+  serverPort   Int    @default(25565)
+  maxMemory    String @default("4G")
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    String
+  details   String
+  createdAt DateTime @default(now())
+}
+
+model ModRequest {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  modrinthId String
+  modName    String
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+}
+
+model Modpack {
+  id          String      @id @default(cuid())
+  name        String
+  description String      @default("")
+  createdBy   String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  mods        ModpackMod[]
+}
+
+model ModpackMod {
+  id         String  @id @default(cuid())
+  modpackId  String
+  modpack    Modpack @relation(fields: [modpackId], references: [id], onDelete: Cascade)
+  modrinthId String
+  slug       String
+  name       String
+  versionId  String?
+}
+
