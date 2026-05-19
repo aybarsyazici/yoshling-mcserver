@@ -52,6 +52,7 @@ export function Modpacks() {
   const [installing, setInstalling] = useState<string | null>(null);
   const [showInstallConfirm, setShowInstallConfirm] = useState<string | null>(null);
   const [editingPack, setEditingPack] = useState<Modpack | null>(null);
+  const [removeWarning, setRemoveWarning] = useState<{ mod: ModpackMod; dependents: string[] } | null>(null);
 
   useEffect(() => {
     fetchModpacks();
@@ -109,6 +110,31 @@ export function Modpacks() {
             ? { ...p, mods: p.mods.filter((m) => m.id !== modId) }
             : p
         )
+      );
+    }
+  }
+
+  async function checkDependentsAndRemove(pack: Modpack, mod: ModpackMod) {
+    const otherMods = pack.mods.filter((m) => m.id !== mod.id);
+    const dependents: string[] = [];
+
+    for (const other of otherMods) {
+      try {
+        const res = await fetch(`/api/mods/dependencies?modrinthId=${other.modrinthId}`);
+        const data = await res.json();
+        const deps = data.dependencies || [];
+        if (deps.some((d: any) => d.modrinthId === mod.modrinthId)) {
+          dependents.push(other.name);
+        }
+      } catch {}
+    }
+
+    if (dependents.length > 0) {
+      setRemoveWarning({ mod, dependents });
+    } else {
+      await handleRemoveMod(pack.id, mod.id);
+      setEditingPack((prev) =>
+        prev ? { ...prev, mods: prev.mods.filter((m) => m.id !== mod.id) } : null
       );
     }
   }
@@ -404,20 +430,54 @@ export function Modpacks() {
                   <Button
                     size="sm"
                     variant="destructive"
-                    onClick={async () => {
-                      await handleRemoveMod(editingPack.id, mod.id);
-                      setEditingPack((prev) =>
-                        prev
-                          ? { ...prev, mods: prev.mods.filter((m) => m.id !== mod.id) }
-                          : null
-                      );
-                    }}
+                    onClick={() => checkDependentsAndRemove(editingPack, mod)}
                   >
                     Remove
                   </Button>
                 </div>
               ))
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!removeWarning} onOpenChange={() => setRemoveWarning(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Dependency Warning</DialogTitle>
+            <DialogDescription className="pt-2">
+              The following mods in this pack require &quot;{removeWarning?.mod.name}&quot;:
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1 pt-2">
+            {removeWarning?.dependents.map((name) => (
+              <div key={name} className="flex items-center gap-2 text-sm py-1">
+                <Badge variant="outline" className="text-xs text-destructive border-destructive/30">Depends on it</Badge>
+                <span>{name}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-sm text-muted-foreground mt-3">
+            Removing this mod may cause the above mods to crash or not load.
+          </p>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setRemoveWarning(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (removeWarning && editingPack) {
+                  await handleRemoveMod(editingPack.id, removeWarning.mod.id);
+                  setEditingPack((prev) =>
+                    prev ? { ...prev, mods: prev.mods.filter((m) => m.id !== removeWarning.mod.id) } : null
+                  );
+                  setRemoveWarning(null);
+                }
+              }}
+            >
+              Remove anyway
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

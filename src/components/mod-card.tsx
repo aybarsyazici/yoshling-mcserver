@@ -28,6 +28,13 @@ interface ModCardProps {
 interface SimpleModpack {
   id: string;
   name: string;
+  mods?: { modrinthId: string }[];
+}
+
+interface Dependency {
+  modrinthId: string;
+  slug: string;
+  name: string;
 }
 
 export function ModCard({ mod }: ModCardProps) {
@@ -35,18 +42,58 @@ export function ModCard({ mod }: ModCardProps) {
   const [modpacks, setModpacks] = useState<SimpleModpack[]>([]);
   const [selectedPack, setSelectedPack] = useState("");
   const [addingToPack, setAddingToPack] = useState(false);
+  const [dependencies, setDependencies] = useState<Dependency[]>([]);
+  const [missingDeps, setMissingDeps] = useState<Dependency[]>([]);
+  const [showDepsDialog, setShowDepsDialog] = useState(false);
+  const [loadingDeps, setLoadingDeps] = useState(false);
 
   async function openPackDialog() {
     setShowPackDialog(true);
+    setSelectedPack("");
+    setDependencies([]);
+    setMissingDeps([]);
     const res = await fetch("/api/modpacks");
     const data = await res.json();
     if (Array.isArray(data)) {
-      setModpacks(data.map((p: any) => ({ id: p.id, name: p.name })));
+      setModpacks(data);
     }
   }
 
   async function handleAddToPack() {
     if (!selectedPack) return;
+
+    setLoadingDeps(true);
+    try {
+      const depsRes = await fetch(
+        `/api/mods/dependencies?modrinthId=${mod.project_id}`
+      );
+      const depsData = await depsRes.json();
+      const deps: Dependency[] = depsData.dependencies || [];
+      setDependencies(deps);
+
+      if (deps.length > 0) {
+        const pack = modpacks.find((p) => p.id === selectedPack);
+        const packModIds = new Set(
+          (pack?.mods || []).map((m: any) => m.modrinthId)
+        );
+        const missing = deps.filter((d) => !packModIds.has(d.modrinthId));
+
+        if (missing.length > 0) {
+          setMissingDeps(missing);
+          setShowPackDialog(false);
+          setShowDepsDialog(true);
+          setLoadingDeps(false);
+          return;
+        }
+      }
+
+      await doAddToPack(false);
+    } finally {
+      setLoadingDeps(false);
+    }
+  }
+
+  async function doAddToPack(includeDeps: boolean) {
     setAddingToPack(true);
     try {
       const res = await fetch(`/api/modpacks/${selectedPack}/mods`, {
@@ -62,12 +109,34 @@ export function ModCard({ mod }: ModCardProps) {
         toast.info("Mod already in this modpack");
       } else if (res.ok) {
         toast.success(`Added ${mod.title} to modpack`);
-        setShowPackDialog(false);
       } else {
         toast.error("Failed to add to modpack");
       }
+
+      if (includeDeps && missingDeps.length > 0) {
+        let addedDeps = 0;
+        for (const dep of missingDeps) {
+          try {
+            const depRes = await fetch(`/api/modpacks/${selectedPack}/mods`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                modrinthId: dep.modrinthId,
+                slug: dep.slug,
+                name: dep.name,
+              }),
+            });
+            if (depRes.ok) addedDeps++;
+          } catch {}
+        }
+        if (addedDeps > 0) {
+          toast.success(`Also added ${addedDeps} required dependenc${addedDeps === 1 ? "y" : "ies"}`);
+        }
+      }
     } finally {
       setAddingToPack(false);
+      setShowPackDialog(false);
+      setShowDepsDialog(false);
     }
   }
 
@@ -116,7 +185,6 @@ export function ModCard({ mod }: ModCardProps) {
                 variant="outline"
                 onClick={openPackDialog}
                 className="shadow-sm"
-                title="Add to modpack"
               >
                 + Add to Pack
               </Button>
@@ -158,13 +226,51 @@ export function ModCard({ mod }: ModCardProps) {
                   </Button>
                   <Button
                     onClick={handleAddToPack}
-                    disabled={!selectedPack || addingToPack}
+                    disabled={!selectedPack || addingToPack || loadingDeps}
                   >
-                    {addingToPack ? "Adding..." : "Add"}
+                    {loadingDeps ? "Checking deps..." : addingToPack ? "Adding..." : "Add"}
                   </Button>
                 </div>
               </>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDepsDialog} onOpenChange={setShowDepsDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Missing Dependencies</DialogTitle>
+            <DialogDescription>
+              &quot;{mod.title}&quot; requires the following mods that are not in
+              the selected modpack:
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 pt-2">
+            {missingDeps.map((dep) => (
+              <div
+                key={dep.modrinthId}
+                className="flex items-center gap-2 text-sm py-1.5 border-b border-border/50 last:border-0"
+              >
+                <Badge variant="outline" className="text-xs">Required</Badge>
+                <span>{dep.name}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button
+              variant="outline"
+              onClick={() => doAddToPack(false)}
+              disabled={addingToPack}
+            >
+              Add without dependencies
+            </Button>
+            <Button
+              onClick={() => doAddToPack(true)}
+              disabled={addingToPack}
+            >
+              {addingToPack ? "Adding..." : "Add all"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
