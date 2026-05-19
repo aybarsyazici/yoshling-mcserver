@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { ModDetailDialog } from "@/components/mod-detail-dialog";
 import type { ModrinthProject } from "@/lib/modrinth";
 
 interface ModCardProps {
@@ -38,6 +39,7 @@ interface Dependency {
 }
 
 export function ModCard({ mod }: ModCardProps) {
+  const [showDetail, setShowDetail] = useState(false);
   const [showPackDialog, setShowPackDialog] = useState(false);
   const [modpacks, setModpacks] = useState<SimpleModpack[]>([]);
   const [selectedPack, setSelectedPack] = useState("");
@@ -163,7 +165,7 @@ export function ModCard({ mod }: ModCardProps) {
 
   return (
     <>
-      <Card className="flex flex-col border-2 border-border/50 rounded-xl shadow-sm hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] hover:border-[#cba6f7] dark:hover:border-[#cba6f7] hover:border-[#8839ef] transition-all duration-300 group" onMouseEnter={fetchDepsIfNeeded}>
+      <Card className="flex flex-col border-2 border-border/50 rounded-xl shadow-sm hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] hover:border-[#cba6f7] dark:hover:border-[#cba6f7] hover:border-[#8839ef] transition-all duration-300 group cursor-pointer" onMouseEnter={fetchDepsIfNeeded} onClick={() => setShowDetail(true)}>
         <CardHeader className="flex flex-row items-start gap-3 space-y-0 pb-3">
           {mod.icon_url ? (
             <img
@@ -213,7 +215,7 @@ export function ModCard({ mod }: ModCardProps) {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={openPackDialog}
+                onClick={(e) => { e.stopPropagation(); openPackDialog(); }}
                 className="shadow-sm"
               >
                 + Add to Pack
@@ -304,6 +306,12 @@ export function ModCard({ mod }: ModCardProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ModDetailDialog
+        projectId={mod.project_id}
+        open={showDetail}
+        onClose={() => setShowDetail(false)}
+      />
     </>
   );
 }
