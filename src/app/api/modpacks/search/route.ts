@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
   const mcVersion = searchParams.get("version") || undefined;
   const loader = searchParams.get("loader") || undefined;
   const offset = parseInt(searchParams.get("offset") || "0");
+  const sort = searchParams.get("sort") || "downloads";
 
   const facets: string[][] = [["project_type:modpack"]];
   if (mcVersion) facets.push([`versions:${mcVersion}`]);
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
     facets,
     offset,
     limit: 12,
-    index: "downloads",
+    index: sort,
   });
 
   return NextResponse.json(results);

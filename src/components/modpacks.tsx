@@ -233,14 +233,9 @@ export function Modpacks() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <p className="text-sm text-muted-foreground">
-          Create modpacks to group mods together and share with friends
+          Create modpacks to group mods together, or import from Modrinth/Technic tabs
         </p>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => { setShowImport(true); searchModrinch(); }}>
-            Import from Modrinth
-          </Button>
-          <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>
-        </div>
+        <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>
       </div>
 
       <div className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-4">

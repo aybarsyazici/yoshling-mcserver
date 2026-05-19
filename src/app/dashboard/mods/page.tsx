@@ -5,9 +5,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ModBrowser } from "@/components/mod-browser";
 import { InstalledMods } from "@/components/installed-mods";
 import { Modpacks } from "@/components/modpacks";
+import { ModpackBrowserModrinth } from "@/components/modpack-browser-modrinth";
+import { ModpackBrowserTechnic } from "@/components/modpack-browser-technic";
 
 export default function ModsPage() {
   const [tab, setTab] = useState("browse");
+  const [modpackSubTab, setModpackSubTab] = useState("my-packs");
+  const [refreshKey, setRefreshKey] = useState(0);
 
   return (
     <div className="space-y-6">
@@ -20,7 +24,7 @@ export default function ModsPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="browse">Browse</TabsTrigger>
+          <TabsTrigger value="browse">Browse Mods</TabsTrigger>
           <TabsTrigger value="installed">Installed</TabsTrigger>
           <TabsTrigger value="modpacks">Modpacks</TabsTrigger>
         </TabsList>
@@ -31,7 +35,32 @@ export default function ModsPage() {
           <InstalledMods />
         </TabsContent>
         <TabsContent value="modpacks" className="mt-6">
-          <Modpacks />
+          <Tabs value={modpackSubTab} onValueChange={setModpackSubTab}>
+            <TabsList>
+              <TabsTrigger value="my-packs">My Modpacks</TabsTrigger>
+              <TabsTrigger value="modrinth">Modrinth</TabsTrigger>
+              <TabsTrigger value="technic">Technic</TabsTrigger>
+            </TabsList>
+            <TabsContent value="my-packs" className="mt-6">
+              <Modpacks key={refreshKey} />
+            </TabsContent>
+            <TabsContent value="modrinth" className="mt-6">
+              <ModpackBrowserModrinth
+                onImported={() => {
+                  setRefreshKey((k) => k + 1);
+                  setModpackSubTab("my-packs");
+                }}
+              />
+            </TabsContent>
+            <TabsContent value="technic" className="mt-6">
+              <ModpackBrowserTechnic
+                onImported={() => {
+                  setRefreshKey((k) => k + 1);
+                  setModpackSubTab("my-packs");
+                }}
+              />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>

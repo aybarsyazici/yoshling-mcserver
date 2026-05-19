@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { modpackId } = await request.json();
+  const { modpackId, mcVersion, modLoader } = await request.json();
 
   if (!modpackId) {
     return NextResponse.json({ error: "modpackId required" }, { status: 400 });
@@ -30,12 +30,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Modpack not found" }, { status: 404 });
   }
 
-  const serverConfig = await db.serverConfig.findUnique({
+  let serverConfig = await db.serverConfig.findUnique({
     where: { id: "main" },
   });
 
   if (!serverConfig) {
     return NextResponse.json({ error: "Server not configured" }, { status: 500 });
+  }
+
+  // Update server version/loader if specified
+  if (mcVersion || modLoader) {
+    await db.serverConfig.update({
+      where: { id: "main" },
+      data: {
+        ...(mcVersion && { mcVersion }),
+        ...(modLoader && { modLoader }),
+      },
+    });
+    serverConfig = { ...serverConfig, ...(mcVersion && { mcVersion }), ...(modLoader && { modLoader }) };
   }
 
   // Remove all currently installed mods
