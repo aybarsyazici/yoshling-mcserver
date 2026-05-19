@@ -53,6 +53,11 @@ export function Modpacks() {
   const [showInstallConfirm, setShowInstallConfirm] = useState<string | null>(null);
   const [editingPack, setEditingPack] = useState<Modpack | null>(null);
   const [removeWarning, setRemoveWarning] = useState<{ mod: ModpackMod; dependents: string[] } | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [importQuery, setImportQuery] = useState("");
+  const [importResults, setImportResults] = useState<any[]>([]);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importing, setImporting] = useState<string | null>(null);
 
   useEffect(() => {
     fetchModpacks();
@@ -139,6 +144,41 @@ export function Modpacks() {
     }
   }
 
+  async function searchModrinch() {
+    setImportLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (importQuery) params.set("q", importQuery);
+      const res = await fetch(`/api/modpacks/search?${params.toString()}`);
+      const data = await res.json();
+      setImportResults(data.hits || []);
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function handleImport(modrinthId: string, name: string) {
+    setImporting(modrinthId);
+    try {
+      const res = await fetch("/api/modpacks/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modrinthId, name }),
+      });
+      if (res.ok) {
+        const pack = await res.json();
+        setModpacks((prev) => [pack, ...prev]);
+        toast.success(`Imported "${name}" with ${pack.mods.length} mods`);
+        setShowImport(false);
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Failed to import");
+      }
+    } finally {
+      setImporting(null);
+    }
+  }
+
   async function handleExport(modpackId: string) {
     setExporting(modpackId);
     try {
@@ -191,11 +231,16 @@ export function Modpacks() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <p className="text-sm text-muted-foreground">
           Create modpacks to group mods together and share with friends
         </p>
-        <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { setShowImport(true); searchModrinch(); }}>
+            Import from Modrinth
+          </Button>
+          <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>
+        </div>
       </div>
 
       <div className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-4">
@@ -527,6 +572,79 @@ export function Modpacks() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={showImport} onOpenChange={setShowImport}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Import from Modrinth</DialogTitle>
+            <DialogDescription>
+              Search for community modpacks on Modrinth and import their mod list.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="flex gap-2">
+              <Input
+                placeholder="Search modpacks (e.g. Fabulously Optimized, Better MC)..."
+                value={importQuery}
+                onChange={(e) => setImportQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && searchModrinch()}
+              />
+              <Button onClick={searchModrinch} disabled={importLoading}>
+                {importLoading ? "..." : "Search"}
+              </Button>
+            </div>
+
+            {importResults.length === 0 && !importLoading ? (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                Search for a modpack to import
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {importResults.map((pack: any) => (
+                  <div
+                    key={pack.project_id}
+                    className="flex items-center gap-3 p-3 rounded-lg border border-border/50 hover:border-primary/30 transition-colors"
+                  >
+                    {pack.icon_url ? (
+                      <img
+                        src={pack.icon_url}
+                        alt=""
+                        className="h-10 w-10 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center text-xs font-bold">
+                        {pack.title?.[0]}
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{pack.title}</p>
+                      <p className="text-xs text-muted-foreground line-clamp-1">
+                        {pack.description}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {formatDownloads(pack.downloads)} downloads
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={importing === pack.project_id}
+                      onClick={() => handleImport(pack.project_id, pack.title)}
+                    >
+                      {importing === pack.project_id ? "Importing..." : "Import"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+function formatDownloads(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
