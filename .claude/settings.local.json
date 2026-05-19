@@ -12,7 +12,8 @@
       "Bash(rsync -avz --exclude='node_modules' --exclude='.next' --exclude='src/generated' --exclude='*.db' --exclude='.env' -e \"ssh -i ~/.ssh/mc_yoshling -o IdentitiesOnly=yes\" /Users/ayazici/minecraft_yoshling/ root@178.105.163.254:/opt/yoshling/)",
       "Bash(rsync *)",
       "Bash(curl *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   },
   "enabledPlugins": {

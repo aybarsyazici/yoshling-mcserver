@@ -16,9 +16,14 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Yoshling — Minecraft Server Manager",
-  description: "Manage your Minecraft server with friends",
+  description: "Minecraft gaming",
   icons: {
     icon: "/fat-yoshi.png",
+  },
+  openGraph: {
+    title: "Yoshling",
+    description: "Minecraft gaming",
+    images: ["/fat-yoshi.png"],
   },
 };
 

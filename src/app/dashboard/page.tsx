@@ -2,6 +2,7 @@ import Image from "next/image";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DashboardStatus } from "@/components/dashboard-status";
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -25,22 +26,7 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Server Status
-            </CardTitle>
-            <div className="h-8 w-8 rounded-lg bg-chart-3/10 flex items-center justify-center">
-              <div className="h-2.5 w-2.5 rounded-full bg-chart-3 animate-pulse" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">Checking...</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Connect to see live status
-            </p>
-          </CardContent>
-        </Card>
+        <DashboardStatus />
 
         <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -111,10 +97,11 @@ export default async function DashboardPage() {
         </CardContent>
       </Card>
 
-      <div className="flex items-center gap-3 pt-2 opacity-80">
-        <Image src="/simba.jpg" alt="simba" width={40} height={40} className="rounded-full" />
-        <p className="text-xs text-muted-foreground italic">simba &lt;3</p>
+      <div className="flex flex-col items-center gap-2 pt-4">
+        <Image src="/simba.jpg" alt="simba" width={400} height={300} className="rounded-xl object-cover" />
+        <p className="text-sm text-muted-foreground italic">simba &lt;3</p>
       </div>
+
     </div>
   );
 }

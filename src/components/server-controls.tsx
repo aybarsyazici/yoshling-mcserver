@@ -171,9 +171,9 @@ export function ServerControls() {
         </Card>
       )}
 
-      <div className="flex items-center gap-3 md:col-span-2 pt-2 opacity-80">
-        <Image src="/cat.jpg" alt="cat" width={40} height={40} className="rounded-full" />
-        <p className="text-xs text-muted-foreground italic">how i feel playing minecraft</p>
+      <div className="flex flex-col items-center gap-2 md:col-span-2 pt-4">
+        <Image src="/cat.jpg" alt="cat" width={400} height={300} className="rounded-xl object-cover" />
+        <p className="text-sm text-muted-foreground italic">how i feel playing minecraft</p>
       </div>
     </div>
   );
