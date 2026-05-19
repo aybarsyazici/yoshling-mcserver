@@ -17,23 +17,23 @@ export default async function DashboardLayout({
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto">
+      <div className="flex-1 flex flex-col overflow-hidden">
         <RoadhogDrawer />
-        <div className="p-4 sm:p-6 lg:p-8 min-h-full flex flex-col">
-          <div className="flex-1 max-lg:pt-12">{children}</div>
-          <footer className="text-center text-xs text-muted-foreground pt-8 pb-4 border-t border-border/50 mt-8">
-            created by{" "}
-            <a
-              href="https://github.com/aybarsyazici/yoshling-mcserver"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary hover:underline"
-            >
-              yoshiane
-            </a>
-          </footer>
-        </div>
-      </main>
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 max-lg:pt-12">
+          {children}
+        </main>
+        <footer className="flex-shrink-0 text-center text-xs text-muted-foreground py-3 border-t border-border/50 bg-background">
+          created by{" "}
+          <a
+            href="https://github.com/aybarsyazici/yoshling-mcserver"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            yoshiane
+          </a>
+        </footer>
+      </div>
     </div>
   );
 }

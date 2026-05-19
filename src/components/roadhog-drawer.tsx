@@ -10,7 +10,7 @@ export function RoadhogDrawer() {
 
   return (
     <>
-      <div className="sticky top-0 z-30 flex justify-center py-2 bg-background/80 backdrop-blur-sm border-b border-border/30">
+      <div className="flex-shrink-0 flex justify-center py-2 bg-background/80 backdrop-blur-sm border-b border-border/30">
         <Button
           variant="ghost"
           size="sm"
