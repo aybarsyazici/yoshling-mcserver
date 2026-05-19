@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -115,6 +116,11 @@ export default function WhitelistPage() {
           )}
         </CardContent>
       </Card>
+
+      <div className="flex flex-col items-center gap-2 pt-4">
+        <Image src="/the_judge.jpg" alt="the judge" width={400} height={300} className="rounded-xl object-cover" />
+        <p className="text-sm text-muted-foreground italic">I decide who gets in!</p>
+      </div>
     </div>
   );
 }
