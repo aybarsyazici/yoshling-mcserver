@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ServerControls } from "@/components/server-controls";
 import { ServerConsole } from "@/components/server-console";
 import { FileBrowser } from "@/components/file-browser";
+import { ServerMonitor } from "@/components/server-monitor";
 
 export default function ServerPage() {
   const [tab, setTab] = useState("controls");
@@ -21,11 +22,15 @@ export default function ServerPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="controls">Controls</TabsTrigger>
+          <TabsTrigger value="monitor">Monitor</TabsTrigger>
           <TabsTrigger value="console">Console</TabsTrigger>
           <TabsTrigger value="files">Files</TabsTrigger>
         </TabsList>
         <TabsContent value="controls" className="mt-6">
           <ServerControls />
+        </TabsContent>
+        <TabsContent value="monitor" className="mt-6">
+          <ServerMonitor />
         </TabsContent>
         <TabsContent value="console" className="mt-6">
           <ServerConsole />

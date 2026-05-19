@@ -114,6 +114,8 @@ function formatAction(action: string): string {
     server_start: "started the server",
     server_stop: "stopped the server",
     server_restart: "restarted the server",
+    edit_file: "edited a file",
+    delete_file: "deleted a file",
   };
   return map[action] || action;
 }

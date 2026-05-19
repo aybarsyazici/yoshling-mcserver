@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
 
@@ -103,6 +104,15 @@ export async function PUT(request: NextRequest) {
 
   try {
     await writeFile(fullPath, content, "utf-8");
+
+    await db.activity.create({
+      data: {
+        userId: session.user.id,
+        action: "edit_file",
+        details: JSON.stringify({ path: relativePath }),
+      },
+    });
+
     return NextResponse.json({ success: true });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
@@ -130,6 +140,15 @@ export async function DELETE(request: NextRequest) {
 
   try {
     await rm(fullPath, { recursive: true });
+
+    await db.activity.create({
+      data: {
+        userId: session.user.id,
+        action: "delete_file",
+        details: JSON.stringify({ path: relativePath }),
+      },
+    });
+
     return NextResponse.json({ success: true });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

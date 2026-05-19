@@ -93,6 +93,10 @@ function formatAction(action: string, details: any): string {
       return "stopped the server";
     case "server_restart":
       return "restarted the server";
+    case "edit_file":
+      return `edited ${details.path}`;
+    case "delete_file":
+      return `deleted ${details.path}`;
     default:
       return action;
   }
