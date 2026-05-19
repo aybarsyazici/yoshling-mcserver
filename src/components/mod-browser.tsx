@@ -96,13 +96,13 @@ export function ModBrowser() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
         <div className="flex-1">
           <Input
             placeholder="Search mods..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="max-w-md"
+            className="w-full lg:max-w-md"
           />
         </div>
 
@@ -180,11 +180,11 @@ export function ModBrowser() {
       )}
 
       {loading && results.length === 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
-              className="h-48 rounded-lg bg-muted animate-pulse"
+              className="h-48 rounded-xl bg-muted animate-pulse"
             />
           ))}
         </div>
@@ -200,21 +200,24 @@ export function ModBrowser() {
           <p className="text-sm text-muted-foreground">
             {totalHits.toLocaleString()} mods found
           </p>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
             {results.map((mod) => (
               <ModCard key={mod.project_id} mod={mod} />
             ))}
           </div>
 
           {results.length < totalHits && (
-            <div className="flex justify-center pt-4">
+            <div className="flex flex-col items-center gap-2 pt-6">
               <Button
-                variant="outline"
                 onClick={() => search(offset + 20)}
                 disabled={loading}
+                className="px-8 shadow-sm"
               >
                 {loading ? "Loading..." : "Load More"}
               </Button>
+              <p className="text-xs text-muted-foreground">
+                Showing {results.length} of {totalHits.toLocaleString()}
+              </p>
             </div>
           )}
         </>

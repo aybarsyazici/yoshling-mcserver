@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useState } from "react";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: HomeIcon },
@@ -18,67 +19,135 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <aside className="w-64 border-r border-border bg-sidebar flex flex-col relative overflow-hidden">
-      {/* Subtle gradient accent */}
-      <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none" />
+    <>
+      {/* Mobile hamburger */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="fixed top-4 left-4 z-50 lg:hidden p-2 rounded-lg bg-card border border-border shadow-md"
+      >
+        <HamburgerIcon className="h-5 w-5" />
+      </button>
 
-      <div className="p-5 border-b border-sidebar-border flex items-center gap-3 relative">
-        <Image
-          src="/fat-yoshi.png"
-          alt="Yoshling"
-          width={40}
-          height={40}
-          className="rounded-lg"
+      {/* Mobile overlay */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setMobileOpen(false)}
         />
-        <div>
-          <h1 className="text-lg font-bold tracking-tight text-sidebar-foreground">
-            Yoshling
-          </h1>
-          <p className="text-[11px] text-muted-foreground">MC Server Manager</p>
-        </div>
-      </div>
+      )}
 
-      <nav className="flex-1 p-3 space-y-0.5 relative">
-        {navigation.map((item) => {
-          const isActive =
-            pathname === item.href ||
-            (item.href !== "/dashboard" && pathname.startsWith(item.href));
-          return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
-                isActive
-                  ? "bg-primary/15 text-primary shadow-sm border border-primary/10"
-                  : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-              )}
-            >
-              <item.icon className="h-[18px] w-[18px]" />
-              {item.name}
-            </Link>
-          );
-        })}
-      </nav>
+      <aside
+        className={cn(
+          "border-r border-border bg-sidebar flex flex-col relative overflow-hidden transition-all duration-300",
+          collapsed ? "w-16" : "w-64",
+          "max-lg:fixed max-lg:inset-y-0 max-lg:left-0 max-lg:z-50 max-lg:w-64",
+          mobileOpen ? "max-lg:translate-x-0" : "max-lg:-translate-x-full"
+        )}
+      >
+        {/* Subtle gradient */}
+        <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none" />
 
-      <div className="p-3 space-y-2 border-t border-sidebar-border">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">Theme</span>
-          <ThemeToggle />
+        <div className={cn("p-4 border-b border-sidebar-border flex items-center gap-3 relative", collapsed && "justify-center")}>
+          <Image
+            src="/fat-yoshi.png"
+            alt="Yoshling"
+            width={36}
+            height={36}
+            className="rounded-lg flex-shrink-0"
+          />
+          {!collapsed && (
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold tracking-tight text-sidebar-foreground truncate">
+                Yoshling
+              </h1>
+              <p className="text-[11px] text-muted-foreground">MC Server Manager</p>
+            </div>
+          )}
         </div>
-        <button
-          onClick={() => {
-            window.location.href = "/api/auth/signout";
-          }}
-          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-        >
-          <LogoutIcon className="h-4 w-4" />
-          Sign out
-        </button>
-      </div>
-    </aside>
+
+        <nav className="flex-1 p-2 space-y-0.5 relative">
+          {navigation.map((item) => {
+            const isActive =
+              pathname === item.href ||
+              (item.href !== "/dashboard" && pathname.startsWith(item.href));
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                onClick={() => setMobileOpen(false)}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
+                  isActive
+                    ? "bg-primary/15 text-primary shadow-sm border border-primary/10"
+                    : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
+                  collapsed && "justify-center px-2"
+                )}
+                title={collapsed ? item.name : undefined}
+              >
+                <item.icon className="h-[18px] w-[18px] flex-shrink-0" />
+                {!collapsed && <span className="truncate">{item.name}</span>}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="p-2 space-y-1 border-t border-sidebar-border">
+          {!collapsed && (
+            <div className="flex items-center justify-between px-3 py-1">
+              <span className="text-xs text-muted-foreground">Theme</span>
+              <ThemeToggle />
+            </div>
+          )}
+          {collapsed && (
+            <div className="flex justify-center py-1">
+              <ThemeToggle />
+            </div>
+          )}
+          <button
+            onClick={() => {
+              window.location.href = "/api/auth/signout";
+            }}
+            className={cn(
+              "w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors",
+              collapsed && "justify-center px-2"
+            )}
+            title={collapsed ? "Sign out" : undefined}
+          >
+            <LogoutIcon className="h-4 w-4 flex-shrink-0" />
+            {!collapsed && <span>Sign out</span>}
+          </button>
+
+          {/* Collapse toggle - desktop only */}
+          <button
+            onClick={() => setCollapsed(!collapsed)}
+            className="w-full items-center gap-2 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:bg-muted transition-colors hidden lg:flex justify-center"
+          >
+            <CollapseIcon className={cn("h-4 w-4 transition-transform", collapsed && "rotate-180")} />
+            {!collapsed && <span className="text-xs">Collapse</span>}
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function HamburgerIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+    </svg>
+  );
+}
+
+function CollapseIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
+    </svg>
   );
 }
 
