@@ -32,16 +32,39 @@ export async function GET(
 
   const modsWithUrls = await Promise.all(
     modpack.mods.map(async (mod: any) => {
+      // If mod has a direct download URL (e.g. from Technic), use it
+      if (mod.downloadUrl) {
+        return {
+          name: mod.name,
+          slug: mod.slug,
+          modrinthId: mod.modrinthId,
+          fileName: `${mod.slug}.jar`,
+          downloadUrl: mod.downloadUrl,
+          version: null,
+        };
+      }
+
+      if (!mod.modrinthId) {
+        return {
+          name: mod.name,
+          slug: mod.slug,
+          modrinthId: null,
+          fileName: null,
+          downloadUrl: null,
+          version: null,
+        };
+      }
+
       try {
         const versions = await getProjectVersions(mod.modrinthId, {
           loaders: [loader],
           game_versions: [mcVersion],
         });
         const version = mod.versionId
-          ? versions.find((v) => v.id === mod.versionId)
+          ? versions.find((v: any) => v.id === mod.versionId)
           : versions[0];
 
-        const file = version?.files.find((f) => f.primary) || version?.files[0];
+        const file = version?.files.find((f: any) => f.primary) || version?.files[0];
         return {
           name: mod.name,
           slug: mod.slug,

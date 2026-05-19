@@ -64,28 +64,62 @@ export async function POST(request: NextRequest) {
 
   for (const mod of modpack.mods) {
     try {
-      const versions = await getProjectVersions(mod.modrinthId, {
-        loaders: [serverConfig.modLoader],
-        game_versions: [serverConfig.mcVersion],
-      });
+      if ((mod as any).downloadUrl) {
+        // Direct download (e.g. Technic/Solder)
+        const { writeFile } = await import("fs/promises");
+        const path = await import("path");
+        const { getModsDir } = await import("@/lib/server-manager");
 
-      const version = mod.versionId
-        ? versions.find((v: any) => v.id === mod.versionId)
-        : versions[0];
+        const response = await fetch((mod as any).downloadUrl);
+        if (!response.ok) {
+          errors.push(`${mod.name}: download failed`);
+          continue;
+        }
 
-      if (!version) {
-        errors.push(`${mod.name}: no compatible version`);
-        continue;
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const fileName = `${mod.slug}.jar`;
+        await writeFile(path.join(getModsDir(), fileName), buffer);
+
+        await db.installedMod.create({
+          data: {
+            modrinthId: mod.modrinthId || mod.slug,
+            slug: mod.slug,
+            name: mod.name,
+            version: "technic",
+            fileName,
+            mcVersion: serverConfig.mcVersion,
+            loader: serverConfig.modLoader,
+            installedBy: session.user.id,
+          },
+        });
+        installed++;
+      } else if (mod.modrinthId) {
+        // Modrinth-based mod
+        const versions = await getProjectVersions(mod.modrinthId, {
+          loaders: [serverConfig.modLoader],
+          game_versions: [serverConfig.mcVersion],
+        });
+
+        const version = mod.versionId
+          ? versions.find((v: any) => v.id === mod.versionId)
+          : versions[0];
+
+        if (!version) {
+          errors.push(`${mod.name}: no compatible version`);
+          continue;
+        }
+
+        await installMod({
+          modrinthId: mod.modrinthId,
+          slug: mod.slug,
+          name: mod.name,
+          version,
+          userId: session.user.id,
+        });
+        installed++;
+      } else {
+        errors.push(`${mod.name}: no download source`);
       }
-
-      await installMod({
-        modrinthId: mod.modrinthId,
-        slug: mod.slug,
-        name: mod.name,
-        version,
-        userId: session.user.id,
-      });
-      installed++;
     } catch (e: any) {
       errors.push(`${mod.name}: ${e.message || "failed"}`);
     }

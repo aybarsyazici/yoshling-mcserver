@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { searchMods } from "@/lib/modrinth";
 
 const TECHNIC_BUILD = "1098";
 
@@ -18,7 +17,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Get modpack detail to find solder URL and MC version
     const detailRes = await fetch(
       `https://api.technicpack.net/modpack/${slug}?build=${TECHNIC_BUILD}`
     );
@@ -29,10 +27,15 @@ export async function POST(request: NextRequest) {
     const mcVersion = detail.minecraft || null;
     const solderUrl = detail.solder || null;
 
-    let modNames: string[] = [];
+    interface SolderMod {
+      name: string;
+      version: string;
+      url: string;
+    }
+
+    let solderMods: SolderMod[] = [];
 
     if (solderUrl) {
-      // Fetch mod list from Solder API
       try {
         const solderPackRes = await fetch(`${solderUrl}/modpack/${slug}`);
         if (solderPackRes.ok) {
@@ -43,48 +46,36 @@ export async function POST(request: NextRequest) {
             const buildRes = await fetch(`${solderUrl}/modpack/${slug}/${buildVersion}`);
             if (buildRes.ok) {
               const buildData = await buildRes.json();
-              modNames = (buildData.mods || []).map((m: any) => m.name as string);
+              solderMods = (buildData.mods || []).map((m: any) => ({
+                name: m.name,
+                version: m.version,
+                url: m.url,
+              }));
             }
           }
         }
       } catch {}
     }
 
-    // Try to find each mod on Modrinth by name
-    const resolvedMods: { modrinthId: string; slug: string; name: string }[] = [];
-
-    for (const modName of modNames.slice(0, 50)) {
-      try {
-        const cleanName = modName.replace(/[-_]/g, " ");
-        const results = await searchMods({
-          query: cleanName,
-          facets: [["project_type:mod"]],
-          limit: 1,
-          index: "relevance",
-        });
-        if (results.hits.length > 0) {
-          const hit = results.hits[0];
-          resolvedMods.push({
-            modrinthId: hit.project_id,
-            slug: hit.slug,
-            name: hit.title,
-          });
-        }
-      } catch {}
+    if (solderMods.length === 0) {
+      return NextResponse.json(
+        { error: "Could not fetch mod list. This pack may not use Solder or may be unavailable." },
+        { status: 404 }
+      );
     }
 
     const modpack = await db.modpack.create({
       data: {
         name: name || detail.displayName || slug,
-        description: `Imported from Technic. ${resolvedMods.length} mods found on Modrinth${modNames.length > resolvedMods.length ? ` (${modNames.length - resolvedMods.length} not found)` : ""}.`,
+        description: `Imported from Technic. ${solderMods.length} mods.`,
         createdBy: session.user.id,
         targetMcVersion: mcVersion,
         targetLoader: "forge",
         mods: {
-          create: resolvedMods.map((m) => ({
-            modrinthId: m.modrinthId,
-            slug: m.slug,
-            name: m.name,
+          create: solderMods.map((m) => ({
+            slug: m.name,
+            name: m.name.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+            downloadUrl: m.url,
           })),
         },
       },
@@ -93,8 +84,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ...modpack,
-      totalModsInPack: modNames.length,
-      resolvedOnModrinth: resolvedMods.length,
+      totalMods: solderMods.length,
     });
   } catch (e: any) {
     return NextResponse.json(

@@ -74,12 +74,13 @@ model Modpack {
 }
 
 model ModpackMod {
-  id         String  @id @default(cuid())
-  modpackId  String
-  modpack    Modpack @relation(fields: [modpackId], references: [id], onDelete: Cascade)
-  modrinthId String
-  slug       String
-  name       String
-  versionId  String?
+  id          String  @id @default(cuid())
+  modpackId   String
+  modpack     Modpack @relation(fields: [modpackId], references: [id], onDelete: Cascade)
+  modrinthId  String?
+  slug        String
+  name        String
+  versionId   String?
+  downloadUrl String?
 }
 
