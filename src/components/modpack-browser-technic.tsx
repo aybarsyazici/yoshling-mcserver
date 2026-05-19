@@ -30,13 +30,10 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
 
   const search = useCallback(
     async () => {
-      if (!query.trim()) {
-        setResults([]);
-        return;
-      }
+      const searchTerm = query.trim() || "minecraft";
       setLoading(true);
       try {
-        const res = await fetch(`/api/modpacks/search-technic?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`/api/modpacks/search-technic?q=${encodeURIComponent(searchTerm)}`);
         const data = await res.json();
         let packs = data.packs || [];
 
@@ -61,10 +58,9 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
   );
 
   useEffect(() => {
-    if (!query.trim()) return;
     const timer = setTimeout(search, 400);
     return () => clearTimeout(timer);
-  }, [search, query]);
+  }, [search]);
 
   return (
     <div className="space-y-6">
@@ -103,12 +99,7 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
         </div>
       </div>
 
-      {!query.trim() ? (
-        <div className="text-center py-12 text-muted-foreground">
-          <p className="text-lg">Search for Technic modpacks</p>
-          <p className="text-sm mt-1">Type a name to find modpacks on technicpack.net</p>
-        </div>
-      ) : loading ? (
+      {loading && results.length === 0 ? (
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-32 rounded-xl bg-muted animate-pulse" />
