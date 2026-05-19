@@ -27,14 +27,15 @@ export async function POST(request: NextRequest) {
     const mcVersion = detail.minecraft || null;
     const solderUrl = detail.solder || null;
 
-    interface SolderMod {
+    interface ModEntry {
       name: string;
-      version: string;
-      url: string;
+      slug: string;
+      downloadUrl: string | null;
     }
 
-    let solderMods: SolderMod[] = [];
+    let mods: ModEntry[] = [];
 
+    // Try Solder API first
     if (solderUrl) {
       try {
         const solderPackRes = await fetch(`${solderUrl}/modpack/${slug}`);
@@ -46,10 +47,10 @@ export async function POST(request: NextRequest) {
             const buildRes = await fetch(`${solderUrl}/modpack/${slug}/${buildVersion}`);
             if (buildRes.ok) {
               const buildData = await buildRes.json();
-              solderMods = (buildData.mods || []).map((m: any) => ({
-                name: m.name,
-                version: m.version,
-                url: m.url,
+              mods = (buildData.mods || []).map((m: any) => ({
+                name: m.name.replace(/[-_]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+                slug: m.name,
+                downloadUrl: m.url || null,
               }));
             }
           }
@@ -57,25 +58,41 @@ export async function POST(request: NextRequest) {
       } catch {}
     }
 
-    if (solderMods.length === 0) {
-      return NextResponse.json(
-        { error: "Could not fetch mod list. This pack may not use Solder or may be unavailable." },
-        { status: 404 }
-      );
+    // If Solder didn't work, try the pack's direct download URL
+    if (mods.length === 0 && detail.url) {
+      // For non-solder packs, we can't get individual mods.
+      // Create modpack with the pack's download info so users know where to get it.
+      const modpack = await db.modpack.create({
+        data: {
+          name: name || detail.displayName || slug,
+          description: `Imported from Technic. This pack doesn't use Solder — download it directly via the Technic Launcher or from the Technic website.`,
+          createdBy: session.user.id,
+          targetMcVersion: mcVersion,
+          targetLoader: "forge",
+          mods: { create: [] },
+        },
+        include: { mods: true },
+      });
+
+      return NextResponse.json({
+        ...modpack,
+        totalMods: 0,
+        note: "This pack doesn't expose individual mods. Use the Technic Launcher to install it, or add mods manually from the Browse tab.",
+      });
     }
 
     const modpack = await db.modpack.create({
       data: {
         name: name || detail.displayName || slug,
-        description: `Imported from Technic. ${solderMods.length} mods.`,
+        description: `Imported from Technic. ${mods.length} mods.`,
         createdBy: session.user.id,
         targetMcVersion: mcVersion,
         targetLoader: "forge",
         mods: {
-          create: solderMods.map((m) => ({
-            slug: m.name,
-            name: m.name.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-            downloadUrl: m.url,
+          create: mods.map((m) => ({
+            slug: m.slug,
+            name: m.name,
+            downloadUrl: m.downloadUrl,
           })),
         },
       },
@@ -84,7 +101,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ...modpack,
-      totalMods: solderMods.length,
+      totalMods: mods.length,
     });
   } catch (e: any) {
     return NextResponse.json(
