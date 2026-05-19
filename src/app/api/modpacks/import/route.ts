@@ -30,9 +30,9 @@ export async function POST(request: NextRequest) {
     const targetMcVersion = version.game_versions[0] || "unknown";
     const targetLoader = version.loaders[0] || "fabric";
 
-    // Modpack versions list their included mods as dependencies
+    // Modpack versions list their included mods as dependencies (embedded or required)
     const modDeps = version.dependencies.filter(
-      (d: any) => d.dependency_type === "required" && d.project_id
+      (d: any) => (d.dependency_type === "required" || d.dependency_type === "embedded") && d.project_id
     );
 
     // Fetch project info for each dependency

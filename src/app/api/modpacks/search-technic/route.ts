@@ -39,6 +39,8 @@ export async function GET(request: NextRequest) {
           );
           if (!detailRes.ok) return null;
           const detail = await detailRes.json();
+          // Only include packs that have Solder (official / properly set up packs)
+          if (!detail.solder) return null;
           return {
             name: detail.name,
             displayName: detail.displayName || detail.name,
@@ -49,15 +51,7 @@ export async function GET(request: NextRequest) {
             solder: detail.solder || null,
           };
         } catch {
-          return {
-            name: pack.slug,
-            displayName: pack.name || pack.slug,
-            url: pack.url || `https://www.technicpack.net/modpack/${pack.slug}`,
-            iconUrl: pack.iconUrl || null,
-            downloads: 0,
-            mcVersion: "unknown",
-            solder: null,
-          };
+          return null;
         }
       })
     );

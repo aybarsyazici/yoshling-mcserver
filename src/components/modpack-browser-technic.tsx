@@ -164,7 +164,13 @@ export function ModpackBrowserTechnic({ onImported }: { onImported: () => void }
                       });
                       if (res.ok) {
                         const data = await res.json();
-                        toast.success(`Imported "${pack.displayName}" — ${data.resolvedOnModrinth}/${data.totalModsInPack} mods found on Modrinth`);
+                        if (data.totalMods > 0) {
+                          toast.success(`Imported "${pack.displayName}" with ${data.totalMods} mods`);
+                        } else if (data.note) {
+                          toast.info(data.note);
+                        } else {
+                          toast.success(`Created "${pack.displayName}" — add mods manually`);
+                        }
                         onImported();
                       } else {
                         const data = await res.json();
