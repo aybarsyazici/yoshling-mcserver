@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import parse from "html-react-parser";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,9 +41,19 @@ interface Props {
   onClose: () => void;
 }
 
+function isVideoUrl(url: string): boolean {
+  return /youtube\.com|youtu\.be|vimeo\.com/.test(url);
+}
+
+function getYoutubeId(url: string): string | null {
+  const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
+  return match ? match[1] : null;
+}
+
 export function ModDetailDialog({ projectId, open, onClose }: Props) {
   const [detail, setDetail] = useState<ModDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!projectId || !open) {
@@ -57,7 +69,37 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
       .finally(() => setLoading(false));
   }, [projectId, open]);
 
+  const imageGallery = detail?.gallery.filter((g) => {
+    const url = typeof g === "string" ? g : g.url;
+    return !isVideoUrl(url);
+  }) || [];
+
+  const videoGallery = detail?.gallery.filter((g) => {
+    const url = typeof g === "string" ? g : g.url;
+    return isVideoUrl(url);
+  }) || [];
+
+  const navigateLightbox = useCallback((dir: 1 | -1) => {
+    if (lightboxIndex === null) return;
+    const next = lightboxIndex + dir;
+    if (next >= 0 && next < imageGallery.length) {
+      setLightboxIndex(next);
+    }
+  }, [lightboxIndex, imageGallery.length]);
+
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "ArrowRight") navigateLightbox(1);
+      else if (e.key === "ArrowLeft") navigateLightbox(-1);
+      else if (e.key === "Escape") setLightboxIndex(null);
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [lightboxIndex, navigateLightbox]);
+
   return (
+    <>
     <Dialog open={open} onOpenChange={() => onClose()}>
       <DialogContent className="!max-w-[90vw] !w-[90vw] max-h-[90vh] overflow-y-auto">
         {loading ? (
@@ -139,19 +181,58 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
               </div>
             </div>
 
-            {/* Gallery */}
-            {detail.gallery.length > 0 && (
+            {/* Gallery - Images */}
+            {imageGallery.length > 0 && (
               <div>
-                <p className="text-xs text-muted-foreground mb-2">Gallery</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {detail.gallery.slice(0, 6).map((img, i) => (
+                <p className="text-xs text-muted-foreground mb-2">Screenshots</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {imageGallery.slice(0, 9).map((img, i) => (
                     <img
                       key={i}
                       src={typeof img === "string" ? img : img.url}
                       alt=""
-                      className="rounded-xl w-full h-48 object-cover border border-border/50"
+                      className="rounded-xl w-full h-40 object-cover border border-border/50 cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all"
+                      onClick={(e) => { e.stopPropagation(); setLightboxIndex(i); }}
                     />
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Gallery - Videos */}
+            {videoGallery.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">Videos</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {videoGallery.map((vid, i) => {
+                    const url = typeof vid === "string" ? vid : vid.url;
+                    const ytId = getYoutubeId(url);
+                    return ytId ? (
+                      <div key={i} className="aspect-video rounded-xl overflow-hidden border border-border/50">
+                        <iframe
+                          src={`https://www.youtube.com/embed/${ytId}`}
+                          className="w-full h-full"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      </div>
+                    ) : (
+                      <a
+                        key={i}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 p-3 rounded-xl border border-border/50 hover:border-primary/50 transition-colors"
+                      >
+                        <div className="h-10 w-10 rounded-lg bg-destructive/10 flex items-center justify-center flex-shrink-0">
+                          <svg className="h-5 w-5 text-destructive" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                        </div>
+                        <span className="text-sm text-primary truncate">Watch video</span>
+                      </a>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -180,44 +261,37 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
               )}
             </div>
 
-            {/* Body (markdown) */}
+            {/* Body */}
             {detail.body && (
               <div className="prose prose-sm dark:prose-invert max-w-none border-t border-border/50 pt-4">
-                <ReactMarkdown
-                  components={{
-                    img: ({ src, alt }) => (
-                      <img src={src} alt={alt || ""} className="rounded-xl max-w-full" />
-                    ),
-                    a: ({ href, children }) => (
-                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
-                        {children}
-                      </a>
-                    ),
-                    p: ({ children }) => {
-                      const text = String(children);
-                      // Auto-linkify bare URLs in text
-                      if (typeof children === "string" && /https?:\/\/\S+/.test(text)) {
-                        const parts = text.split(/(https?:\/\/\S+)/g);
-                        return (
-                          <p>
-                            {parts.map((part, i) =>
-                              /^https?:\/\//.test(part) ? (
-                                <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
-                                  {part}
-                                </a>
-                              ) : (
-                                part
-                              )
-                            )}
-                          </p>
-                        );
+                {detail.body.trim().startsWith("<") ? (
+                  parse(detail.body, {
+                    replace: (domNode: any) => {
+                      if (domNode.type === "tag" && domNode.name === "img" && domNode.attribs?.src) {
+                        return <img src={domNode.attribs.src} alt={domNode.attribs.alt || ""} className="rounded-xl max-w-full" />;
                       }
-                      return <p>{children}</p>;
+                      if (domNode.type === "tag" && domNode.name === "a" && domNode.attribs?.href) {
+                        return undefined;
+                      }
                     },
-                  }}
-                >
-                  {detail.body}
-                </ReactMarkdown>
+                  })
+                ) : (
+                  <ReactMarkdown
+                    rehypePlugins={[rehypeRaw]}
+                    components={{
+                      img: ({ src, alt }) => (
+                        <img src={src} alt={alt || ""} className="rounded-xl max-w-full" />
+                      ),
+                      a: ({ href, children }) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {detail.body}
+                  </ReactMarkdown>
+                )}
               </div>
             )}
           </>
@@ -228,6 +302,51 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
         )}
       </DialogContent>
     </Dialog>
+
+    {/* Lightbox */}
+    {lightboxIndex !== null && imageGallery.length > 0 && (
+      <div
+        className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center"
+        onClick={() => setLightboxIndex(null)}
+      >
+        <button
+          className="absolute top-4 right-4 text-white/80 hover:text-white text-3xl font-bold"
+          onClick={() => setLightboxIndex(null)}
+        >
+          &times;
+        </button>
+
+        {lightboxIndex > 0 && (
+          <button
+            className="absolute left-4 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-4xl px-3"
+            onClick={(e) => { e.stopPropagation(); navigateLightbox(-1); }}
+          >
+            &#8249;
+          </button>
+        )}
+
+        {lightboxIndex < imageGallery.length - 1 && (
+          <button
+            className="absolute right-4 top-1/2 -translate-y-1/2 text-white/80 hover:text-white text-4xl px-3"
+            onClick={(e) => { e.stopPropagation(); navigateLightbox(1); }}
+          >
+            &#8250;
+          </button>
+        )}
+
+        <img
+          src={typeof imageGallery[lightboxIndex] === "string" ? imageGallery[lightboxIndex] as any : (imageGallery[lightboxIndex] as any).url}
+          alt=""
+          className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        />
+
+        <p className="absolute bottom-4 text-white/60 text-sm">
+          {lightboxIndex + 1} / {imageGallery.length} — Use arrow keys to navigate
+        </p>
+      </div>
+    )}
+    </>
   );
 }
 
