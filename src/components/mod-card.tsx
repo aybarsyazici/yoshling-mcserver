@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,9 +43,21 @@ export function ModCard({ mod }: ModCardProps) {
   const [selectedPack, setSelectedPack] = useState("");
   const [addingToPack, setAddingToPack] = useState(false);
   const [dependencies, setDependencies] = useState<Dependency[]>([]);
+  const [depsFetched, setDepsFetched] = useState(false);
   const [missingDeps, setMissingDeps] = useState<Dependency[]>([]);
   const [showDepsDialog, setShowDepsDialog] = useState(false);
   const [loadingDeps, setLoadingDeps] = useState(false);
+
+  function fetchDepsIfNeeded() {
+    if (depsFetched) return;
+    setDepsFetched(true);
+    fetch(`/api/mods/dependencies?modrinthId=${mod.project_id}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.dependencies) setDependencies(data.dependencies);
+      })
+      .catch(() => {});
+  }
 
   async function openPackDialog() {
     setShowPackDialog(true);
@@ -142,7 +154,7 @@ export function ModCard({ mod }: ModCardProps) {
 
   return (
     <>
-      <Card className="flex flex-col border-border/50 shadow-sm hover:shadow-md hover:border-primary/30 transition-all group">
+      <Card className="flex flex-col border-border/50 shadow-sm hover:shadow-md hover:border-primary/30 transition-all group" onMouseEnter={fetchDepsIfNeeded}>
         <CardHeader className="flex flex-row items-start gap-3 space-y-0 pb-3">
           {mod.icon_url ? (
             <img
@@ -169,6 +181,15 @@ export function ModCard({ mod }: ModCardProps) {
             {mod.description}
           </p>
           <div className="space-y-3">
+            {depsFetched && dependencies.length > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                <span className="font-medium text-foreground/70">Depends on: </span>
+                {dependencies.slice(0, 3).map((d) => d.name).join(", ")}
+                {dependencies.length > 3 && (
+                  <span className="text-muted-foreground"> +{dependencies.length - 3} more</span>
+                )}
+              </p>
+            )}
             <div className="flex flex-wrap gap-1">
               {mod.categories.slice(0, 3).map((cat) => (
                 <Badge key={cat} variant="secondary" className="text-[10px] font-normal">
