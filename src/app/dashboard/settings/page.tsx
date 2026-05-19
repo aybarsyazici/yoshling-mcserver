@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +26,7 @@ export default function SettingsPage() {
     maxMemory: "4G",
   });
   const [saving, setSaving] = useState(false);
+  const [mcVersions, setMcVersions] = useState<string[]>([]);
 
   useEffect(() => {
     fetch("/api/server/status")
@@ -35,6 +35,13 @@ export default function SettingsPage() {
         if (data.config) {
           setConfig(data.config);
         }
+      })
+      .catch(() => {});
+
+    fetch("/api/minecraft-versions")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.versions) setMcVersions(data.versions);
       })
       .catch(() => {});
   }, []);
@@ -75,19 +82,34 @@ export default function SettingsPage() {
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="mcVersion">Minecraft Version</Label>
-              <Input
-                id="mcVersion"
+              <Label>Minecraft Version</Label>
+              <Select
                 value={config.mcVersion}
-                onChange={(e) =>
-                  setConfig((prev) => ({ ...prev, mcVersion: e.target.value }))
+                onValueChange={(v) =>
+                  setConfig((prev) => ({ ...prev, mcVersion: v ?? prev.mcVersion }))
                 }
-                placeholder="e.g. 1.21.4"
-              />
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select version" />
+                </SelectTrigger>
+                <SelectContent>
+                  {mcVersions.length > 0 ? (
+                    mcVersions.map((v) => (
+                      <SelectItem key={v} value={v}>
+                        {v}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <SelectItem value={config.mcVersion}>
+                      {config.mcVersion}
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="modLoader">Mod Loader</Label>
+              <Label>Mod Loader</Label>
               <Select
                 value={config.modLoader}
                 onValueChange={(v) =>
@@ -107,7 +129,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="maxMemory">Max Memory</Label>
+              <Label>Max Memory</Label>
               <Select
                 value={config.maxMemory}
                 onValueChange={(v) =>

@@ -154,7 +154,7 @@ export function ModCard({ mod }: ModCardProps) {
 
   return (
     <>
-      <Card className="flex flex-col border-border/50 rounded-xl shadow-sm hover:shadow-lg hover:shadow-primary/5 hover:border-primary/40 transition-all duration-300 group" onMouseEnter={fetchDepsIfNeeded}>
+      <Card className="flex flex-col border-2 border-border/50 rounded-xl shadow-sm hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] hover:border-[#cba6f7] dark:hover:border-[#cba6f7] hover:border-[#8839ef] transition-all duration-300 group" onMouseEnter={fetchDepsIfNeeded}>
         <CardHeader className="flex flex-row items-start gap-3 space-y-0 pb-3">
           {mod.icon_url ? (
             <img
