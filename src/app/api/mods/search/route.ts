@@ -16,9 +16,8 @@ export async function GET(request: NextRequest) {
   const offset = parseInt(searchParams.get("offset") || "0");
   const limit = parseInt(searchParams.get("limit") || "20");
   const sort = searchParams.get("sort") || "relevance";
-  const showClientOnly = searchParams.get("showClientOnly") === "true";
 
-  const facets = buildFacets({ mcVersion, loader, category, serverSide: !showClientOnly });
+  const facets = buildFacets({ mcVersion, loader, category, serverSide: true });
 
   const results = await searchMods({
     query,

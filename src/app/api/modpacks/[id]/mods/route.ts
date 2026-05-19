@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getProjectVersions } from "@/lib/modrinth";
 
 export async function POST(
   request: NextRequest,
@@ -18,6 +19,7 @@ export async function POST(
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
+  // Check if mod already in pack
   const existing = await db.modpackMod.findFirst({
     where: { modpackId: id, modrinthId },
   });
@@ -26,13 +28,48 @@ export async function POST(
     return NextResponse.json({ error: "Mod already in modpack" }, { status: 409 });
   }
 
+  // Get modpack to check target version/loader
+  const modpack = await db.modpack.findUnique({ where: { id } });
+  if (!modpack) {
+    return NextResponse.json({ error: "Modpack not found" }, { status: 404 });
+  }
+
+  const targetMcVersion = modpack.targetMcVersion;
+  const targetLoader = modpack.targetLoader;
+
+  // If modpack has a target, validate that a compatible version exists
+  let resolvedVersionId = versionId || null;
+
+  if (targetMcVersion && targetLoader && !versionId) {
+    try {
+      const versions = await getProjectVersions(modrinthId, {
+        loaders: [targetLoader],
+        game_versions: [targetMcVersion],
+      });
+
+      if (versions.length === 0) {
+        return NextResponse.json(
+          {
+            error: "incompatible",
+            message: `No version of "${name}" exists for MC ${targetMcVersion} (${targetLoader}). This mod cannot be added to this modpack.`,
+          },
+          { status: 409 }
+        );
+      }
+
+      resolvedVersionId = versions[0].id;
+    } catch {
+      // If lookup fails, still add it without a pinned version
+    }
+  }
+
   const mod = await db.modpackMod.create({
     data: {
       modpackId: id,
       modrinthId,
       slug,
       name,
-      versionId: versionId || null,
+      versionId: resolvedVersionId,
     },
   });
 

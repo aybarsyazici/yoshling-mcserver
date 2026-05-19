@@ -118,11 +118,20 @@ export function ModCard({ mod }: ModCardProps) {
         }),
       });
       if (res.status === 409) {
+        const data = await res.json();
+        if (data.error === "incompatible") {
+          toast.error(data.message);
+          setAddingToPack(false);
+          setShowPackDialog(false);
+          setShowDepsDialog(false);
+          return;
+        }
         toast.info("Mod already in this modpack");
       } else if (res.ok) {
         toast.success(`Added ${mod.title} to modpack`);
       } else {
-        toast.error("Failed to add to modpack");
+        const data = await res.json();
+        toast.error(data.message || data.error || "Failed to add to modpack");
       }
 
       if (includeDeps && missingDeps.length > 0) {

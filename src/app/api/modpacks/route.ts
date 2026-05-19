@@ -22,10 +22,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { name, description } = await request.json();
+  const { name, description, targetMcVersion, targetLoader } = await request.json();
 
   if (!name || name.trim().length === 0) {
     return NextResponse.json({ error: "Name is required" }, { status: 400 });
+  }
+
+  // Default to current server config if not specified
+  let mcVersion = targetMcVersion;
+  let loader = targetLoader;
+
+  if (!mcVersion || !loader) {
+    const serverConfig = await db.serverConfig.findUnique({ where: { id: "main" } });
+    if (!mcVersion) mcVersion = serverConfig?.mcVersion || "1.21.4";
+    if (!loader) loader = serverConfig?.modLoader || "fabric";
   }
 
   const modpack = await db.modpack.create({
@@ -33,6 +43,8 @@ export async function POST(request: NextRequest) {
       name: name.trim(),
       description: description?.trim() || "",
       createdBy: session.user.id,
+      targetMcVersion: mcVersion,
+      targetLoader: loader,
     },
     include: { mods: true },
   });

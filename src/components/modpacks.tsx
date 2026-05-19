@@ -12,6 +12,14 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
 interface ModpackMod {
@@ -48,7 +56,10 @@ export function Modpacks() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [newMcVersion, setNewMcVersion] = useState("");
+  const [newLoader, setNewLoader] = useState("");
   const [creating, setCreating] = useState(false);
+  const [mcVersions, setMcVersions] = useState<string[]>([]);
   const [exportData, setExportData] = useState<{ modpack: any; mods: ExportMod[] } | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
@@ -63,6 +74,10 @@ export function Modpacks() {
 
   useEffect(() => {
     fetchModpacks();
+    fetch("/api/minecraft-versions")
+      .then((r) => r.json())
+      .then((data) => { if (data.versions) setMcVersions(data.versions); })
+      .catch(() => {});
   }, []);
 
   async function fetchModpacks() {
@@ -82,7 +97,12 @@ export function Modpacks() {
       const res = await fetch("/api/modpacks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName, description: newDesc }),
+        body: JSON.stringify({
+          name: newName,
+          description: newDesc,
+          targetMcVersion: newMcVersion || undefined,
+          targetLoader: newLoader || undefined,
+        }),
       });
       if (res.ok) {
         const pack = await res.json();
@@ -360,6 +380,38 @@ export function Modpacks() {
               value={newDesc}
               onChange={(e) => setNewDesc(e.target.value)}
             />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">MC Version</Label>
+                <Select value={newMcVersion} onValueChange={(v) => setNewMcVersion(v ?? "")}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Server default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {mcVersions.map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Mod Loader</Label>
+                <Select value={newLoader} onValueChange={(v) => setNewLoader(v ?? "")}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Server default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fabric">Fabric</SelectItem>
+                    <SelectItem value="forge">Forge</SelectItem>
+                    <SelectItem value="neoforge">NeoForge</SelectItem>
+                    <SelectItem value="quilt">Quilt</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Only mods compatible with this version/loader can be added.
+            </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowCreate(false)}>
                 Cancel

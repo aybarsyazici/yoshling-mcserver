@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -16,14 +14,16 @@ import { ModCard } from "@/components/mod-card";
 import { Button } from "@/components/ui/button";
 import type { ModrinthProject } from "@/lib/modrinth";
 
-interface ServerConfig {
-  mcVersion: string;
-  modLoader: string;
-}
-
 interface Category {
   name: string;
   icon: string;
+}
+
+interface Modpack {
+  id: string;
+  name: string;
+  targetMcVersion: string | null;
+  targetLoader: string | null;
 }
 
 export function ModBrowser() {
@@ -32,25 +32,26 @@ export function ModBrowser() {
   const [loading, setLoading] = useState(false);
   const [totalHits, setTotalHits] = useState(0);
   const [offset, setOffset] = useState(0);
-  const [filterCompatible, setFilterCompatible] = useState(true);
-  const [serverConfig, setServerConfig] = useState<ServerConfig | null>(null);
   const [sortBy, setSortBy] = useState("relevance");
   const [category, setCategory] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
-  const [showClientOnly, setShowClientOnly] = useState(false);
+  const [modpacks, setModpacks] = useState<Modpack[]>([]);
+  const [selectedModpack, setSelectedModpack] = useState("");
+
+  const activeModpack = modpacks.find((p) => p.id === selectedModpack);
 
   useEffect(() => {
-    fetch("/api/server/status")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.config) setServerConfig(data.config);
-      })
-      .catch(() => {});
-
     fetch("/api/mods/categories")
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setCategories(data);
+      })
+      .catch(() => {});
+
+    fetch("/api/modpacks")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setModpacks(data);
       })
       .catch(() => {});
   }, []);
@@ -60,12 +61,16 @@ export function ModBrowser() {
       setLoading(true);
       const params = new URLSearchParams();
       if (query) params.set("q", query);
-      if (filterCompatible && serverConfig) {
-        params.set("version", serverConfig.mcVersion);
-        params.set("loader", serverConfig.modLoader);
+
+      // Filter by modpack's version/loader if one is selected
+      if (activeModpack?.targetMcVersion) {
+        params.set("version", activeModpack.targetMcVersion);
       }
+      if (activeModpack?.targetLoader) {
+        params.set("loader", activeModpack.targetLoader);
+      }
+
       if (category && category !== "all") params.set("category", category);
-      if (showClientOnly) params.set("showClientOnly", "true");
       params.set("offset", String(newOffset));
       params.set("limit", "20");
       params.set("sort", sortBy);
@@ -86,7 +91,7 @@ export function ModBrowser() {
         setLoading(false);
       }
     },
-    [query, filterCompatible, serverConfig, sortBy, category, showClientOnly]
+    [query, sortBy, category, activeModpack]
   );
 
   useEffect(() => {
@@ -135,38 +140,42 @@ export function ModBrowser() {
         </div>
       </div>
 
-      <div className="flex items-center gap-6 flex-wrap">
-        <div className="flex items-center gap-2">
-          <Switch
-            id="compat-filter"
-            checked={filterCompatible}
-            onCheckedChange={setFilterCompatible}
-          />
-          <Label htmlFor="compat-filter" className="text-sm whitespace-nowrap">
-            Compatible only
-            {serverConfig && (
-              <span className="text-muted-foreground ml-1">
-                ({serverConfig.mcVersion} / {serverConfig.modLoader})
-              </span>
-            )}
-          </Label>
-        </div>
+      <div className="flex items-center gap-3 flex-wrap">
+        <Select value={selectedModpack} onValueChange={(v) => setSelectedModpack(v ?? "")}>
+          <SelectTrigger className="w-[250px]">
+            <SelectValue placeholder="Filter: compatible with modpack..." />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">No filter (show all)</SelectItem>
+            {modpacks.map((pack) => (
+              <SelectItem key={pack.id} value={pack.id}>
+                {pack.name}
+                {pack.targetMcVersion && (
+                  <span className="text-muted-foreground ml-1">
+                    ({pack.targetMcVersion})
+                  </span>
+                )}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-        <div className="flex items-center gap-2">
-          <Switch
-            id="server-filter"
-            checked={!showClientOnly}
-            onCheckedChange={(v) => setShowClientOnly(!v)}
-          />
-          <Label htmlFor="server-filter" className="text-sm whitespace-nowrap">
-            Server-compatible only
-          </Label>
-        </div>
+        {activeModpack && (
+          <Badge variant="secondary" className="gap-1.5">
+            Showing mods for: MC {activeModpack.targetMcVersion} / {activeModpack.targetLoader}
+            <button
+              onClick={() => setSelectedModpack("")}
+              className="ml-1 hover:text-foreground"
+            >
+              x
+            </button>
+          </Badge>
+        )}
       </div>
 
       {category && category !== "all" && (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Filtering by:</span>
+          <span className="text-sm text-muted-foreground">Category:</span>
           <Badge variant="secondary" className="gap-1">
             {category.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
             <button
@@ -192,7 +201,7 @@ export function ModBrowser() {
         <div className="text-center py-12 text-muted-foreground">
           <p className="text-lg">No mods found</p>
           <p className="text-sm mt-1">
-            Try a different search or adjust the filters
+            Try a different search or remove the modpack filter
           </p>
         </div>
       ) : (
@@ -208,11 +217,7 @@ export function ModBrowser() {
 
           {results.length < totalHits && (
             <div className="flex flex-col items-center gap-2 pt-6">
-              <Button
-                onClick={() => search(offset + 20)}
-                disabled={loading}
-                className="px-8 shadow-sm"
-              >
+              <Button onClick={() => search(offset + 20)} disabled={loading}>
                 {loading ? "Loading..." : "Load More"}
               </Button>
               <p className="text-xs text-muted-foreground">
