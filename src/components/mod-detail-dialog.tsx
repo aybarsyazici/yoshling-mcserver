@@ -186,15 +186,18 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
               <div>
                 <p className="text-xs text-muted-foreground mb-2">Screenshots</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {imageGallery.slice(0, 9).map((img, i) => (
-                    <img
-                      key={i}
-                      src={typeof img === "string" ? img : img.url}
-                      alt=""
-                      className="rounded-xl w-full h-40 object-cover border border-border/50 cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all"
-                      onClick={(e) => { e.stopPropagation(); setLightboxIndex(i); }}
-                    />
-                  ))}
+                  {imageGallery.slice(0, 9).map((img, i) => {
+                    const url = typeof img === "string" ? img : img.url;
+                    return (
+                      <img
+                        key={i}
+                        src={getFullResUrl(url)}
+                        alt=""
+                        className="rounded-xl w-full h-40 object-cover border border-border/50 cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all"
+                        onClick={(e) => { e.stopPropagation(); setLightboxIndex(i); }}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -241,22 +244,22 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
             <div className="flex flex-wrap gap-2">
               {detail.source_url && (
                 <a href={detail.source_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="sm">Source</Button>
+                  <Button variant="outline" size="sm" className="gap-1.5">Source <ExternalIcon /></Button>
                 </a>
               )}
               {detail.wiki_url && (
                 <a href={detail.wiki_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="sm">Wiki</Button>
+                  <Button variant="outline" size="sm" className="gap-1.5">Wiki <ExternalIcon /></Button>
                 </a>
               )}
               {detail.issues_url && (
                 <a href={detail.issues_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="sm">Issues</Button>
+                  <Button variant="outline" size="sm" className="gap-1.5">Issues <ExternalIcon /></Button>
                 </a>
               )}
               {detail.discord_url && (
                 <a href={detail.discord_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="sm">Discord</Button>
+                  <Button variant="outline" size="sm" className="gap-1.5">Discord <ExternalIcon /></Button>
                 </a>
               )}
             </div>
@@ -283,8 +286,8 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
                         <img src={src} alt={alt || ""} className="rounded-xl max-w-full" />
                       ),
                       a: ({ href, children }) => (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
-                          {children}
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all inline-flex items-center gap-0.5">
+                          {children}<ExternalIcon />
                         </a>
                       ),
                     }}
@@ -335,9 +338,9 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
         )}
 
         <img
-          src={typeof imageGallery[lightboxIndex] === "string" ? imageGallery[lightboxIndex] as any : (imageGallery[lightboxIndex] as any).url}
+          src={getFullResUrl(typeof imageGallery[lightboxIndex] === "string" ? imageGallery[lightboxIndex] as any : (imageGallery[lightboxIndex] as any).url)}
           alt=""
-          className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg"
+          className="w-[95vw] h-[90vh] object-contain"
           onClick={(e) => e.stopPropagation()}
         />
 
@@ -347,6 +350,19 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
       </div>
     )}
     </>
+  );
+}
+
+function getFullResUrl(url: string): string {
+  // Modrinth CDN serves thumbnails with _350.webp suffix. Remove it to get full res.
+  return url.replace(/_\d+\.webp$/, ".webp");
+}
+
+function ExternalIcon() {
+  return (
+    <svg className="inline h-3 w-3 flex-shrink-0 opacity-60" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+    </svg>
   );
 }
 
