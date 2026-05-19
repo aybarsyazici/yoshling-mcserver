@@ -59,7 +59,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={() => onClose()}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
         {loading ? (
           <div className="space-y-4 py-8">
             <div className="h-8 w-48 bg-muted animate-pulse rounded" />
@@ -143,13 +143,13 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
             {detail.gallery.length > 0 && (
               <div>
                 <p className="text-xs text-muted-foreground mb-2">Gallery</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {detail.gallery.slice(0, 4).map((img, i) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {detail.gallery.slice(0, 6).map((img, i) => (
                     <img
                       key={i}
                       src={typeof img === "string" ? img : img.url}
                       alt=""
-                      className="rounded-lg w-full h-32 object-cover border border-border/50"
+                      className="rounded-xl w-full h-48 object-cover border border-border/50"
                     />
                   ))}
                 </div>
@@ -186,13 +186,34 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
                 <ReactMarkdown
                   components={{
                     img: ({ src, alt }) => (
-                      <img src={src} alt={alt || ""} className="rounded-lg max-h-64 object-contain" />
+                      <img src={src} alt={alt || ""} className="rounded-xl max-w-full" />
                     ),
                     a: ({ href, children }) => (
-                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
                         {children}
                       </a>
                     ),
+                    p: ({ children }) => {
+                      const text = String(children);
+                      // Auto-linkify bare URLs in text
+                      if (typeof children === "string" && /https?:\/\/\S+/.test(text)) {
+                        const parts = text.split(/(https?:\/\/\S+)/g);
+                        return (
+                          <p>
+                            {parts.map((part, i) =>
+                              /^https?:\/\//.test(part) ? (
+                                <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
+                                  {part}
+                                </a>
+                              ) : (
+                                part
+                              )
+                            )}
+                          </p>
+                        );
+                      }
+                      return <p>{children}</p>;
+                    },
                   }}
                 >
                   {detail.body}

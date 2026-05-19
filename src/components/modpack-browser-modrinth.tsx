@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ModDetailDialog } from "@/components/mod-detail-dialog";
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
   const [sortBy, setSortBy] = useState("downloads");
   const [importing, setImporting] = useState<string | null>(null);
   const [minDownloads, setMinDownloads] = useState("");
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const search = useCallback(
     async (newOffset = 0) => {
@@ -145,7 +147,8 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
             {results.map((pack) => (
               <div
                 key={pack.project_id}
-                className="flex flex-col p-4 rounded-xl border-2 border-border/50 hover:border-[#cba6f7] hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] transition-all duration-300"
+                className="flex flex-col p-4 rounded-xl border-2 border-border/50 hover:border-[#cba6f7] hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] transition-all duration-300 cursor-pointer"
+                onClick={() => setDetailId(pack.project_id)}
               >
                 <div className="flex items-start gap-3">
                   {pack.icon_url ? (
@@ -181,7 +184,7 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
                   <Button
                     size="sm"
                     disabled={importing === pack.project_id}
-                    onClick={() => handleImport(pack)}
+                    onClick={(e) => { e.stopPropagation(); handleImport(pack); }}
                   >
                     {importing === pack.project_id ? "Importing..." : "Import"}
                   </Button>
@@ -202,6 +205,11 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
           )}
         </>
       )}
+      <ModDetailDialog
+        projectId={detailId}
+        open={!!detailId}
+        onClose={() => setDetailId(null)}
+      />
     </div>
   );
 }

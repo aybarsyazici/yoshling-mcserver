@@ -6,7 +6,6 @@ import { ModBrowser } from "@/components/mod-browser";
 import { InstalledMods } from "@/components/installed-mods";
 import { Modpacks } from "@/components/modpacks";
 import { ModpackBrowserModrinth } from "@/components/modpack-browser-modrinth";
-import { ModpackBrowserTechnic } from "@/components/modpack-browser-technic";
 
 export default function ModsPage() {
   const [tab, setTab] = useState("browse");
@@ -39,21 +38,12 @@ export default function ModsPage() {
             <TabsList>
               <TabsTrigger value="my-packs">My Modpacks</TabsTrigger>
               <TabsTrigger value="modrinth">Modrinth</TabsTrigger>
-              <TabsTrigger value="technic">Technic</TabsTrigger>
             </TabsList>
             <TabsContent value="my-packs" className="mt-6">
               <Modpacks key={refreshKey} />
             </TabsContent>
             <TabsContent value="modrinth" className="mt-6">
               <ModpackBrowserModrinth
-                onImported={() => {
-                  setRefreshKey((k) => k + 1);
-                  setModpackSubTab("my-packs");
-                }}
-              />
-            </TabsContent>
-            <TabsContent value="technic" className="mt-6">
-              <ModpackBrowserTechnic
                 onImported={() => {
                   setRefreshKey((k) => k + 1);
                   setModpackSubTab("my-packs");
