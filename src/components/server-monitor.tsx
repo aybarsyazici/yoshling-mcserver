@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +25,7 @@ interface Stats {
     disk: { used: string; total: string; percent: string };
     uptime: string | null;
   };
+  history: { time: number; cpu: number; memory: number }[];
 }
 
 interface DataPoint {
@@ -33,15 +34,12 @@ interface DataPoint {
   memory: number;
 }
 
-const MAX_POINTS = 60;
-
 export function ServerMonitor() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"cards" | "graphs">("graphs");
   const [history, setHistory] = useState<DataPoint[]>([]);
-  const historyRef = useRef<DataPoint[]>([]);
 
   async function fetchStats() {
     try {
@@ -51,19 +49,17 @@ export function ServerMonitor() {
         setStats(data);
         setError(null);
 
-        const cpuNum = parseFloat(data.container.cpu);
-        const memNum = parseFloat(data.container.memoryPercent);
-        const now = new Date();
-        const timeStr = `${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
-
-        const newPoint: DataPoint = {
-          time: timeStr,
-          cpu: isNaN(cpuNum) ? 0 : cpuNum,
-          memory: isNaN(memNum) ? 0 : memNum,
-        };
-
-        historyRef.current = [...historyRef.current, newPoint].slice(-MAX_POINTS);
-        setHistory(historyRef.current);
+        if (data.history) {
+          const points: DataPoint[] = data.history.map((p: any) => {
+            const d = new Date(p.time);
+            return {
+              time: `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`,
+              cpu: p.cpu,
+              memory: p.memory,
+            };
+          });
+          setHistory(points);
+        }
       } else {
         const data = await res.json();
         setError(data.error || "Failed to fetch stats");

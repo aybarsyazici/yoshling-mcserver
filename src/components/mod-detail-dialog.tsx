@@ -59,7 +59,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={() => onClose()}>
-      <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="!max-w-[90vw] !w-[90vw] max-h-[90vh] overflow-y-auto">
         {loading ? (
           <div className="space-y-4 py-8">
             <div className="h-8 w-48 bg-muted animate-pulse rounded" />
