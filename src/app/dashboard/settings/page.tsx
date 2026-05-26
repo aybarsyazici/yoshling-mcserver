@@ -34,24 +34,23 @@ interface WhitelistEntry {
   name: string;
 }
 
-const COMMON_PROPERTIES = [
-  { key: "difficulty", label: "Difficulty", type: "select", options: ["peaceful", "easy", "normal", "hard"] },
-  { key: "gamemode", label: "Default Gamemode", type: "select", options: ["survival", "creative", "adventure", "spectator"] },
-  { key: "max-players", label: "Max Players", type: "number" },
-  { key: "pvp", label: "PvP", type: "boolean" },
-  { key: "spawn-protection", label: "Spawn Protection (blocks)", type: "number" },
-  { key: "view-distance", label: "View Distance", type: "number" },
-  { key: "simulation-distance", label: "Simulation Distance", type: "number" },
-  { key: "motd", label: "Server Message (MOTD)", type: "text" },
-  { key: "white-list", label: "Enable Whitelist", type: "boolean" },
-  { key: "online-mode", label: "Online Mode", type: "boolean" },
-  { key: "allow-flight", label: "Allow Flight", type: "boolean" },
-  { key: "spawn-monsters", label: "Spawn Monsters", type: "boolean" },
-  { key: "spawn-animals", label: "Spawn Animals", type: "boolean" },
-  { key: "level-seed", label: "World Seed", type: "text" },
-  { key: "level-name", label: "World Name", type: "text" },
-  { key: "hardcore", label: "Hardcore", type: "boolean" },
-];
+// Known select options for specific keys
+const KNOWN_SELECTS: Record<string, string[]> = {
+  "difficulty": ["peaceful", "easy", "normal", "hard"],
+  "gamemode": ["survival", "creative", "adventure", "spectator"],
+  "level-type": ["minecraft:normal", "minecraft:flat", "minecraft:large_biomes", "minecraft:amplified", "minecraft:single_biome_surface"],
+};
+
+function inferType(key: string, value: string): "boolean" | "select" | "number" | "text" {
+  if (key in KNOWN_SELECTS) return "select";
+  if (value === "true" || value === "false") return "boolean";
+  if (/^\d+$/.test(value)) return "number";
+  return "text";
+}
+
+function formatLabel(key: string): string {
+  return key.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<ServerConfig>({
@@ -227,43 +226,54 @@ export default function SettingsPage() {
           <CardTitle>Game Settings (server.properties)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {COMMON_PROPERTIES.map((prop) => (
-              <div key={prop.key} className="space-y-1.5">
-                <Label className="text-xs">{prop.label}</Label>
-                {prop.type === "boolean" ? (
-                  <div className="flex items-center gap-2 pt-1">
-                    <Switch
-                      checked={properties[prop.key] === "true"}
-                      onCheckedChange={(v) => updateProp(prop.key, v ? "true" : "false")}
-                    />
-                    <span className="text-xs text-muted-foreground">
-                      {properties[prop.key] === "true" ? "Enabled" : "Disabled"}
-                    </span>
-                  </div>
-                ) : prop.type === "select" ? (
-                  <Select value={properties[prop.key] || ""} onValueChange={(v) => { if (v) updateProp(prop.key, v); }}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {prop.options!.map((o) => (
-                        <SelectItem key={o} value={o}>{o}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    className="h-8 text-xs"
-                    type={prop.type === "number" ? "number" : "text"}
-                    value={properties[prop.key] || ""}
-                    onChange={(e) => updateProp(prop.key, e.target.value)}
-                  />
-                )}
+          {Object.keys(properties).length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No server.properties file found. Start the server once to generate it.
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {Object.entries(properties).map(([key, value]) => {
+                  const type = inferType(key, value);
+                  return (
+                    <div key={key} className="space-y-1.5">
+                      <Label className="text-xs font-mono">{formatLabel(key)}</Label>
+                      {type === "boolean" ? (
+                        <div className="flex items-center gap-2 pt-1">
+                          <Switch
+                            checked={value === "true"}
+                            onCheckedChange={(v) => updateProp(key, v ? "true" : "false")}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            {value === "true" ? "Enabled" : "Disabled"}
+                          </span>
+                        </div>
+                      ) : type === "select" ? (
+                        <Select value={value} onValueChange={(v) => { if (v) updateProp(key, v); }}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {KNOWN_SELECTS[key].map((o) => (
+                              <SelectItem key={o} value={o}>{o}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          className="h-8 text-xs"
+                          type={type === "number" ? "number" : "text"}
+                          value={value}
+                          onChange={(e) => updateProp(key, e.target.value)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-          <Button onClick={handleSaveProperties} disabled={propsSaving}>
-            {propsSaving ? "Saving..." : "Save Properties"}
-          </Button>
+              <Button onClick={handleSaveProperties} disabled={propsSaving}>
+                {propsSaving ? "Saving..." : "Save Properties"}
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
 
