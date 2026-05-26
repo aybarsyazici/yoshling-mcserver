@@ -4,6 +4,11 @@ import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { installMod, removeMod } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
+const MC_CONTAINER = "yoshling-mc";
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -47,6 +52,30 @@ export async function POST(request: NextRequest) {
       where: { id: "main" },
       data: { mcVersion: finalMcVersion, modLoader: finalLoader },
     });
+
+    // Recreate MC container with new version/loader
+    try {
+      const type = finalLoader.toUpperCase();
+      const memory = serverConfig.maxMemory || "4G";
+      await execAsync(`docker stop ${MC_CONTAINER} 2>/dev/null || true`);
+      await execAsync(`docker rm ${MC_CONTAINER} 2>/dev/null || true`);
+      await execAsync(
+        `docker run -d --name ${MC_CONTAINER} ` +
+        `--network yoshling_default ` +
+        `-p 25565:25565 ` +
+        `-e EULA=TRUE ` +
+        `-e "TYPE=${type}" ` +
+        `-e "VERSION=${finalMcVersion}" ` +
+        `-e "MEMORY=${memory}" ` +
+        `-e "ENABLE_RCON=true" ` +
+        `-e "RCON_PORT=25575" ` +
+        `-e "RCON_PASSWORD=${process.env.RCON_PASSWORD || "changeme"}" ` +
+        `-v yoshling_mc-data:/data ` +
+        `--restart unless-stopped ` +
+        `itzg/minecraft-server`
+      );
+    } catch {}
+
     serverConfig = { ...serverConfig, mcVersion: finalMcVersion, modLoader: finalLoader };
   }
 

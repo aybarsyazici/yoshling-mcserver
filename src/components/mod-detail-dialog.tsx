@@ -191,7 +191,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
                     return (
                       <img
                         key={i}
-                        src={getFullResUrl(url)}
+                        src={getGalleryUrl(url)}
                         alt=""
                         className="rounded-xl w-full h-40 object-cover border border-border/50 cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all"
                         onClick={(e) => { e.stopPropagation(); setLightboxIndex(i); }}
@@ -338,7 +338,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
         )}
 
         <img
-          src={getFullResUrl(typeof imageGallery[lightboxIndex] === "string" ? imageGallery[lightboxIndex] as any : (imageGallery[lightboxIndex] as any).url)}
+          src={getGalleryUrl(typeof imageGallery[lightboxIndex] === "string" ? imageGallery[lightboxIndex] as any : (imageGallery[lightboxIndex] as any).url)}
           alt=""
           className="w-[95vw] h-[90vh] object-contain"
           onClick={(e) => e.stopPropagation()}
@@ -353,9 +353,8 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
   );
 }
 
-function getFullResUrl(url: string): string {
-  // Modrinth CDN serves thumbnails with _350.webp suffix. Remove it to get full res.
-  return url.replace(/_\d+\.webp$/, ".webp");
+function getGalleryUrl(url: string): string {
+  return url;
 }
 
 function ExternalIcon() {
