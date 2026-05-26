@@ -6,9 +6,54 @@ import { installMod, removeMod } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { writeFile } from "fs/promises";
 
 const execAsync = promisify(exec);
 const MC_CONTAINER = "yoshling-mc";
+const COMPOSE_FILE = "/opt/yoshling/docker-compose.yml";
+
+function generateCompose(version: string, type: string, memory: string): string {
+  return `services:
+  minecraft:
+    image: itzg/minecraft-server
+    container_name: yoshling-mc
+    ports:
+      - "25565:25565"
+    environment:
+      EULA: "TRUE"
+      TYPE: "${type.toUpperCase()}"
+      VERSION: "${version}"
+      MEMORY: "${memory}"
+      RCON_PASSWORD: "\${RCON_PASSWORD}"
+      ENABLE_RCON: "true"
+      RCON_PORT: 25575
+    volumes:
+      - mc-data:/data
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+
+  web:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - mc-data:/minecraft
+      - web-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - minecraft
+    restart: unless-stopped
+
+volumes:
+  mc-data:
+  web-data:
+`;
+}
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -53,27 +98,12 @@ export async function POST(request: NextRequest) {
       data: { mcVersion: finalMcVersion, modLoader: finalLoader },
     });
 
-    // Recreate MC container with new version/loader
+    // Update compose file and recreate MC container
     try {
-      const type = finalLoader.toUpperCase();
       const memory = serverConfig.maxMemory || "4G";
-      await execAsync(`docker stop ${MC_CONTAINER} 2>/dev/null || true`);
-      await execAsync(`docker rm ${MC_CONTAINER} 2>/dev/null || true`);
-      await execAsync(
-        `docker run -d --name ${MC_CONTAINER} ` +
-        `--network yoshling_default ` +
-        `-p 25565:25565 ` +
-        `-e EULA=TRUE ` +
-        `-e "TYPE=${type}" ` +
-        `-e "VERSION=${finalMcVersion}" ` +
-        `-e "MEMORY=${memory}" ` +
-        `-e "ENABLE_RCON=true" ` +
-        `-e "RCON_PORT=25575" ` +
-        `-e "RCON_PASSWORD=${process.env.RCON_PASSWORD || "changeme"}" ` +
-        `-v yoshling_mc-data:/data ` +
-        `--restart unless-stopped ` +
-        `itzg/minecraft-server`
-      );
+      const composeContent = generateCompose(finalMcVersion, finalLoader, memory);
+      await writeFile(COMPOSE_FILE, composeContent, "utf-8");
+      await execAsync(`cd /opt/yoshling && docker compose up -d --force-recreate minecraft`);
     } catch {}
 
     serverConfig = { ...serverConfig, mcVersion: finalMcVersion, modLoader: finalLoader };
