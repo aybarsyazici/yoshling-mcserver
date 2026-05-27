@@ -2,16 +2,23 @@ import { Rcon } from "rcon-client";
 
 let rconClient: Rcon | null = null;
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+  ]);
+}
+
 export async function getRcon(): Promise<Rcon> {
   if (rconClient && rconClient.authenticated) {
     return rconClient;
   }
 
-  rconClient = await Rcon.connect({
+  rconClient = await withTimeout(Rcon.connect({
     host: process.env.RCON_HOST || "127.0.0.1",
     port: parseInt(process.env.RCON_PORT || "25575"),
     password: process.env.RCON_PASSWORD || "changeme",
-  });
+  }), 3000);
 
   rconClient.on("end", () => {
     rconClient = null;

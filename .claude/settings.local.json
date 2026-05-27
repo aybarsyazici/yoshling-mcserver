@@ -17,7 +17,8 @@
       "Bash(python3 -m json.tool)",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['hits'][0]['project_id'], d['hits'][0]['slug']\\)\")",
       "Bash(python3 -c ' *)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(list\\(d.keys\\(\\)\\)\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(list\\(d.keys\\(\\)\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('id'\\), d.get\\('slug'\\)\\)\")"
     ]
   },
   "enabledPlugins": {

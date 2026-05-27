@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
         try {
           const project = await getProject(dep.project_id!);
           return {
-            modrinthId: project.project_id,
+            modrinthId: (project as any).id || project.project_id || dep.project_id,
             slug: project.slug,
             name: project.title,
           };

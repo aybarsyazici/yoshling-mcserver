@@ -138,6 +138,7 @@ export function ModCard({ mod }: ModCardProps) {
 
       if (includeDeps && missingDeps.length > 0) {
         let addedDeps = 0;
+        const failedDeps: string[] = [];
         for (const dep of missingDeps) {
           try {
             const depRes = await fetch(`/api/modpacks/${selectedPack}/mods`, {
@@ -149,11 +150,28 @@ export function ModCard({ mod }: ModCardProps) {
                 name: dep.name,
               }),
             });
-            if (depRes.ok) addedDeps++;
-          } catch {}
+            if (depRes.ok) {
+              addedDeps++;
+            } else if (depRes.status === 409) {
+              const depData = await depRes.json();
+              if (depData.error === "incompatible") {
+                failedDeps.push(`${dep.name} (incompatible)`);
+              } else {
+                // Already in modpack - that's fine
+                addedDeps++;
+              }
+            } else {
+              failedDeps.push(dep.name);
+            }
+          } catch {
+            failedDeps.push(dep.name);
+          }
         }
         if (addedDeps > 0) {
           toast.success(`Also added ${addedDeps} required dependenc${addedDeps === 1 ? "y" : "ies"}`);
+        }
+        if (failedDeps.length > 0) {
+          toast.warning(`Could not add: ${failedDeps.join(", ")} (incompatible version)`);
         }
       }
     } finally {

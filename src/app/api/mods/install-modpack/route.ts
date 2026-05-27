@@ -109,6 +109,18 @@ export async function POST(request: NextRequest) {
     serverConfig = { ...serverConfig, mcVersion: finalMcVersion, modLoader: finalLoader };
   }
 
+  // Auto-backup world before making changes
+  try {
+    const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
+    const BACKUP_DIR = "/app/data/backups";
+    await execAsync(`mkdir -p ${BACKUP_DIR}`);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    await execAsync(
+      `tar -czf ${BACKUP_DIR}/auto-before-modpack-${timestamp}.tar.gz -C ${MC_DIR} world`,
+      { timeout: 60000 }
+    );
+  } catch {}
+
   // Remove all currently installed mods
   const installedMods = await db.installedMod.findMany();
   for (const mod of installedMods) {

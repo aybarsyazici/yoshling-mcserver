@@ -36,7 +36,7 @@ export async function GET() {
 
   try {
     const { stdout: statsRaw } = await execAsync(
-      `docker stats ${MC_CONTAINER} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.PIDs}}" 2>/dev/null`
+      `timeout 3 docker stats ${MC_CONTAINER} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.PIDs}}" 2>/dev/null`
     );
 
     const parts = statsRaw.trim().split("|");

@@ -70,9 +70,13 @@ export default function SettingsPage() {
   const [newWl, setNewWl] = useState("");
 
   useEffect(() => {
-    fetch("/api/server/status")
+    fetch("/api/settings")
       .then((r) => r.json())
-      .then((data) => { if (data.config) setConfig(data.config); })
+      .then((data) => {
+        if (data && data.mcVersion) {
+          setConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader, maxMemory: data.maxMemory });
+        }
+      })
       .catch(() => {});
 
     fetch("/api/minecraft-versions")
