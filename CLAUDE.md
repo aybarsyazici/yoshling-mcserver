@@ -176,6 +176,15 @@ not the Hetzner box). Full chain, all encrypted:
 - Per-game accent via the `--tint` CSS var (`GAMES[game].tint`): Minecraft =
   emerald/teal, 7DTD = rust/orange.
 - Reusable motion primitives live in `src/components/motion.tsx`; shared bits in
-  `src/components/ui-bits.tsx`. The signature Power Core is `power-core.tsx`.
+  `src/components/ui-bits.tsx`. The central power indicator is `power-core.tsx`.
+- **Copy tone: plain and to-the-point.** No gamer lingo or theatrical framing
+  ("reactor", "horde", "hand over", "outlast", etc.). Say what a control does:
+  "Start / stop the server", "Switch servers?".
 - The silly vacation photos go in page **footers** only (`PhotoFooter` /
-  `PhotoStrip`), never the landing, never blocking controls.
+  `PhotoStrip`), never the landing, never blocking controls. `caption` is
+  optional — most footers show the photo with no text. Only two captions are
+  kept: MC mods ("approves of your mod list") and MC whitelist ("I decide who
+  gets in!"); 7DTD settings shows "I cant let you get close!".
+- Easter egg: `MikuEasterEgg` (mounted in the root layout) — resting the pointer
+  in the bottom-right corner for ~1.1s reveals British Miku (image only, no
+  caption). Image at `public/british-miku.webp`.
