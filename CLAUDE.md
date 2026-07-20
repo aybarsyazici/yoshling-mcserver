@@ -133,10 +133,42 @@ docker exec yoshling-web-1 node -e "
 
 ### TLS / the domain
 
-HTTPS works via Cloudflare (valid Let's Encrypt cert at the edge). Note: some
-corporate networks (Cisco Umbrella) DNS-sinkhole new `.xyz` domains, which shows
-a bogus cert-mismatch page in the browser — that's a client-network block, not a
-server problem. Verify from the box with `curl https://yoshling.xyz/login`.
+`yoshling.xyz` is proxied through **Cloudflare** (DNS resolves to Cloudflare IPs,
+not the Hetzner box). Full chain, all encrypted:
+**browser → Cloudflare (Let's Encrypt edge cert) → origin (Caddy on the box).**
+
+- Cloudflare SSL/TLS mode is **Full (strict)**.
+- The Cloudflare→origin hop uses a **Cloudflare Origin Certificate** installed on
+  the box at `/etc/caddy/certs/origin.pem` (644) + `origin.key` (600, owned
+  `caddy`); covers `yoshling.xyz` + `*.yoshling.xyz`, valid to **2041**.
+- `/etc/caddy/Caddyfile` serves `yoshling.xyz` HTTPS on :443 with that cert
+  (`tls <pem> <key>; reverse_proxy localhost:3000`) plus an `http://` → 301 https
+  redirect. Backups at `/etc/caddy/Caddyfile.bak.*`. After edits:
+  `caddy validate --config <file> --adapter caddyfile` then `systemctl reload caddy`.
+- The origin cert is a Cloudflare Origin cert — **not publicly trusted** (only
+  Cloudflare trusts it), so plain `curl https://127.0.0.1` fails with "unable to
+  get local issuer certificate". That's expected; Full (strict) validates it
+  against Cloudflare's Origin CA. To renew: regenerate in the Cloudflare dashboard
+  (SSL/TLS → Origin Server), overwrite the two files, reload Caddy.
+- **Gotcha:** some corporate networks (Cisco Umbrella) DNS-sinkhole new `.xyz`
+  domains, showing a bogus cert-mismatch page in the browser — that's a
+  client-network block, not a server problem. Verify from the box with
+  `curl https://yoshling.xyz/login` (expect 200).
+
+## Status
+
+- **Live** at `https://yoshling.xyz` (Cloudflare Full (strict), verified end-to-end).
+- **Minecraft:** running/healthy; all features (mods, console, files, backups,
+  settings, whitelist) working.
+- **7 Days to Die:** installed (~17 GB via SteamCMD) and switchable from the UI;
+  telnet control verified. Powered off by default (MC is the default active world;
+  `GameState.activeGame = minecraft`).
+- Both `main` (local + `/opt/yoshling` on the box) at the merge of the dual-world
+  work. `GameState` + `SevenDaysConfig` tables applied to the prod DB.
+
+> Keep this file current. It's the project's living status doc — update it after
+> meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
+> session can tell where things stand.
 
 ## Conventions
 
