@@ -137,6 +137,15 @@ docker exec yoshling-web-1 node -e "
   `SDTD_TELNET_PASSWORD` in the app's `.env`.** If you change one, change both.
   (Path on the box:
   `/var/lib/docker/volumes/yoshling_sdtd-server/_data/sdtdserver.xml`.)
+- **7DTD settings:** the Settings page has a curated "Quick settings" card
+  (name/password/players/difficulty/day length/RAM) plus an **"All settings"**
+  expander backed by `/api/7dtd/config/all`, which reads *every* `<property>` in
+  `sdtdserver.xml` (comment → help text) and writes back changed ones. Telnet/admin
+  keys are locked out of that editor. All XML edits need a 7DTD restart to apply.
+- **Server-browser visibility:** `ServerVisibility=2` (public) + `Region` must
+  match where players filter (box is in Germany → set `Region=Europe`, not the
+  default `NorthAmericaEast`). A fresh/empty server can still take 15-30 min to
+  appear and is best found by searching its exact `ServerName`.
 
 ### TLS / the domain
 
