@@ -5,14 +5,19 @@ export async function register() {
     const { readFile, writeFile } = await import("fs/promises");
 
     const execAsync = promisify(exec);
-    const MC_CONTAINER = "yoshling-mc";
-    const HISTORY_FILE = "/app/data/stats-history.json";
-    const MAX_POINTS = 360;
+    const MAX_POINTS = 360; // 30 minutes at 5s intervals
 
-    async function collectStats() {
+    // Record CPU/memory history per game container so each world's Monitor
+    // tab keeps its own graph, independent of which one is currently running.
+    const CONTAINERS: Record<string, string> = {
+      minecraft: "yoshling-mc",
+      "7dtd": "yoshling-7dtd",
+    };
+
+    async function collectFor(game: string, container: string) {
       try {
         const { stdout } = await execAsync(
-          `docker stats ${MC_CONTAINER} --no-stream --format "{{.CPUPerc}}|{{.MemPerc}}" 2>/dev/null`
+          `docker stats ${container} --no-stream --format "{{.CPUPerc}}|{{.MemPerc}}" 2>/dev/null`
         );
         const parts = stdout.trim().split("|");
         if (parts.length < 2) return;
@@ -21,16 +26,22 @@ export async function register() {
         const memory = parseFloat(parts[1]);
         if (isNaN(cpu) || isNaN(memory)) return;
 
+        const file = `/app/data/stats-${game}.json`;
         let history: { time: number; cpu: number; memory: number }[] = [];
         try {
-          const content = await readFile(HISTORY_FILE, "utf-8");
-          history = JSON.parse(content);
+          history = JSON.parse(await readFile(file, "utf-8"));
         } catch {}
 
         history.push({ time: Date.now(), cpu, memory });
         history = history.slice(-MAX_POINTS);
-        await writeFile(HISTORY_FILE, JSON.stringify(history), "utf-8");
+        await writeFile(file, JSON.stringify(history), "utf-8");
       } catch {}
+    }
+
+    async function collectStats() {
+      await Promise.all(
+        Object.entries(CONTAINERS).map(([game, container]) => collectFor(game, container))
+      );
     }
 
     // Collect stats every 5 seconds in background

@@ -42,6 +42,28 @@ model ServerConfig {
   maxMemory    String @default("4G")
 }
 
+// Tracks which world currently holds the host's single "power slot".
+// The box (8GB) can only run one game at a time; this records the intent
+// so a host reboot only revives the world that was meant to be running.
+model GameState {
+  id         String   @id @default("main")
+  activeGame String? // "minecraft" | "7dtd" | null (both idle)
+  updatedAt  DateTime @updatedAt
+}
+
+// Curated 7 Days to Die server settings surfaced in the UI. The full set
+// lives in sdtdserver.xml on disk; this row mirrors the friendly subset.
+model SevenDaysConfig {
+  id             String @id @default("main")
+  serverName     String @default("Yoshling 7DTD")
+  password       String @default("")
+  maxPlayers     Int    @default(8)
+  gameDifficulty Int    @default(2)
+  dayLength      Int    @default(60)
+  version        String @default("stable")
+  maxMemory      String @default("5G")
+}
+
 model Activity {
   id        String   @id @default(cuid())
   userId    String

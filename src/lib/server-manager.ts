@@ -1,72 +1,43 @@
-import { exec } from "child_process";
-import { promisify } from "util";
-import { readFile } from "fs/promises";
+// Compatibility shim.
+//
+// The server manager used to speak only Minecraft. It now delegates to the
+// generalized game-manager (which drives both Minecraft and 7 Days to Die).
+// These wrappers preserve the original Minecraft-only API so existing callers
+// (mod-manager, modpack install, legacy routes) keep working unchanged.
+
 import path from "path";
-
-const execAsync = promisify(exec);
-
-const MC_CONTAINER = "yoshling-mc";
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
+import {
+  getGameStatus,
+  powerOn,
+  powerOff,
+  restartGame,
+  getMinecraftProperties,
+  RUNTIME,
+} from "@/lib/game-manager";
 
 export type ServerStatus = "online" | "offline" | "starting" | "stopping";
 
-export async function getServerStatus(): Promise<{
-  status: ServerStatus;
-  uptime?: string;
-}> {
-  try {
-    const { stdout } = await execAsync(
-      `docker inspect --format='{{.State.Status}}' ${MC_CONTAINER} 2>/dev/null`
-    );
-    const state = stdout.trim();
-
-    if (state === "running") {
-      let uptime: string | undefined;
-      try {
-        const { stdout: startedAt } = await execAsync(
-          `docker inspect --format='{{.State.StartedAt}}' ${MC_CONTAINER}`
-        );
-        const start = new Date(startedAt.trim());
-        const diff = Date.now() - start.getTime();
-        const hours = Math.floor(diff / 3600000);
-        const minutes = Math.floor((diff % 3600000) / 60000);
-        uptime = `${hours}h ${minutes}m`;
-      } catch {}
-      return { status: "online", uptime };
-    }
-
-    return { status: "offline" };
-  } catch {
-    return { status: "offline" };
-  }
+export async function getServerStatus(): Promise<{ status: ServerStatus; uptime?: string }> {
+  const s = await getGameStatus("minecraft");
+  return { status: (s.status === "installing" ? "starting" : s.status) as ServerStatus, uptime: s.uptime };
 }
 
 export async function startServer(): Promise<void> {
-  await execAsync(`docker start ${MC_CONTAINER}`);
+  await powerOn("minecraft");
 }
 
 export async function stopServer(): Promise<void> {
-  await execAsync(`docker stop ${MC_CONTAINER}`);
+  await powerOff("minecraft");
 }
 
 export async function restartServer(): Promise<void> {
-  await execAsync(`docker restart ${MC_CONTAINER}`);
+  await restartGame("minecraft");
 }
 
 export async function getServerProperties(): Promise<Record<string, string>> {
-  const filePath = path.join(MC_DIR, "server.properties");
-  const content = await readFile(filePath, "utf-8");
-  const properties: Record<string, string> = {};
-
-  for (const line of content.split("\n")) {
-    if (line.startsWith("#") || !line.includes("=")) continue;
-    const [key, ...valueParts] = line.split("=");
-    properties[key.trim()] = valueParts.join("=").trim();
-  }
-
-  return properties;
+  return getMinecraftProperties();
 }
 
 export function getModsDir(): string {
-  return path.join(MC_DIR, "mods");
+  return path.join(RUNTIME.minecraft.dir, "mods");
 }

@@ -2,19 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { powerOn, powerOff, restartGame } from "@/lib/game-manager";
+import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
 
-// Legacy Minecraft-only control endpoint. Kept for backward compatibility;
-// it now routes through the shared game-manager (with graceful hand-off) and
-// keeps the active-game flag in sync so the landing page stays accurate.
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { action } = await request.json();
+  const { game, action } = await request.json();
 
+  if (!isGameId(game)) {
+    return NextResponse.json({ error: "Unknown game" }, { status: 400 });
+  }
   if (!["start", "stop", "restart"].includes(action)) {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
@@ -24,18 +25,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  let steps: { step: string; game?: string }[] = [];
   try {
     switch (action) {
       case "start":
-        await powerOn("minecraft");
+        steps = await powerOn(game);
         await db.gameState.upsert({
           where: { id: "main" },
-          update: { activeGame: "minecraft" },
-          create: { id: "main", activeGame: "minecraft" },
+          update: { activeGame: game },
+          create: { id: "main", activeGame: game },
         });
         break;
       case "stop":
-        await powerOff("minecraft");
+        await powerOff(game);
         await db.gameState.upsert({
           where: { id: "main" },
           update: { activeGame: null },
@@ -43,7 +45,7 @@ export async function POST(request: NextRequest) {
         });
         break;
       case "restart":
-        await restartGame("minecraft");
+        await restartGame(game);
         break;
     }
   } catch (e) {
@@ -51,13 +53,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  await db.activity.create({
-    data: {
-      userId: session.user.id,
-      action: `server_${action}`,
-      details: JSON.stringify({ game: "minecraft", action }),
-    },
-  });
+  try {
+    await db.activity.create({
+      data: {
+        userId: session.user.id,
+        action: `server_${action}`,
+        details: JSON.stringify({ game, action, gameName: GAMES[game].name }),
+      },
+    });
+  } catch {}
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, steps });
 }
