@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { SectionHeading } from "@/components/ui-bits";
 import { Reveal } from "@/components/motion";
 import { PhotoFooter } from "@/components/photo-footer";
+import { SdtdAllSettings } from "@/components/sdtd-all-settings";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -103,6 +104,7 @@ export default function SevenDtdSettings() {
       ) : (
         <Reveal>
           <div className="space-y-6 rounded-2xl bg-card/70 p-6 ring-1 ring-foreground/10 backdrop-blur">
+            <p className="eyebrow text-muted-foreground">Quick settings</p>
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="Server name" hint="Shown in the server browser">
                 <Input value={config.serverName} onChange={(e) => set("serverName", e.target.value)} maxLength={80} />
@@ -182,6 +184,8 @@ export default function SevenDtdSettings() {
           </div>
         </Reveal>
       )}
+
+      <SdtdAllSettings tint={tint} />
 
       <PhotoFooter src="/pub-table.jpg" caption="I cant let you get close!" />
     </div>
