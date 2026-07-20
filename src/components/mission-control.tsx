@@ -69,7 +69,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
         await sleep(reduced ? 0 : 700);
         setPhase({ key: "stop", label: `Powering down ${GAMES[other].name}…` });
       } else if (action === "start") {
-        setPhase({ key: "boot", label: `Igniting ${GAMES[game].name} core…` });
+        setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
       } else {
         setPhase({ key: "save", label: `Saving & stopping ${GAMES[game].name}…` });
       }
@@ -117,7 +117,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
           transition={{ duration: 0.5 }}
         >
           <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-          Yoshling Control · one world at a time
+          Yoshling game server control
         </motion.div>
         <motion.h1
           className="font-display text-4xl font-bold tracking-tight sm:text-5xl"
@@ -134,7 +134,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
           transition={{ duration: 0.6, delay: 0.15 }}
         >
           {userName ? `Welcome back, ${userName}. ` : ""}
-          The box runs a single server at a time — powering one up hands the reactor over.
+          Only one server runs at a time. Starting one stops the other.
         </motion.p>
       </div>
 
@@ -150,7 +150,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
           delay={0.1}
         />
 
-        {/* Center reactor */}
+        {/* Center power indicator */}
         <div className="flex flex-col items-center justify-center gap-4 py-2 lg:px-2">
           <PowerCore state={coreState} size={148} />
           <AnimatePresence mode="wait">
@@ -179,7 +179,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
               >
-                {activeGame ? `${GAMES[activeGame].short} core energized` : "reactor idle"}
+                {activeGame ? `${GAMES[activeGame].short} running` : "both stopped"}
               </motion.p>
             )}
           </AnimatePresence>
@@ -214,10 +214,10 @@ export function MissionControl({ userName }: { userName?: string | null }) {
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <PowerGlyph className="h-4 w-4" style={{ color: GAMES[confirmFor].tint }} />
-                  Hand over the reactor?
+                  Switch servers?
                 </DialogTitle>
                 <DialogDescription>
-                  This will <strong>save and stop {GAMES[otherGame(confirmFor)].name}</strong>, then boot{" "}
+                  This will <strong>save and stop {GAMES[otherGame(confirmFor)].name}</strong>, then start{" "}
                   <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing will be
                   disconnected. Takes about a minute.
                 </DialogDescription>
@@ -247,7 +247,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
                   onClick={() => doControl(confirmFor, "start")}
                   style={{ background: GAMES[confirmFor].tint, color: "var(--background)" }}
                 >
-                  Hand over & boot
+                  Switch &amp; start
                 </Button>
               </DialogFooter>
             </>

@@ -37,7 +37,7 @@ export default function MinecraftServerPage() {
         {tab === "files" && <FileBrowser />}
       </div>
 
-      <PhotoFooter src="/cat.jpg" caption="how i feel playing minecraft" />
+      <PhotoFooter src="/cat.jpg" />
     </div>
   );
 }

@@ -26,7 +26,7 @@ export default function SevenDtdServerPage() {
       <SectionHeading
         eyebrow="7 Days to Die · Server"
         title="Server control"
-        sub="Power the horde on and off, watch resources, back up your saves, and run console commands."
+        sub="Start and stop the server, monitor resources, manage backups, and run console commands."
         tint={tint}
       />
 
@@ -39,7 +39,7 @@ export default function SevenDtdServerPage() {
         {tab === "console" && <GameConsole game="7dtd" />}
       </div>
 
-      <PhotoFooter src="/the-stare.jpg" caption="when the screamer shows up" />
+      <PhotoFooter src="/the-stare.jpg" />
     </div>
   );
 }

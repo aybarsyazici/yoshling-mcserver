@@ -85,7 +85,7 @@ export default function ActivityPage() {
         )}
       </div>
 
-      <PhotoFooter src="/happy.jpg" caption="another successful session" />
+      <PhotoFooter src="/happy.jpg" />
     </div>
   );
 }

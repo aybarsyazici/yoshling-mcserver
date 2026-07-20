@@ -69,7 +69,7 @@ export function GameControls({ game }: { game: GameId }) {
 
   return (
     <div className="grid gap-4 md:grid-cols-[1.4fr_1fr]" style={{ ["--tint" as string]: meta.tint }}>
-      {/* Status panel with live core */}
+      {/* Status panel */}
       <div
         className="relative overflow-hidden rounded-2xl bg-card/70 p-6 ring-1 backdrop-blur"
         style={{
@@ -78,9 +78,9 @@ export function GameControls({ game }: { game: GameId }) {
       >
         <div className="flex items-start justify-between">
           <div>
-            <p className="eyebrow text-muted-foreground">Reactor status</p>
+            <p className="eyebrow text-muted-foreground">Status</p>
             <p className="mt-1 font-display text-2xl font-bold">
-              {isOnline ? "Energized" : busy ? "Working…" : "Idle"}
+              {isOnline ? "Running" : busy ? "Working…" : "Stopped"}
             </p>
           </div>
           <StatusPill status={busy && !isOnline ? "starting" : status} tint={meta.tint} />
@@ -120,13 +120,13 @@ export function GameControls({ game }: { game: GameId }) {
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
           {otherOnline ? (
             <span>
-              <strong className="text-foreground">{GAMES[other].name}</strong> holds the reactor. Powering
-              this on hands it over.
+              <strong className="text-foreground">{GAMES[other].name}</strong> is running. Starting this
+              one stops it first.
             </span>
           ) : isOnline ? (
-            "Stopping saves the world first, then frees the box."
+            "Stopping saves the world first."
           ) : (
-            "The box runs one world at a time."
+            "Only one server runs at a time."
           )}
         </div>
       </div>
@@ -166,10 +166,10 @@ export function GameControls({ game }: { game: GameId }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Hand over the reactor?
+              <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              This saves and stops <strong>{GAMES[other].name}</strong>, then boots <strong>{meta.name}</strong>.
+              This saves and stops <strong>{GAMES[other].name}</strong>, then starts <strong>{meta.name}</strong>.
               Players on {GAMES[other].name} will be disconnected.
             </DialogDescription>
           </DialogHeader>
@@ -178,7 +178,7 @@ export function GameControls({ game }: { game: GameId }) {
               Cancel
             </Button>
             <Button onClick={() => control("start")} style={{ background: meta.tint, color: "var(--background)" }}>
-              Hand over & boot
+              Switch &amp; start
             </Button>
           </DialogFooter>
         </DialogContent>

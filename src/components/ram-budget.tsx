@@ -4,8 +4,8 @@ import { motion } from "motion/react";
 import { GAMES, HOST_RAM_GB, type GameId } from "@/lib/games";
 
 /**
- * Visualizes the host's single 8GB "power slot": one filled segment when a
- * world is energized, empty otherwise. Makes the one-at-a-time rule literal.
+ * Shows the server's 8GB memory: filled by whichever game is running, empty
+ * when both are stopped. Makes the one-at-a-time limit clear.
  */
 export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
   const used = activeGame ? GAMES[activeGame].ramGb : 0;
@@ -15,7 +15,7 @@ export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
   return (
     <div className="w-full">
       <div className="mb-2 flex items-center justify-between text-xs">
-        <span className="eyebrow text-muted-foreground">Host power · {HOST_RAM_GB} GB</span>
+        <span className="eyebrow text-muted-foreground">Server memory · {HOST_RAM_GB} GB</span>
         <span className="font-mono font-medium" style={{ color: tint }}>
           {used} / {HOST_RAM_GB} GB
         </span>
@@ -53,8 +53,8 @@ export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
         {activeGame
-          ? `${GAMES[activeGame].name} holds the power slot. Booting the other world hands it over.`
-          : "Both worlds idle. Power one on to claim the slot."}
+          ? `${GAMES[activeGame].name} is using the server's memory. Starting the other one stops it first.`
+          : "Both servers are stopped."}
       </p>
     </div>
   );

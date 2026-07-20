@@ -223,15 +223,15 @@ export function GameOverview({
         </div>
       </Reveal>
 
-      {/* Hand-off confirm */}
+      {/* Switch confirm */}
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Hand over the reactor?
+              <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              This will <strong>save and stop {GAMES[other].name}</strong>, then boot{" "}
+              This will <strong>save and stop {GAMES[other].name}</strong>, then start{" "}
               <strong>{meta.name}</strong>. Players on {GAMES[other].name} will be disconnected.
             </DialogDescription>
           </DialogHeader>
@@ -240,7 +240,7 @@ export function GameOverview({
               Cancel
             </Button>
             <Button onClick={() => control("start")} style={{ background: meta.tint, color: "var(--background)" }}>
-              Hand over & boot
+              Switch &amp; start
             </Button>
           </DialogFooter>
         </DialogContent>

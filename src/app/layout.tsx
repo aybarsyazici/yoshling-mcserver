@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Space_Grotesk } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { MikuEasterEgg } from "@/components/miku-easter-egg";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -48,6 +49,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <Toaster />
+          <MikuEasterEgg />
         </ThemeProvider>
       </body>
     </html>

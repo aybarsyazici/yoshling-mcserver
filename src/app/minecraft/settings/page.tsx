@@ -384,7 +384,7 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <PhotoFooter src="/the-rizzler.jpg" caption="the settings guy, allegedly" />
+      <PhotoFooter src="/the-rizzler.jpg" />
     </div>
   );
 }

@@ -14,7 +14,7 @@ export function PhotoFooter({
   caption,
 }: {
   src: string;
-  caption: string;
+  caption?: string;
 }) {
   return (
     <Reveal className="pt-6">
@@ -28,21 +28,21 @@ export function PhotoFooter({
         >
           <Image
             src={src}
-            alt={caption}
+            alt={caption ?? ""}
             width={360}
             height={240}
             className="h-auto w-[280px] object-cover sm:w-[340px]"
           />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
         </motion.div>
-        <p className="font-mono text-xs italic text-muted-foreground">{caption}</p>
+        {caption && <p className="font-mono text-xs italic text-muted-foreground">{caption}</p>}
       </div>
     </Reveal>
   );
 }
 
-/** A row of multiple photos for the "hall of fame" at the bottom of overview pages. */
-export function PhotoStrip({ photos }: { photos: { src: string; caption: string }[] }) {
+/** A row of multiple photos at the bottom of overview pages. */
+export function PhotoStrip({ photos }: { photos: { src: string; caption?: string }[] }) {
   return (
     <Reveal className="pt-6">
       <div className="flex flex-wrap items-end justify-center gap-4">
@@ -55,10 +55,12 @@ export function PhotoStrip({ photos }: { photos: { src: string; caption: string 
             className="relative overflow-hidden rounded-xl ring-1 ring-foreground/10"
             style={{ boxShadow: "0 10px 30px -14px rgba(0,0,0,0.5)" }}
           >
-            <Image src={p.src} alt={p.caption} width={180} height={180} className="h-40 w-40 object-cover" />
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-2">
-              <p className="font-mono text-[10px] text-white/90">{p.caption}</p>
-            </div>
+            <Image src={p.src} alt={p.caption ?? ""} width={180} height={180} className="h-40 w-40 object-cover" />
+            {p.caption && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-2">
+                <p className="font-mono text-[10px] text-white/90">{p.caption}</p>
+              </div>
+            )}
           </motion.div>
         ))}
       </div>

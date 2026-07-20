@@ -37,7 +37,7 @@ export function LoginCard({ signInAction }: { signInAction: () => Promise<void> 
           </div>
           <p className="eyebrow mb-1 text-muted-foreground">Game Server Control</p>
           <p className="mb-6 text-sm text-muted-foreground">
-            One box, two worlds — Minecraft &amp; 7 Days to Die. Sign in to take the reactor.
+            Yoshling&rsquo;s game server control. Sign in to manage the Minecraft and 7 Days to Die servers.
           </p>
 
           <form action={signInAction} className="w-full">

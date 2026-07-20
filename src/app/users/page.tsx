@@ -119,7 +119,7 @@ export default function UsersPage() {
         )}
       </div>
 
-      <PhotoFooter src="/pub-table.jpg" caption="the crew, off-duty" />
+      <PhotoFooter src="/pub-table.jpg" />
     </div>
   );
 }

@@ -183,7 +183,7 @@ export default function SevenDtdSettings() {
         </Reveal>
       )}
 
-      <PhotoFooter src="/pub-table.jpg" caption="strategy meeting for the next horde night" />
+      <PhotoFooter src="/pub-table.jpg" caption="I cant let you get close!" />
     </div>
   );
 }

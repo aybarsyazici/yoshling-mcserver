@@ -24,8 +24,8 @@ export default async function SevenDtdOverview() {
     >
       <PhotoStrip
         photos={[
-          { src: "/the-stare.jpg", caption: "day 7 horde, incoming" },
-          { src: "/happy.jpg", caption: "we survived" },
+          { src: "/the-stare.jpg" },
+          { src: "/happy.jpg" },
         ]}
       />
     </GameOverview>
