@@ -37,7 +37,11 @@ drop docker-cli; the app cannot control containers without them.
 - `src/lib/game-manager.ts` — server-side driver per game. `powerOn(game)`
   performs the graceful hand-off: if the *other* game is running, it saves +
   stops it first, then starts the requested one. Active game is persisted in the
-  `GameState` table so a reboot only revives the intended world.
+  `GameState` table so a reboot only revives the intended world. A module-level
+  **control lock** serializes all start/stop/restart ops — a concurrent request
+  throws `ControlBusyError` → HTTP 409 (prevents Restart-button spam / racing
+  `docker` commands). `/api/games/status` exposes the in-flight lock as `busy`;
+  `useGames` surfaces it so every control UI disables while an op runs.
 - `src/lib/rcon.ts` — Minecraft control (save-all, player list) over RCON.
 - `src/lib/telnet.ts` — 7DTD control (saveworld, listplayers, console) over telnet.
 - `src/lib/server-manager.ts` — thin backward-compat shim delegating to
@@ -48,10 +52,13 @@ drop docker-cli; the app cannot control containers without them.
 - `/` → redirect to `/home` (or `/login`)
 - `/home` — dual-world landing (the Power Core + one-click power, hand-off confirm)
 - `/minecraft/*` — MC overview, mods, server (controls/monitor/backups/console/files), settings, whitelist
-- `/7dtd/*` — 7DTD overview, server (controls/monitor/backups/console), settings
+- `/7dtd/*` — 7DTD overview, server (controls/monitor/backups/console/files), settings
 - `/users`, `/activity` — shared across both games
-- API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config}`,
+- API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files}`,
   and the legacy `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
+- `src/components/file-browser.tsx` is shared: MC uses the default
+  `/api/server/files`; 7DTD passes `/api/7dtd/files` + `roots` (Config = the
+  serverfiles mount `/sevendtd-config`, Saves = `/sevendtd`).
 
 ### Roles & permissions
 
@@ -155,14 +162,30 @@ not the Hetzner box). Full chain, all encrypted:
   client-network block, not a server problem. Verify from the box with
   `curl https://yoshling.xyz/login` (expect 200).
 
+### Connecting to the game servers (NOT via Cloudflare)
+
+Game traffic can't go through Cloudflare (it only carries HTTP/HTTPS). Players
+connect **directly to the box IP `178.105.163.254`**:
+- **Minecraft:** `mc.yoshling.xyz` (a **DNS-only / grey-cloud** A record → the box)
+  or the IP, port 25565.
+- **7DTD:** the app shows both `7dtd.yoshling.xyz:26900` and the raw
+  `178.105.163.254:26900`. 7DTD's direct-connect box often only accepts a
+  **literal IP**, so the IP is the reliable one. The `7dtd` A record is also
+  DNS-only. (`connect` in `games.ts` is a `string[]` so a game can list several.)
+- **Firewall is two layers** — the game ports must be open in BOTH the server's
+  `ufw` (25565/tcp, 26900/tcp, 26900-26902/udp) AND the Hetzner Cloud Firewall in
+  the console. Missing either = "connect hangs, nothing in logs".
+- Server-browser listing: 7DTD `ServerVisibility=2` (public) in `sdtdserver.xml`;
+  set a unique `ServerName` (via 7DTD Settings) to find it, or just direct-connect.
+
 ## Status
 
 - **Live** at `https://yoshling.xyz` (Cloudflare Full (strict), verified end-to-end).
 - **Minecraft:** running/healthy; all features (mods, console, files, backups,
   settings, whitelist) working.
 - **7 Days to Die:** installed (~17 GB via SteamCMD) and switchable from the UI;
-  telnet control verified. Powered off by default (MC is the default active world;
-  `GameState.activeGame = minecraft`).
+  telnet control, file browser (Config/Saves), and in-game join verified. Powered
+  off by default (MC is the default active world; `GameState.activeGame = minecraft`).
 - Both `main` (local + `/opt/yoshling` on the box) at the merge of the dual-world
   work. `GameState` + `SevenDaysConfig` tables applied to the prod DB.
 
