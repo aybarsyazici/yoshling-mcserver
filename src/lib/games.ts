@@ -33,7 +33,7 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--mc)",
     tintSoft: "var(--mc-soft)",
     tintDeep: "var(--mc-deep)",
-    connect: "mc.yoshling.gg",
+    connect: "mc.yoshling.xyz",
     ramGb: 4,
   },
   "7dtd": {
@@ -45,7 +45,7 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--sd)",
     tintSoft: "var(--sd-soft)",
     tintDeep: "var(--sd-deep)",
-    connect: "7dtd.yoshling.gg",
+    connect: "7dtd.yoshling.xyz:26900",
     ramGb: 5,
   },
 };
