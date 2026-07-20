@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { GAMES, otherGame, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { PowerCore, type CoreState } from "@/components/power-core";
@@ -24,16 +25,21 @@ import { Button } from "@/components/ui/button";
 type Phase = { key: string; label: string };
 
 export function MissionControl({ userName }: { userName?: string | null }) {
-  const { games, activeGame, loading, refresh } = useGames(5000);
+  const [localBusy, setLocalBusy] = useState(false);
+  const { games, activeGame, busy: serverBusy, loading, refresh } = useGames(localBusy ? 1500 : 5000);
   const reduced = usePrefersReducedMotion();
 
   const [pending, setPending] = useState<GameId | null>(null); // game being powered on/awaiting confirm
   const [confirmFor, setConfirmFor] = useState<GameId | null>(null);
-  const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<Phase | null>(null);
+
+  // Locked out if this tab is working OR the server reports any op in flight.
+  const busy = localBusy || serverBusy !== null;
 
   const coreState: CoreState = busy && pending
     ? { kind: "handoff", from: activeGame && activeGame !== pending ? activeGame : null, to: pending }
+    : busy && serverBusy
+    ? { kind: "handoff", from: null, to: serverBusy.game }
     : activeGame
     ? { kind: "holding", game: activeGame }
     : { kind: "idle" };
@@ -56,7 +62,8 @@ export function MissionControl({ userName }: { userName?: string | null }) {
   }
 
   async function doControl(game: GameId, action: "start" | "stop") {
-    setBusy(true);
+    if (localBusy) return;
+    setLocalBusy(true);
     setConfirmFor(null);
     if (action === "start") setPending(game);
 
@@ -81,13 +88,17 @@ export function MissionControl({ userName }: { userName?: string | null }) {
       });
       const data = await res.json();
 
+      if (res.status === 409) {
+        toast.error(data.error || "A server operation is already in progress");
+        return;
+      }
       if (!res.ok) {
         toast.error(data.error || "Command failed");
         return;
       }
 
       if (action === "start") {
-        setPhase({ key: "boot", label: `Booting ${GAMES[game].name}…` });
+        setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
         toast.success(`${GAMES[game].name} is powering on`, {
           description: otherOnline ? `${GAMES[other].name} was saved and stopped.` : undefined,
         });
@@ -100,7 +111,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
     } catch {
       toast.error("Network error");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
       setPending(null);
       setPhase(null);
     }
@@ -386,10 +397,14 @@ function WorldCard({
           </Link>
         </div>
 
-        {/* Connect address */}
-        <div className="relative mt-4 flex items-center justify-between rounded-lg bg-background/50 px-3 py-2 font-mono text-[11px] text-muted-foreground ring-1 ring-foreground/10">
-          <span>connect</span>
-          <span className="text-foreground">{meta.connect}</span>
+        {/* Connect address(es) */}
+        <div className="relative mt-4 rounded-lg bg-background/50 px-3 py-2 font-mono text-[11px] text-muted-foreground ring-1 ring-foreground/10">
+          {meta.connect.map((addr, i) => (
+            <div key={addr} className={cn("flex items-center justify-between", i > 0 && "mt-1")}>
+              <span>{i === 0 ? "connect" : "or"}</span>
+              <span className="text-foreground">{addr}</span>
+            </div>
+          ))}
         </div>
       </div>
     </motion.div>

@@ -204,33 +204,83 @@ export interface HandoffStep {
   game?: GameId;
 }
 
+// ── control lock ─────────────────────────────────────────────────────────────
+//
+// The box can only be doing ONE power operation at a time. Without this, a user
+// spamming Start/Stop/Restart (or two admins in different tabs) would fire
+// overlapping `docker` commands and risk a corrupt save or a wedged container.
+// A single in-process lock serializes all control actions; a concurrent request
+// is rejected with ControlBusyError (surfaced as HTTP 409). The web app runs as
+// one long-lived Node process, so this module-level state is shared across all
+// requests. A max age guards against a crashed op locking things forever.
+
+export type ControlAction = "start" | "stop" | "restart";
+export interface ControlLock {
+  game: GameId;
+  action: ControlAction;
+  since: number;
+}
+
+const LOCK_MAX_MS = 120_000;
+let controlLock: ControlLock | null = null;
+
+export class ControlBusyError extends Error {
+  lock: ControlLock;
+  constructor(lock: ControlLock) {
+    super("A server operation is already in progress");
+    this.name = "ControlBusyError";
+    this.lock = lock;
+  }
+}
+
+/** The in-flight control operation, or null. Auto-expires stale locks. */
+export function currentControlLock(): ControlLock | null {
+  if (controlLock && Date.now() - controlLock.since > LOCK_MAX_MS) {
+    controlLock = null;
+  }
+  return controlLock;
+}
+
+async function withControlLock<T>(game: GameId, action: ControlAction, fn: () => Promise<T>): Promise<T> {
+  const held = currentControlLock();
+  if (held) throw new ControlBusyError(held);
+  controlLock = { game, action, since: Date.now() };
+  try {
+    return await fn();
+  } finally {
+    controlLock = null;
+  }
+}
+
 /**
  * Power on `game`. Because the host cannot run both at once, this first
  * gracefully saves + stops the *other* game if it is running. Returns the
  * sequence of steps performed (for the UI's live progress display).
  */
 export async function powerOn(game: GameId): Promise<HandoffStep[]> {
-  const other: GameId = game === "minecraft" ? "7dtd" : "minecraft";
-  const steps: HandoffStep[] = [];
+  return withControlLock(game, "start", async () => {
+    const other: GameId = game === "minecraft" ? "7dtd" : "minecraft";
+    const steps: HandoffStep[] = [];
 
-  const otherState = await containerState(RUNTIME[other].container);
-  if (otherState === "running") {
-    steps.push({ step: "save", game: other });
-    steps.push({ step: "stop", game: other });
-    await DRIVERS[other].gracefulStop();
-  }
+    const otherState = await containerState(RUNTIME[other].container);
+    if (otherState === "running") {
+      steps.push({ step: "save", game: other });
+      steps.push({ step: "stop", game: other });
+      await DRIVERS[other].gracefulStop();
+    }
 
-  steps.push({ step: "start", game });
-  await DRIVERS[game].start();
-  return steps;
+    steps.push({ step: "start", game });
+    await DRIVERS[game].start();
+    return steps;
+  });
 }
 
 export async function powerOff(game: GameId): Promise<void> {
-  await DRIVERS[game].gracefulStop();
+  return withControlLock(game, "stop", () => DRIVERS[game].gracefulStop());
 }
 
 export async function restartGame(game: GameId): Promise<void> {
-  await DRIVERS[game].restart();
+  return withControlLock(game, "restart", () => DRIVERS[game].restart());
 }
 
 // ── config file readers (shared) ─────────────────────────────────────────────

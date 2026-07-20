@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { GAMES, otherGame, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { StatusPill } from "@/components/ui-bits";
@@ -22,14 +23,20 @@ import { RotateCw, Users } from "lucide-react";
 
 export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
-  const { games, refresh } = useGames(4000);
+  // Poll faster while an operation is in flight so buttons re-enable promptly.
+  const [localBusy, setLocalBusy] = useState(false);
+  const { games, busy: serverBusy, refresh } = useGames(localBusy ? 1500 : 4000);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
   const reduced = usePrefersReducedMotion();
 
-  const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+
+  // Busy if THIS tab fired a request, OR the server reports any op in flight
+  // (e.g. another admin/tab). Either way, controls lock out.
+  const busy = localBusy || serverBusy !== null;
+  const busyAction = serverBusy?.action;
 
   const other = otherGame(game);
   const otherOnline = games?.[other]?.status === "online" || games?.[other]?.status === "starting";
@@ -44,7 +51,8 @@ export function GameControls({ game }: { game: GameId }) {
   }
 
   async function control(action: "start" | "stop" | "restart") {
-    setBusy(true);
+    if (localBusy) return;
+    setLocalBusy(true);
     setConfirm(false);
     try {
       const res = await fetch("/api/games/control", {
@@ -53,6 +61,7 @@ export function GameControls({ game }: { game: GameId }) {
         body: JSON.stringify({ game, action }),
       });
       const data = await res.json();
+      if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
       if (!res.ok) return void toast.error(data.error || "Command failed");
       toast.success(
         action === "stop" ? `${meta.name} saved & stopped` : action === "restart" ? `${meta.name} restarting` : `${meta.name} powering on`
@@ -61,7 +70,7 @@ export function GameControls({ game }: { game: GameId }) {
     } catch {
       toast.error("Network error");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   }
 
@@ -103,7 +112,7 @@ export function GameControls({ game }: { game: GameId }) {
         <button
           onClick={onPower}
           disabled={busy}
-          className="inline-flex h-12 items-center justify-center gap-2 rounded-xl font-semibold transition-all disabled:opacity-60"
+          className="inline-flex h-12 items-center justify-center gap-2 rounded-xl font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-60"
           style={{
             background: isOnline ? "transparent" : meta.tint,
             color: isOnline ? meta.tint : "var(--background)",
@@ -111,10 +120,11 @@ export function GameControls({ game }: { game: GameId }) {
           }}
         >
           <PowerGlyph className="h-5 w-5" />
-          {busy ? "Working…" : isOnline ? "Power off" : "Power on"}
+          {busy ? busyLabel(busyAction) : isOnline ? "Power off" : "Power on"}
         </button>
-        <Button variant="outline" className="h-11" disabled={busy || !isOnline} onClick={() => control("restart")}>
-          <RotateCw className="h-4 w-4" /> Restart
+        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !isOnline} onClick={() => control("restart")}>
+          <RotateCw className={cn("h-4 w-4", busyAction === "restart" && "animate-spin")} />
+          {busyAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
 
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
@@ -185,6 +195,19 @@ export function GameControls({ game }: { game: GameId }) {
       </Dialog>
     </div>
   );
+}
+
+function busyLabel(action?: "start" | "stop" | "restart"): string {
+  switch (action) {
+    case "restart":
+      return "Restarting…";
+    case "stop":
+      return "Stopping…";
+    case "start":
+      return "Starting…";
+    default:
+      return "Working…";
+  }
 }
 
 function Cell({ label, value, tint }: { label: string; value: string; tint: string }) {

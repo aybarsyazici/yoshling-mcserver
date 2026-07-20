@@ -17,8 +17,8 @@ export interface GameMeta {
   tint: string; // var(--mc) | var(--sd)
   tintSoft: string;
   tintDeep: string;
-  /** The connect address players use */
-  connect: string;
+  /** The connect address(es) players use. Multiple = show all (e.g. hostname + IP). */
+  connect: string[];
   /** Approx RAM this world reserves, in GB, for the budget bar */
   ramGb: number;
 }
@@ -33,7 +33,7 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--mc)",
     tintSoft: "var(--mc-soft)",
     tintDeep: "var(--mc-deep)",
-    connect: "mc.yoshling.xyz",
+    connect: ["mc.yoshling.xyz"],
     ramGb: 4,
   },
   "7dtd": {
@@ -45,7 +45,9 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--sd)",
     tintSoft: "var(--sd-soft)",
     tintDeep: "var(--sd-deep)",
-    connect: "7dtd.yoshling.xyz:26900",
+    // Show both: the hostname, and the raw IP (7DTD's direct-connect box only
+    // reliably accepts a literal IP, so the IP is the sure thing).
+    connect: ["7dtd.yoshling.xyz:26900", "178.105.163.254:26900"],
     ramGb: 5,
   },
 };

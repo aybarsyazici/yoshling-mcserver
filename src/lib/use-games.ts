@@ -11,9 +11,17 @@ export interface GameSnapshot {
   detail?: string;
 }
 
+export interface ControlLock {
+  game: GameId;
+  action: "start" | "stop" | "restart";
+  since: number;
+}
+
 export interface GamesState {
   games: Record<GameId, GameSnapshot> | null;
   activeGame: GameId | null;
+  /** A server power op is in flight (from any client); disables controls. */
+  busy: ControlLock | null;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -22,6 +30,7 @@ export interface GamesState {
 export function useGames(interval = 5000): GamesState {
   const [games, setGames] = useState<Record<GameId, GameSnapshot> | null>(null);
   const [activeGame, setActiveGame] = useState<GameId | null>(null);
+  const [busy, setBusy] = useState<ControlLock | null>(null);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
 
@@ -33,6 +42,7 @@ export function useGames(interval = 5000): GamesState {
       if (!alive.current) return;
       setGames(data.games);
       setActiveGame(data.activeGame ?? null);
+      setBusy(data.busy ?? null);
     } catch {
       /* keep last known */
     } finally {
@@ -42,6 +52,7 @@ export function useGames(interval = 5000): GamesState {
 
   useEffect(() => {
     alive.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     if (interval > 0) {
       const id = setInterval(refresh, interval);
@@ -55,5 +66,5 @@ export function useGames(interval = 5000): GamesState {
     };
   }, [refresh, interval]);
 
-  return { games, activeGame, loading, refresh };
+  return { games, activeGame, busy, loading, refresh };
 }

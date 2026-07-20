@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
-import { powerOn, powerOff, restartGame } from "@/lib/game-manager";
+import { powerOn, powerOff, restartGame, ControlBusyError } from "@/lib/game-manager";
 import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
 
@@ -49,6 +49,12 @@ export async function POST(request: NextRequest) {
         break;
     }
   } catch (e) {
+    if (e instanceof ControlBusyError) {
+      return NextResponse.json(
+        { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
+        { status: 409 }
+      );
+    }
     const msg = e instanceof Error ? e.message : "Server control failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

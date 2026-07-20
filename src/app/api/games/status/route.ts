@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getAllStatus } from "@/lib/game-manager";
+import { getAllStatus, currentControlLock } from "@/lib/game-manager";
 import { db } from "@/lib/db";
 
 export async function GET() {
@@ -28,5 +28,6 @@ export async function GET() {
   return NextResponse.json({
     games,
     activeGame: onlineGame ?? activeGame,
+    busy: currentControlLock(),
   });
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { GAMES, otherGame, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { StatusPill, SectionHeading } from "@/components/ui-bits";
@@ -18,7 +19,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Users, Puzzle, Server, Clock, Gauge } from "lucide-react";
+import { Users, Puzzle, Server, Clock, Gauge, RotateCw } from "lucide-react";
 
 export interface OverviewStat {
   label: string;
@@ -45,14 +46,17 @@ export function GameOverview({
   children?: React.ReactNode;
 }) {
   const meta = GAMES[game];
-  const { games, refresh } = useGames(5000);
+  const [localBusy, setLocalBusy] = useState(false);
+  const { games, busy: serverBusy, refresh } = useGames(localBusy ? 1500 : 5000);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
   const reduced = usePrefersReducedMotion();
 
-  const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+
+  const busy = localBusy || serverBusy !== null;
+  const busyAction = serverBusy?.action;
 
   const other = otherGame(game);
   const otherOnline = games?.[other]?.status === "online" || games?.[other]?.status === "starting";
@@ -65,7 +69,8 @@ export function GameOverview({
   }
 
   async function control(action: "start" | "stop" | "restart") {
-    setBusy(true);
+    if (localBusy) return;
+    setLocalBusy(true);
     setConfirm(false);
     try {
       const res = await fetch("/api/games/control", {
@@ -74,13 +79,14 @@ export function GameOverview({
         body: JSON.stringify({ game, action }),
       });
       const data = await res.json();
+      if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
       if (!res.ok) return void toast.error(data.error || "Command failed");
       toast.success(`${meta.name} ${action === "stop" ? "saved & stopped" : action === "restart" ? "restarting" : "powering on"}`);
       setTimeout(refresh, reduced ? 0 : 1200);
     } catch {
       toast.error("Network error");
     } finally {
-      setBusy(false);
+      setLocalBusy(false);
     }
   }
 
@@ -126,9 +132,9 @@ export function GameOverview({
               <div>
                 <p className="eyebrow text-muted-foreground">Server</p>
                 <p className="font-display text-2xl font-bold">
-                  {isOnline ? "Running" : busy ? "Working…" : "Powered down"}
+                  {busyAction === "restart" ? "Restarting…" : busyAction === "stop" ? "Stopping…" : busyAction === "start" || (busy && !isOnline) ? "Starting…" : isOnline ? "Running" : "Powered down"}
                 </p>
-                <p className="mt-0.5 font-mono text-xs text-muted-foreground">{meta.connect}</p>
+                <p className="mt-0.5 font-mono text-xs text-muted-foreground">{meta.connect.join("  ·  ")}</p>
               </div>
             </div>
 
@@ -136,7 +142,7 @@ export function GameOverview({
               <button
                 onClick={onPower}
                 disabled={busy}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 font-medium transition-all disabled:opacity-60"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60"
                 style={{
                   background: isOnline ? "transparent" : meta.tint,
                   color: isOnline ? meta.tint : "var(--background)",
@@ -144,11 +150,12 @@ export function GameOverview({
                 }}
               >
                 <PowerGlyph className="h-4 w-4" />
-                {isOnline ? "Power off" : "Power on"}
+                {busy ? "Working…" : isOnline ? "Power off" : "Power on"}
               </button>
               {isOnline && (
-                <Button variant="outline" className="h-11" disabled={busy} onClick={() => control("restart")}>
-                  Restart
+                <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy} onClick={() => control("restart")}>
+                  <RotateCw className={cn("h-4 w-4", busyAction === "restart" && "animate-spin")} />
+                  {busyAction === "restart" ? "Restarting…" : "Restart"}
                 </Button>
               )}
               <Link
