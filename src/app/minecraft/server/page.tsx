@@ -34,7 +34,7 @@ export default function MinecraftServerPage() {
         {tab === "monitor" && <ServerMonitor game="minecraft" />}
         {tab === "backups" && <GameBackups game="minecraft" />}
         {tab === "console" && <GameConsole game="minecraft" />}
-        {tab === "files" && <FileBrowser />}
+        {tab === "files" && <FileBrowser tint={tint} rootLabel="minecraft" />}
       </div>
 
       <PhotoFooter src="/cat.jpg" />

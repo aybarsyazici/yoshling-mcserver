@@ -7,6 +7,7 @@ import { GameControls } from "@/components/game-controls";
 import { ServerMonitor } from "@/components/server-monitor";
 import { GameBackups } from "@/components/game-backups";
 import { GameConsole } from "@/components/game-console";
+import { FileBrowser } from "@/components/file-browser";
 import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
 
@@ -15,6 +16,12 @@ const TABS = [
   { value: "monitor", label: "Monitor" },
   { value: "backups", label: "Backups" },
   { value: "console", label: "Console" },
+  { value: "files", label: "Files" },
+];
+
+const FILE_ROOTS = [
+  { key: "config", label: "Config" },
+  { key: "saves", label: "Saves" },
 ];
 
 export default function SevenDtdServerPage() {
@@ -37,6 +44,7 @@ export default function SevenDtdServerPage() {
         {tab === "monitor" && <ServerMonitor game="7dtd" />}
         {tab === "backups" && <GameBackups game="7dtd" />}
         {tab === "console" && <GameConsole game="7dtd" />}
+        {tab === "files" && <FileBrowser endpoint="/api/7dtd/files" roots={FILE_ROOTS} tint={tint} />}
       </div>
 
       <PhotoFooter src="/the-stare.jpg" />
