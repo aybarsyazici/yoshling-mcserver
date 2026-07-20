@@ -45,3 +45,11 @@ next-env.d.ts
 # database
 *.db
 *.db-journal
+
+# large media / raw source photos (web-optimized copies live in /public)
+*.mp4
+*.mp4.part
+/happy.jpg
+/I-cant-let-you-get-close.jpg
+/the-rizzler.jpg
+/the-stare.jpg

@@ -1,6 +1,7 @@
 services:
   minecraft:
     image: itzg/minecraft-server
+    container_name: yoshling-mc
     ports:
       - "25565:25565"
     environment:
@@ -8,7 +9,7 @@ services:
       TYPE: "FABRIC"
       VERSION: "1.21.4"
       MEMORY: "4G"
-      RCON_PASSWORD: "${RCON_PASSWORD:-changeme}"
+      RCON_PASSWORD: "${RCON_PASSWORD}"
       ENABLE_RCON: "true"
       RCON_PORT: 25575
     volumes:
@@ -17,23 +18,59 @@ services:
     tty: true
     stdin_open: true
 
+  # 7 Days to Die dedicated server (LinuxGSM-based image).
+  # START_MODE=1 = start the server. It shares the 8GB box with Minecraft, so
+  # only one should run at a time — the web UI gracefully stops the other before
+  # starting this. NOTE: do not use restart:unless-stopped with START_MODE 0/2/4.
+  sevendtd:
+    image: vinanrra/7dtd-server
+    container_name: yoshling-7dtd
+    ports:
+      - "26900:26900/tcp"
+      - "26900:26900/udp"
+      - "26901:26901/udp"
+      - "26902:26902/udp"
+      - "8080:8080/tcp" # web admin
+      - "8081:8081/tcp" # telnet control
+    environment:
+      START_MODE: "1"
+      VERSION: "stable"
+      TimeZone: "Europe/London"
+      TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
+    volumes:
+      - sdtd-server:/home/sdtdserver/serverfiles
+      - sdtd-saves:/home/sdtdserver/.local/share/7DaysToDie
+      - sdtd-backup:/home/sdtdserver/lgsm/backup
+      - sdtd-log:/home/sdtdserver/log
+    # Do NOT auto-start on boot; the web UI powers this on deliberately so the
+    # box never tries to run both worlds at once. Once started it stays up until
+    # explicitly stopped (and a manual `docker stop` survives reboots).
+    restart: "no"
+    tty: true
+    stdin_open: true
+
   web:
     build: .
     ports:
       - "3000:3000"
+    env_file: .env
     environment:
-      DATABASE_URL: "file:./data/yoshling.db"
-      DISCORD_CLIENT_ID: "${DISCORD_CLIENT_ID}"
-      DISCORD_CLIENT_SECRET: "${DISCORD_CLIENT_SECRET}"
-      AUTH_SECRET: "${AUTH_SECRET}"
-      AUTH_URL: "${AUTH_URL:-http://localhost:3000}"
+      NODE_ENV: production
+      DOCKER_HOST: unix:///var/run/docker.sock
       MC_SERVER_DIR: "/minecraft"
+      SDTD_SERVER_DIR: "/sevendtd"
+      SDTD_CONFIG_DIR: "/sevendtd-config"
       RCON_HOST: "minecraft"
       RCON_PORT: "25575"
-      RCON_PASSWORD: "${RCON_PASSWORD:-changeme}"
+      SDTD_TELNET_HOST: "sevendtd"
+      SDTD_TELNET_PORT: "8081"
+      SDTD_TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
     volumes:
-      - mc-data:/minecraft:ro
+      - mc-data:/minecraft
+      - sdtd-saves:/sevendtd
+      - sdtd-server:/sevendtd-config
       - web-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - minecraft
     restart: unless-stopped
@@ -41,3 +78,7 @@ services:
 volumes:
   mc-data:
   web-data:
+  sdtd-server:
+  sdtd-saves:
+  sdtd-backup:
+  sdtd-log:
