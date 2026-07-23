@@ -146,6 +146,22 @@ docker exec yoshling-web-1 node -e "
   match where players filter (box is in Germany → set `Region=Europe`, not the
   default `NorthAmericaEast`). A fresh/empty server can still take 15-30 min to
   appear and is best found by searching its exact `ServerName`.
+- **Game version / Steam branch:** set by the `VERSION` env on the `sevendtd`
+  service — `stable` (Default Public) or `latest_experimental`. **Currently
+  `latest_experimental` (game V3.1.0).** Switching branches needs a one-time
+  update run: recreate the container with `START_MODE=3` (update+start) so the
+  ~17GB files re-download, then it goes back to `START_MODE=1` normal start.
+  IMPORTANT: recreate with **`docker compose up -d sevendtd`** (NOT `docker
+  compose run`, which omits the `sevendtd` network alias and breaks the web
+  app's telnet-by-name). Branch switches can break existing saves — back up
+  first. There is NO in-UI version switcher yet (the web container can't run
+  `docker compose` and doesn't mount `/opt/yoshling`; the MC version-switcher in
+  Settings has the same latent limitation).
+- **World upload:** `/api/7dtd/world` (ADMIN) accepts a `.zip`, auto-detects
+  world-vs-save from marker files (`dtm.raw`/`biomes.png`/`prefabs.xml` → world →
+  `GeneratedWorlds/<name>`; `main.ttw`/`players.xml` → save → `Saves/`), extracts
+  with the container's `unzip`. UI is the uploader card in 7DTD Settings. To play
+  an uploaded world: set `GameWorld` to its name in All settings + restart.
 
 ### TLS / the domain
 
@@ -192,9 +208,10 @@ connect **directly to the box IP `178.105.163.254`**:
 - **Live** at `https://yoshling.xyz` (Cloudflare Full (strict), verified end-to-end).
 - **Minecraft:** running/healthy; all features (mods, console, files, backups,
   settings, whitelist) working.
-- **7 Days to Die:** installed (~17 GB via SteamCMD) and switchable from the UI;
-  telnet control, file browser (Config/Saves), and in-game join verified. Powered
-  off by default (MC is the default active world; `GameState.activeGame = minecraft`).
+- **7 Days to Die:** installed (~17 GB via SteamCMD), on the **`latest_experimental`**
+  branch (game **V3.1.0 b11**). Telnet control, file browser (Config/Saves), world
+  upload, and in-game join verified. Powered off by default (MC is the default
+  active world; `GameState.activeGame = minecraft`).
 - Both `main` (local + `/opt/yoshling` on the box) at the merge of the dual-world
   work. `GameState` + `SevenDaysConfig` tables applied to the prod DB.
 
