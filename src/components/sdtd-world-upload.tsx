@@ -5,10 +5,11 @@ import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { UploadCloud, Globe, Loader2, CheckCircle2 } from "lucide-react";
+import { UploadCloud, Globe, Loader2, CheckCircle2, Trash2 } from "lucide-react";
 
 export function SdtdWorldUpload({ tint }: { tint: string }) {
   const [worlds, setWorlds] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -21,6 +22,26 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
       const data = await res.json();
       if (Array.isArray(data.worlds)) setWorlds(data.worlds);
     } catch {}
+  }
+
+  async function deleteWorld(name: string) {
+    if (!confirm(`Delete the custom world "${name}"? This removes the map and its saves. This cannot be undone.`)) return;
+    setDeleting(name);
+    try {
+      const res = await fetch(`/api/7dtd/world?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(`Deleted "${name}"`);
+        setWorlds((w) => w.filter((x) => x !== name));
+      } else {
+        // 409 = protected (active world or referenced by a backup)
+        toast.error(data.error || "Couldn't delete world");
+      }
+    } catch {
+      toast.error("Couldn't delete world");
+    } finally {
+      setDeleting(null);
+    }
   }
 
   useEffect(() => {
@@ -162,13 +183,22 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
           <p className="eyebrow mb-2 text-muted-foreground">Installed custom worlds</p>
           <div className="flex flex-wrap gap-2">
             {worlds.map((w) => (
-              <span key={w} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono text-xs" style={{ background: `color-mix(in oklab, ${tint} 12%, transparent)`, color: tint }}>
+              <span key={w} className="group inline-flex items-center gap-1.5 rounded-lg py-1.5 pl-2.5 pr-1.5 font-mono text-xs" style={{ background: `color-mix(in oklab, ${tint} 12%, transparent)`, color: tint }}>
                 <CheckCircle2 className="h-3.5 w-3.5" /> {w}
+                <button
+                  onClick={() => deleteWorld(w)}
+                  disabled={deleting === w}
+                  title={`Delete "${w}"`}
+                  className="ml-1 grid h-5 w-5 place-items-center rounded text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive disabled:opacity-50"
+                >
+                  {deleting === w ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                </button>
               </span>
             ))}
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
             To play on one: set <span className="font-mono">Game World</span> to its name in All settings, then start a fresh game. Restart 7DTD to apply.
+            Worlds in use by the server or a backup can&rsquo;t be deleted.
           </p>
         </div>
       )}

@@ -183,6 +183,70 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// Delete a custom (uploaded) world — never a stock world, the active world, or a
+// world any backup depends on.
+export async function DELETE(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
+
+  const name = new URL(request.url).searchParams.get("name") || "";
+  if (!name || name.includes("/") || name.includes("..")) {
+    return NextResponse.json({ error: "Invalid world name" }, { status: 400 });
+  }
+
+  const target = path.join(WORLDS_DIR, name);
+  // Must be an existing custom world (only GeneratedWorlds is deletable).
+  try {
+    const st = await import("fs/promises").then((m) => m.stat(target));
+    if (!st.isDirectory()) throw new Error();
+  } catch {
+    return NextResponse.json({ error: "That custom world doesn't exist (stock worlds can't be deleted)." }, { status: 404 });
+  }
+
+  // Guard 1: currently active world (from sdtdserver.xml GameWorld).
+  try {
+    const xml = await import("fs/promises").then((m) =>
+      m.readFile(path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml"), "utf-8")
+    );
+    const cur = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i)?.[1];
+    if (cur && cur === name) {
+      return NextResponse.json(
+        { error: `"${name}" is the server's current world. Switch Game World to something else first.` },
+        { status: 409 }
+      );
+    }
+  } catch {}
+
+  // Guard 2: any backup depends on this world.
+  try {
+    const { worldsUsedByBackups } = await import("@/app/api/7dtd/backups/route");
+    const used = await worldsUsedByBackups();
+    if (used.has(name)) {
+      return NextResponse.json(
+        { error: `"${name}" is included in one or more backups. Delete those backups first to remove it.` },
+        { status: 409 }
+      );
+    }
+  } catch {}
+
+  try {
+    await rm(target, { recursive: true, force: true });
+    // Also drop its Saves/ progress for that world so nothing dangles.
+    await rm(path.join(SAVES_DIR, "Saves", name), { recursive: true, force: true }).catch(() => {});
+    await db.activity.create({
+      data: {
+        userId: session.user.id,
+        action: "delete_file",
+        details: JSON.stringify({ game: "7dtd", deletedWorld: name }),
+      },
+    }).catch(() => {});
+    return NextResponse.json({ success: true });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
+  }
+}
+
 /** Walk down into single-child wrapper folders until we find the markers. */
 async function findContentRoot(dir: string, markers: string[]): Promise<string> {
   const hasMarker = async (d: string) => {
