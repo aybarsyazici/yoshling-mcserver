@@ -5,6 +5,25 @@ import { promisify } from "util";
 import { mkdir, writeFile, rm, readdir } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
+import { verifyUploadToken } from "@/lib/upload-token";
+
+// This route can be hit cross-origin from direct.yoshling.xyz (the non-Cloudflare
+// host used for large uploads). Allow that specific origin for CORS.
+const DIRECT_ORIGIN = process.env.NEXT_PUBLIC_DIRECT_UPLOAD_ORIGIN || "https://direct.yoshling.xyz";
+const PROXIED_ORIGIN = process.env.AUTH_URL || "https://yoshling.xyz";
+function corsHeaders(origin: string | null): Record<string, string> {
+  const allow = origin === DIRECT_ORIGIN || origin === PROXIED_ORIGIN ? origin : PROXIED_ORIGIN;
+  return {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Upload-Token",
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
+
+export function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(request.headers.get("origin")) });
+}
 
 export const runtime = "nodejs";
 // Worlds can be large; allow a long-running request for the extract.
@@ -38,22 +57,35 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const cors = corsHeaders(request.headers.get("origin"));
+  const json = (body: object, status = 200) =>
+    NextResponse.json(body, { status, headers: cors });
+
+  // Auth: either a logged-in ADMIN session, OR a valid short-lived upload token
+  // (used when POSTing cross-origin from the direct host, where cookies aren't
+  // sent). The token is minted by /api/7dtd/world/token for ADMINs only.
+  let userId: string | null = null;
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  if (session?.user) {
+    if (session.user.role !== "ADMIN") return json({ error: "Admin only" }, 403);
+    userId = session.user.id;
+  } else {
+    const token = request.headers.get("x-upload-token");
+    const verified = verifyUploadToken(token);
+    if (!verified) return json({ error: "Unauthorized" }, 401);
+    userId = verified.userId;
   }
 
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    return json({ error: "No file uploaded" }, 400);
   }
   if (!file.name.toLowerCase().endsWith(".zip")) {
-    return NextResponse.json({ error: "Please upload a .zip file" }, { status: 400 });
+    return json({ error: "Please upload a .zip file" }, 400);
   }
   if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "File too large (max 2 GB)" }, { status: 400 });
+    return json({ error: "File too large (max 2 GB)" }, 400);
   }
 
   await mkdir(TMP_DIR, { recursive: true });
@@ -70,16 +102,16 @@ export async function POST(request: NextRequest) {
     // Validate + list contents (also rejects non-zips / zip bombs early).
     const { stdout: listing } = await execAsync(`unzip -l ${JSON.stringify(zipPath)}`, { maxBuffer: 16 * 1024 * 1024 });
     if (/\.\.\//.test(listing)) {
-      return NextResponse.json({ error: "Zip contains unsafe paths" }, { status: 400 });
+      return json({ error: "Zip contains unsafe paths" }, 400);
     }
     const lower = listing.toLowerCase();
     const looksWorld = WORLD_MARKERS.some((m) => lower.includes(m.toLowerCase()));
     const looksSave = SAVE_MARKERS.some((m) => lower.includes(m.toLowerCase()));
 
     if (!looksWorld && !looksSave) {
-      return NextResponse.json(
+      return json(
         { error: "This doesn't look like a 7DTD world or save. A world zip should contain files like dtm.raw / biomes.png / prefabs.xml." },
-        { status: 400 }
+        400
       );
     }
 
@@ -117,14 +149,14 @@ export async function POST(request: NextRequest) {
     try {
       await db.activity.create({
         data: {
-          userId: session.user.id,
+          userId,
           action: "edit_file",
           details: JSON.stringify({ game: "7dtd", uploaded: kind, name: installedAs }),
         },
       });
     } catch {}
 
-    return NextResponse.json({
+    return json({
       success: true,
       kind,
       name: installedAs,
@@ -134,7 +166,7 @@ export async function POST(request: NextRequest) {
           : `Save "${installedAs}" installed under Saves. Set Game World / Game Name to match it, then start the server.`,
     });
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message || "Upload failed" }, { status: 500 });
+    return json({ error: (e as Error).message || "Upload failed" }, 500);
   } finally {
     await rm(zipPath, { force: true }).catch(() => {});
     await rm(workDir, { recursive: true, force: true }).catch(() => {});

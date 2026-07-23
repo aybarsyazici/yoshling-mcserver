@@ -37,12 +37,28 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
     setFile(f);
   }
 
-  function upload() {
+  async function upload() {
     if (!file || uploading) return;
     setUploading(true);
     setProgress(0);
 
-    // Use XHR for real upload progress (fetch has no upload progress events).
+    // Large worlds exceed Cloudflare's 100MB request cap, so uploads go to the
+    // direct (non-Cloudflare) host when configured. That host doesn't get our
+    // session cookie, so mint a short-lived signed token first and send it as a
+    // header. Falls back to the same-origin path if no direct host is set.
+    let target = "/api/7dtd/world";
+    let token = "";
+    try {
+      const t = await fetch("/api/7dtd/world/token");
+      if (t.ok) {
+        const td = await t.json();
+        token = td.token || "";
+        if (td.directHost) target = `${td.directHost}/api/7dtd/world`;
+      }
+    } catch {
+      /* fall back to same-origin */
+    }
+
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     form.append("file", file);
@@ -59,6 +75,8 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
         setFile(null);
         setProgress(0);
         loadWorlds();
+      } else if (xhr.status === 413) {
+        toast.error("File too large for this route. The direct-upload host may not be configured.");
       } else {
         toast.error(data.error || `Upload failed (HTTP ${xhr.status})`);
       }
@@ -67,7 +85,9 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
       setUploading(false);
       toast.error("Upload failed — network error");
     };
-    xhr.open("POST", "/api/7dtd/world");
+    xhr.open("POST", target);
+    xhr.withCredentials = true;
+    if (token) xhr.setRequestHeader("X-Upload-Token", token);
     xhr.send(form);
   }
 

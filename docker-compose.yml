@@ -68,6 +68,9 @@ services:
       SDTD_TELNET_HOST: "sevendtd"
       SDTD_TELNET_PORT: "8081"
       SDTD_TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
+      # Large world uploads bypass Cloudflare's 100MB cap via this direct host.
+      NEXT_PUBLIC_DIRECT_UPLOAD_HOST: "${DIRECT_UPLOAD_HOST:-}"
+      NEXT_PUBLIC_DIRECT_UPLOAD_ORIGIN: "${DIRECT_UPLOAD_HOST:-}"
     volumes:
       - mc-data:/minecraft
       - sdtd-saves:/sevendtd
