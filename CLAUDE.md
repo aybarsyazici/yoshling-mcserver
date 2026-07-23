@@ -51,10 +51,11 @@ drop docker-cli; the app cannot control containers without them.
 
 - `/` → redirect to `/home` (or `/login`)
 - `/home` — dual-world landing (the Power Core + one-click power, hand-off confirm)
-- `/minecraft/*` — MC overview, mods, server (controls/monitor/backups/console/files), settings, whitelist
-- `/7dtd/*` — 7DTD overview, server (controls/monitor/backups/console/files), settings
+- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings, whitelist
+- `/7dtd/*` — 7DTD overview, server (controls/monitor/console/files), backups, settings
+- Backups are their own sidebar page per game (`/{game}/backups`), not a server tab.
 - `/users`, `/activity` — shared across both games
-- API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files}`,
+- API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   and the legacy `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
 - `src/components/file-browser.tsx` is shared: MC uses the default
   `/api/server/files`; 7DTD passes `/api/7dtd/files` + `roots` (Config = the
@@ -166,6 +167,16 @@ docker exec yoshling-web-1 node -e "
   routes the file to the **direct (non-Cloudflare) host** `direct.yoshling.xyz`
   using a short-lived HMAC token from `/api/7dtd/world/token` (the session cookie
   isn't sent cross-origin). See the TLS section for the direct-host cert setup.
+  `GameWorld` in All settings is a **dynamic dropdown** (stock `Data/Worlds` +
+  uploaded `GeneratedWorlds`, fed by `/api/7dtd/world` `allWorlds`).
+- **World delete:** `DELETE /api/7dtd/world?name=` (ADMIN) removes a custom world,
+  but **refuses if it's the active `GameWorld` or referenced by any backup**
+  (trash button on the uploader's world chips).
+- **7DTD backups are self-contained:** each bundles `Saves/` + the custom world
+  map (`GeneratedWorlds/<world>`) + `sdtdserver.xml` + a `manifest.json` (records
+  the world), so one-click restore rebuilds saves, map, and settings together.
+  (MC backups remain just the `world/` folder.) Note: tar stores members as
+  `./name`, so manifest reads try `./manifest.json` first.
 
 ### TLS / the domain
 
