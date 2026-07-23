@@ -37,9 +37,13 @@ function readGameWorld(xml: string): string {
 /** Parse the manifest embedded in a backup tar (without full extraction). */
 async function backupManifest(file: string): Promise<Manifest | null> {
   try {
-    const { stdout } = await execAsync(`tar -xzOf ${JSON.stringify(path.join(BACKUP_DIR, file))} manifest.json 2>/dev/null`, {
-      maxBuffer: 1024 * 1024,
-    });
+    // The tar is created with `-C <dir> .`, so members are stored as
+    // "./manifest.json". Try both spellings to be safe across tar versions.
+    const { stdout } = await execAsync(
+      `tar -xzOf ${JSON.stringify(path.join(BACKUP_DIR, file))} ./manifest.json 2>/dev/null || ` +
+        `tar -xzOf ${JSON.stringify(path.join(BACKUP_DIR, file))} manifest.json 2>/dev/null`,
+      { maxBuffer: 1024 * 1024 }
+    );
     return JSON.parse(stdout);
   } catch {
     return null;
