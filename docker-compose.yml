@@ -34,7 +34,10 @@ services:
       - "8081:8081/tcp" # telnet control
     environment:
       START_MODE: "1"
-      VERSION: "stable"
+      # Steam branch: "stable" (Default Public) or "latest_experimental".
+      # Switching branches requires a one-time update run (START_MODE=3) so the
+      # server files re-download on the new branch — see CLAUDE.md.
+      VERSION: "latest_experimental"
       TimeZone: "Europe/London"
       TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
     volumes:
