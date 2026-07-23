@@ -43,17 +43,27 @@ function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9 _.-]/g, "").replace(/\.+/g, ".").trim().slice(0, 60);
 }
 
-// List existing generated worlds so the UI can show what's installed.
+// Stock worlds ship inside the server files (Navezgane, Pregen*, …).
+const STOCK_WORLDS_DIR = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "Data", "Worlds");
+
+async function listDirs(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+}
+
+// Returns the uploaded custom worlds AND the full set of worlds the server can
+// be pointed at (stock + generated), so the Settings GameWorld field can offer
+// every valid choice instead of a hardcoded Navezgane/RWG.
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  try {
-    const entries = await readdir(WORLDS_DIR, { withFileTypes: true }).catch(() => []);
-    const worlds = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-    return NextResponse.json({ worlds });
-  } catch {
-    return NextResponse.json({ worlds: [] });
-  }
+  const generated = await listDirs(WORLDS_DIR);
+  const stock = await listDirs(STOCK_WORLDS_DIR);
+  // "RWG" = generate a random world at runtime; always a valid option.
+  const all = Array.from(new Set(["RWG", ...stock, ...generated])).sort((a, b) =>
+    a === "RWG" ? -1 : b === "RWG" ? 1 : a.localeCompare(b)
+  );
+  return NextResponse.json({ worlds: generated, allWorlds: all });
 }
 
 export async function POST(request: NextRequest) {

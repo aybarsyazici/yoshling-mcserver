@@ -23,10 +23,12 @@ interface SdtdProperty {
   help: string;
 }
 
+type Opt = { value: string; label: string };
+
 // Known enumerations for a nicer dropdown instead of a raw text box.
-const SELECTS: Record<string, { value: string; label: string }[]> = {
+// GameWorld is populated dynamically (stock + uploaded worlds) at runtime.
+const SELECTS: Record<string, Opt[]> = {
   Region: ["NorthAmericaEast", "NorthAmericaWest", "CentralAmerica", "SouthAmerica", "Europe", "Russia", "Asia", "MiddleEast", "Africa", "Oceania"].map((v) => ({ value: v, label: v })),
-  GameWorld: ["Navezgane", "RWG"].map((v) => ({ value: v, label: v })),
   GameMode: [{ value: "GameModeSurvival", label: "Survival" }],
   ServerVisibility: [
     { value: "2", label: "Public (2)" },
@@ -69,6 +71,7 @@ export function SdtdAllSettings({ tint }: { tint: string }) {
   const [open, setOpen] = useState(false);
   const [props, setProps] = useState<SdtdProperty[] | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const [worlds, setWorlds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
@@ -76,7 +79,11 @@ export function SdtdAllSettings({ tint }: { tint: string }) {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/7dtd/config/all");
+      const [res, wr] = await Promise.all([
+        fetch("/api/7dtd/config/all"),
+        fetch("/api/7dtd/world").then((r) => r.json()).catch(() => ({})),
+      ]);
+      if (Array.isArray(wr.allWorlds)) setWorlds(wr.allWorlds);
       const data = await res.json();
       if (data.properties) {
         setProps(data.properties);
@@ -92,9 +99,22 @@ export function SdtdAllSettings({ tint }: { tint: string }) {
     }
   }
 
+  // GameWorld dropdown = stock + uploaded worlds (plus whatever's currently set,
+  // so an unknown value is still shown/selectable).
+  function selectsFor(name: string, currentValue: string): Opt[] | undefined {
+    if (name === "GameWorld") {
+      const set = new Set<string>(worlds);
+      if (currentValue) set.add(currentValue);
+      return Array.from(set).map((v) => ({ value: v, label: v }));
+    }
+    return SELECTS[name];
+  }
+
   useEffect(() => {
+    // Load once when first opened. `load`/`props` intentionally excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
     if (open && props === null) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const dirty = props ? props.filter((p) => draft[p.name] !== p.value) : [];
@@ -193,6 +213,7 @@ export function SdtdAllSettings({ tint }: { tint: string }) {
                               value={draft[p.name] ?? p.value}
                               changed={draft[p.name] !== p.value}
                               tint={tint}
+                              select={selectsFor(p.name, draft[p.name] ?? p.value)}
                               onChange={(v) => setDraft((d) => ({ ...d, [p.name]: v }))}
                             />
                           ))}
@@ -216,15 +237,16 @@ function PropField({
   value,
   changed,
   tint,
+  select,
   onChange,
 }: {
   prop: SdtdProperty;
   value: string;
   changed: boolean;
   tint: string;
+  select?: Opt[];
   onChange: (v: string) => void;
 }) {
-  const select = SELECTS[prop.name];
   const type = inferType(prop.value);
 
   return (
