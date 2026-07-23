@@ -18,6 +18,7 @@ import {
   Users,
   Shield,
   Clock,
+  Archive,
   LogOut,
   ChevronLeft,
   Menu,
@@ -36,6 +37,7 @@ function navFor(game: GameId): NavItem[] {
       { name: "Overview", href: base, icon: Gamepad2 },
       { name: "Mods", href: `${base}/mods`, icon: Puzzle },
       { name: "Server", href: `${base}/server`, icon: Server },
+      { name: "Backups", href: `${base}/backups`, icon: Archive },
       { name: "Settings", href: `${base}/settings`, icon: Settings },
       { name: "Whitelist", href: `${base}/whitelist`, icon: Shield },
     ];
@@ -43,6 +45,7 @@ function navFor(game: GameId): NavItem[] {
   return [
     { name: "Overview", href: base, icon: Gamepad2 },
     { name: "Server", href: `${base}/server`, icon: Server },
+    { name: "Backups", href: `${base}/backups`, icon: Archive },
     { name: "Settings", href: `${base}/settings`, icon: Settings },
   ];
 }

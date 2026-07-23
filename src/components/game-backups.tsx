@@ -11,12 +11,19 @@ interface Backup {
   name: string;
   size: number;
   createdAt: string;
+  world?: string | null;
+  includesWorldMap?: boolean;
 }
 
 export function GameBackups({ game }: { game: GameId }) {
   const meta = GAMES[game];
   const endpoint = game === "minecraft" ? "/api/server/backups" : "/api/7dtd/backups";
   const noun = game === "minecraft" ? "world" : "saves";
+  // What a backup captures, spelled out per game.
+  const describes =
+    game === "minecraft"
+      ? "Each backup is a full copy of your Minecraft world folder."
+      : "Each backup bundles your saves (player progress), the world map, and the server settings — so a restore rebuilds everything.";
 
   const [backups, setBackups] = useState<Backup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -93,8 +100,8 @@ export function GameBackups({ game }: { game: GameId }) {
   return (
     <div className="space-y-5" style={{ ["--tint" as string]: meta.tint }}>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          Snapshots of your <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{noun}</code>. Take one before big changes.
+        <p className="max-w-2xl text-sm text-muted-foreground">
+          {describes} Take one before switching worlds, changing settings, or installing updates — then you can roll back with one click.
         </p>
         <Button onClick={create} disabled={creating} style={{ background: meta.tint, color: "var(--background)" }}>
           <Plus className="h-4 w-4" /> {creating ? "Creating…" : "Create backup"}
@@ -104,7 +111,7 @@ export function GameBackups({ game }: { game: GameId }) {
       <div className="flex items-start gap-2 rounded-xl bg-chart-5/10 p-3 ring-1 ring-chart-5/30">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-chart-5" />
         <p className="text-xs text-muted-foreground">
-          Restoring overwrites the live {noun}. Power the server down first to avoid corruption.
+          Restoring replaces the live {noun} (and, for 7DTD, the world map + settings). Power the server down first to avoid corruption.
         </p>
       </div>
 
@@ -137,8 +144,14 @@ export function GameBackups({ game }: { game: GameId }) {
                   </span>
                   <div>
                     <p className="font-mono text-sm font-medium">{b.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(b.createdAt).toLocaleString()} · {formatSize(b.size)}
+                    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                      <span>{new Date(b.createdAt).toLocaleString()}</span>
+                      <span>· {formatSize(b.size)}</span>
+                      {b.world && (
+                        <span className="rounded px-1.5 py-0.5 font-mono" style={{ background: `color-mix(in oklab, ${meta.tint} 12%, transparent)`, color: meta.tint }}>
+                          {b.world}{b.includesWorldMap ? " · map incl." : ""}
+                        </span>
+                      )}
                     </p>
                   </div>
                 </div>
