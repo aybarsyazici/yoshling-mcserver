@@ -162,6 +162,10 @@ docker exec yoshling-web-1 node -e "
   `GeneratedWorlds/<name>`; `main.ttw`/`players.xml` → save → `Saves/`), extracts
   with the container's `unzip`. UI is the uploader card in 7DTD Settings. To play
   an uploaded world: set `GameWorld` to its name in All settings + restart.
+  Large worlds exceed **Cloudflare's 100MB request cap** (→ 413), so the uploader
+  routes the file to the **direct (non-Cloudflare) host** `direct.yoshling.xyz`
+  using a short-lived HMAC token from `/api/7dtd/world/token` (the session cookie
+  isn't sent cross-origin). See the TLS section for the direct-host cert setup.
 
 ### TLS / the domain
 
@@ -186,6 +190,13 @@ not the Hetzner box). Full chain, all encrypted:
   domains, showing a bogus cert-mismatch page in the browser — that's a
   client-network block, not a server problem. Verify from the box with
   `curl https://yoshling.xyz/login` (expect 200).
+- **`direct.yoshling.xyz`** is a **DNS-only (grey-cloud)** record → the box, for
+  large uploads that exceed Cloudflare's 100MB cap. Caddy serves it with a
+  **Let's Encrypt** cert (publicly trusted) via the global option
+  `auto_https ignore_loaded_certs` (so it doesn't reuse the loaded CF Origin
+  wildcard), and `request_body { max_size 2GB }`. Caddy was upgraded from the
+  Ubuntu 2.6.2 package to the **official 2.11.4 binary** for this
+  (`/root/caddy-2.6.2.bak` is the rollback).
 
 ### Connecting to the game servers (NOT via Cloudflare)
 
