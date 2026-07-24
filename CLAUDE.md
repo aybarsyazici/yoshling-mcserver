@@ -139,10 +139,16 @@ docker exec yoshling-web-1 node -e "
   (Path on the box:
   `/var/lib/docker/volumes/yoshling_sdtd-server/_data/sdtdserver.xml`.)
 - **7DTD settings:** the Settings page has a curated "Quick settings" card
-  (name/password/players/difficulty/day length/RAM) plus an **"All settings"**
-  expander backed by `/api/7dtd/config/all`, which reads *every* `<property>` in
-  `sdtdserver.xml` (comment → help text) and writes back changed ones. Telnet/admin
-  keys are locked out of that editor. All XML edits need a 7DTD restart to apply.
+  (name/password/players/difficulty/day length/RAM/**Sandbox code**) plus an
+  **"All settings"** expander backed by `/api/7dtd/config/all`, which reads *every*
+  `<property>` in `sdtdserver.xml` (comment → help text) and writes back changed
+  ones. Telnet/admin keys are locked out of that editor. All XML edits need a 7DTD
+  restart to apply.
+- **Sandbox code** (`SevenDaysConfig.sandboxCode` → `SandboxCode` XML property) is
+  the game's encoded difficulty/loot/XP preset from *New Game → Sandbox Options →
+  Copy Code*. It's the highest-impact setting, so it's surfaced in Quick settings
+  (not just All settings). The format is proprietary/opaque — the app just stores
+  and writes the pasted string.
 - **Server-browser visibility:** `ServerVisibility=2` (public) + `Region` must
   match where players filter (box is in Germany → set `Region=Europe`, not the
   default `NorthAmericaEast`). A fresh/empty server can still take 15-30 min to
