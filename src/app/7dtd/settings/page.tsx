@@ -27,6 +27,7 @@ interface SdtdConfig {
   dayLength: number;
   version: string;
   maxMemory: string;
+  sandboxCode: string;
 }
 
 const DIFFICULTY = [
@@ -47,6 +48,7 @@ export default function SevenDtdSettings() {
     dayLength: 60,
     version: "stable",
     maxMemory: "5G",
+    sandboxCode: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -64,6 +66,7 @@ export default function SevenDtdSettings() {
             dayLength: data.dayLength ?? 60,
             version: data.version ?? "stable",
             maxMemory: data.maxMemory ?? "5G",
+            sandboxCode: data.sandboxCode ?? "",
           });
         }
       })
@@ -174,6 +177,23 @@ export default function SevenDtdSettings() {
                   </SelectContent>
                 </Select>
               </Field>
+
+              {/* Sandbox code spans both columns — it's long and important. */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-sm">Sandbox code</Label>
+                <textarea
+                  value={config.sandboxCode}
+                  onChange={(e) => set("sandboxCode", e.target.value.replace(/[^A-Za-z0-9]/g, ""))}
+                  placeholder="Paste a sandbox code, or leave blank for defaults"
+                  spellCheck={false}
+                  rows={2}
+                  className="w-full resize-y break-all rounded-lg border border-input bg-transparent px-3 py-2 font-mono text-xs outline-none focus:ring-2"
+                  style={{ ["--tw-ring-color" as string]: `color-mix(in oklab, ${tint} 45%, transparent)` }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The game&rsquo;s difficulty/loot/XP preset. In 7DTD: <span className="text-foreground">New Game → Sandbox Options</span>, adjust settings, then <span className="text-foreground">Copy Code</span> and paste it here.
+                </p>
+              </div>
             </div>
 
             <div className="flex items-center gap-3 border-t border-border/50 pt-5">

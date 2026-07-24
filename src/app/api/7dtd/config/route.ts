@@ -17,6 +17,7 @@ const XML_KEYS: Record<string, string> = {
   maxPlayers: "ServerMaxPlayerCount",
   gameDifficulty: "GameDifficulty",
   dayLength: "DayNightLength",
+  sandboxCode: "SandboxCode",
 };
 
 const DEFAULTS = {
@@ -27,6 +28,7 @@ const DEFAULTS = {
   dayLength: 60,
   version: "stable",
   maxMemory: "5G",
+  sandboxCode: "",
 };
 
 export async function GET() {
@@ -56,6 +58,8 @@ export async function PUT(request: NextRequest) {
     dayLength: clampInt(body.dayLength, 10, 120, DEFAULTS.dayLength),
     version: String(body.version ?? DEFAULTS.version),
     maxMemory: String(body.maxMemory ?? DEFAULTS.maxMemory),
+    // Sandbox code is an encoded A-Z preset string; strip anything else.
+    sandboxCode: String(body.sandboxCode ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 4000),
   };
 
   await db.sevenDaysConfig.upsert({

@@ -62,6 +62,9 @@ model SevenDaysConfig {
   dayLength      Int    @default(60)
   version        String @default("stable")
   maxMemory      String @default("5G")
+  // Encoded Sandbox Options preset from the game's new-game screen; written to
+  // the SandboxCode property in sdtdserver.xml.
+  sandboxCode    String @default("")
 }
 
 model Activity {
