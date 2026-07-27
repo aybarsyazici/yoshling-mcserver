@@ -7,6 +7,7 @@ import { Reveal } from "@/components/motion";
 import { PhotoFooter } from "@/components/photo-footer";
 import { SdtdAllSettings } from "@/components/sdtd-all-settings";
 import { SdtdWorldUpload } from "@/components/sdtd-world-upload";
+import { SdtdMaintenance } from "@/components/sdtd-maintenance";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -205,6 +206,8 @@ export default function SevenDtdSettings() {
           </div>
         </Reveal>
       )}
+
+      <SdtdMaintenance tint={tint} />
 
       <SdtdWorldUpload tint={tint} />
 

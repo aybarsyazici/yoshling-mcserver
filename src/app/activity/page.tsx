@@ -117,6 +117,10 @@ function formatAction(action: string, details: Record<string, unknown>): string 
       return `powered off the server${on}`;
     case "server_restart":
       return `restarted the server${on}`;
+    case "server_update":
+      return `updated the server${on}`;
+    case "server_reset":
+      return `reset the world${on}${details.newName ? ` (new game: ${details.newName})` : ""}`;
     case "edit_file":
       return `edited ${details.file ?? details.path}${on}`;
     case "delete_file":

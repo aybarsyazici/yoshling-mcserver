@@ -4,9 +4,30 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { type GameId } from "@/lib/games";
 import { getPlayerList, sendCommand as rconSend } from "@/lib/rcon";
-import { getSdtdPlayers, getSdtdTime, sdtdSaveWorld } from "@/lib/telnet";
+import { getSdtdStatus, sdtdSaveWorld, type SdtdStatus } from "@/lib/telnet";
 
 const execAsync = promisify(exec);
+
+// Cache the 7DTD telnet probe so N browser tabs / rapid polls share ONE telnet
+// session instead of each opening a connection (which spammed the game console
+// and churned the socket). Short TTL keeps the UI feeling live.
+const SDTD_STATUS_TTL = 4000;
+let sdtdStatusCache: { at: number; data: SdtdStatus } | null = null;
+let sdtdStatusInflight: Promise<SdtdStatus> | null = null;
+async function cachedSdtdStatus(): Promise<SdtdStatus> {
+  const now = Date.now();
+  if (sdtdStatusCache && now - sdtdStatusCache.at < SDTD_STATUS_TTL) return sdtdStatusCache.data;
+  if (sdtdStatusInflight) return sdtdStatusInflight; // single-flight: coalesce concurrent probes
+  sdtdStatusInflight = getSdtdStatus(8)
+    .then((data) => {
+      sdtdStatusCache = { at: Date.now(), data };
+      return data;
+    })
+    .finally(() => {
+      sdtdStatusInflight = null;
+    });
+  return sdtdStatusInflight;
+}
 
 export type RunStatus = "online" | "offline" | "starting" | "stopping" | "installing";
 
@@ -136,22 +157,15 @@ const sevenDtdDriver: GameDriver = {
     }
     const startedAt = await containerStartedAt(container);
     // The container can be "running" while SteamCMD is still installing or the
-    // world is still generating; probe telnet to see if the game is truly up.
-    let players = { online: 0, max: 8, players: [] as string[] };
-    let detail: string | undefined;
-    let reachable = false;
-    try {
-      players = await getSdtdPlayers(8);
-      const day = await getSdtdTime();
-      if (day) detail = day;
-      reachable = true;
-    } catch {}
+    // world is still generating; probe telnet (ONE session) to see if the game
+    // is truly up. Cached below so many tabs don't each hammer telnet.
+    const s = await cachedSdtdStatus();
     return {
       game: "7dtd",
-      status: reachable ? "online" : "starting",
+      status: s.reachable ? "online" : "starting",
       uptime: startedAt ? fmtUptime(startedAt) : undefined,
-      players,
-      detail,
+      players: s.players,
+      detail: s.time ?? undefined,
     };
   },
   async start() {
