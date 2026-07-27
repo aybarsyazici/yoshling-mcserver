@@ -166,19 +166,6 @@ export default function SevenDtdSettings() {
                 </div>
               </Field>
 
-              <Field label="Reserved memory">
-                <Select value={config.maxMemory} onValueChange={(v) => v && set("maxMemory", v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="4G">4 GB</SelectItem>
-                    <SelectItem value="5G">5 GB</SelectItem>
-                    <SelectItem value="6G">6 GB</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-
               {/* Sandbox code spans both columns — it's long and important. */}
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-sm">Sandbox code</Label>

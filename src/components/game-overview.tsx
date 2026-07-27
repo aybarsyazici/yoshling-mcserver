@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -57,6 +57,31 @@ export function GameOverview({
 
   const busy = localBusy || serverBusy !== null;
   const busyAction = serverBusy?.action;
+
+  // Live memory usage from docker stats (real), instead of a static "reserved"
+  // number — 7DTD has no configurable memory anyway.
+  const [mem, setMem] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isOnline) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMem(null);
+      return;
+    }
+    let alive = true;
+    const load = () =>
+      fetch(`/api/games/stats?game=${game}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (alive && d?.container?.memory) setMem(d.container.memory as string);
+        })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 6000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [game, isOnline]);
 
   const other = otherGame(game);
   const otherOnline = games?.[other]?.status === "online" || games?.[other]?.status === "starting";
@@ -195,7 +220,7 @@ export function GameOverview({
           value={isOnline ? snap?.detail ?? snap?.uptime ?? "live" : "—"}
           tint={meta.tint}
         />
-        <StatTile icon={Server} label="Reserved RAM" value={`${meta.ramGb} GB`} tint={meta.tint} />
+        <StatTile icon={Server} label="Memory in use" value={isOnline ? mem ?? "…" : "—"} tint={meta.tint} />
       </Stagger>
 
       {children}
