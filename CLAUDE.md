@@ -43,7 +43,12 @@ drop docker-cli; the app cannot control containers without them.
   `docker` commands). `/api/games/status` exposes the in-flight lock as `busy`;
   `useGames` surfaces it so every control UI disables while an op runs.
 - `src/lib/rcon.ts` — Minecraft control (save-all, player list) over RCON.
-- `src/lib/telnet.ts` — 7DTD control (saveworld, listplayers, console) over telnet.
+- `src/lib/telnet.ts` — 7DTD control over telnet. `telnetSession()` runs multiple
+  commands in ONE connection and always sends `exit` to close cleanly (dropping
+  the socket makes 7DTD spam `IOException ... socket has been shut down` in its
+  console). Status probe = one session (`getSdtdStatus`: listplayers+gettime+
+  version), cached ~4s + single-flight in `game-manager` so many tabs don't each
+  hit telnet.
 - `src/lib/server-manager.ts` — thin backward-compat shim delegating to
   `game-manager` for the legacy Minecraft-only `/api/server/*` routes.
 
@@ -161,9 +166,23 @@ docker exec yoshling-web-1 node -e "
   IMPORTANT: recreate with **`docker compose up -d sevendtd`** (NOT `docker
   compose run`, which omits the `sevendtd` network alias and breaks the web
   app's telnet-by-name). Branch switches can break existing saves — back up
-  first. There is NO in-UI version switcher yet (the web container can't run
-  `docker compose` and doesn't mount `/opt/yoshling`; the MC version-switcher in
-  Settings has the same latent limitation).
+  first.
+- **CLIENT↔SERVER BUILD MISMATCH = the #1 "stuck at Starting game" cause.**
+  `latest_experimental` gets frequent Steam patches; players' clients auto-update
+  but the **server only re-downloads on `START_MODE=3`**. If the server build ≠
+  the client build, join fails with a server-side `NullReferenceException` in
+  `ItemValue.SetMetadata`/`PlayerDataFile.ReadNetwork` (reading the client's
+  uploaded character) — client hangs at "Starting game". It is NOT a corrupt
+  save/world/profile (we chased all those). **Fix = update the server to match.**
+- **In-UI server maintenance** (7DTD Settings → "Server maintenance" card):
+  - `/api/7dtd/update` (GET compares installed `appmanifest_294420.acf` buildid
+    vs the branch's latest via `api.steamcmd.net`; POST recreates the container
+    via `docker run` with `START_MODE=3` + the `sevendtd` alias, so the web
+    container can update without compose). Surfaces build + "update available".
+  - `/api/7dtd/reset` (GET previews; POST = guarded reset): backs up the save,
+    stops the server, **wipes `Saves/<world>` but keeps the map** in
+    `GeneratedWorlds`, bumps `GameName` (Fresh2→Fresh3) so no client has a stale
+    cached character, then restarts. This is the sanctioned "start from scratch".
 - **World upload:** `/api/7dtd/world` (ADMIN) accepts a `.zip`, auto-detects
   world-vs-save from marker files (`dtm.raw`/`biomes.png`/`prefabs.xml` → world →
   `GeneratedWorlds/<name>`; `main.ttw`/`players.xml` → save → `Saves/`), extracts
