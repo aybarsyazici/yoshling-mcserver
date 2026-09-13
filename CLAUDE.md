@@ -389,6 +389,29 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
     docker-compose, because those are `Password` / `Public` / `PublicName` in the
     Settings page. Setting any of them in compose would silently overwrite the UI
     on every restart.
+- **Measured memory use (2026-09-13):** with just 2 mods installed, PZ sits at
+  **4.83 GiB RSS** of the box's 7.56 GiB (~1.2 GB free) on `-Xmx4096m`. With 76
+  mods it was OOM-killed. So 8 GB is fine for a small list and has room for maybe
+  a handful more mods; a large map-heavy collection needs a 16 GB box, not heap
+  tuning.
+- **A failed Workshop download crashes the server, and a stale manifest causes
+  it.** PZ's `GameServerWorkshopItems.Install` throws an unhandled
+  `NullPointerException` when an item fails to download, so the whole server
+  exits ~17s after start. Seen when an item had just been updated on Steam: the
+  server had a stale manifest (tried to fetch the old 179 MB version of a 429 MB
+  item) and got `result=2`. Fix: delete
+  `appworkshop_108600.acf` from the workshop volume and re-download with
+  `steamcmd … +workshop_download_item 108600 <id> validate`, which then succeeds.
+- **Mod ids from a Workshop description are a guess; disk is truth.** Community
+  Tile Pack's description implies `UnofficialMappersCommunityTilePack`, but the
+  folder on disk — and the only thing that works — is `CommunityTilePack`. Always
+  reconcile against `content/108600/<id>/mods/*` once an item has downloaded.
+- **One Workshop item can ship many maps.** SecretZ Pandemic ships **20** map
+  folders (16 with cells, 4 cell-less spawn/basement definitions), and every one
+  of them needs a `Map=` entry. Its own maps even overlap each other
+  (`SZ_Checkpoint6`/`SZ_Riverside_Checkpoint_2`,
+  `SZ_Checkpoint5`/`SZ_MuldraughCrossroads_Checkpoint`), so the order within a
+  single mod matters too.
 - **Memory: 4 GB is not enough for a big mod list.** On 2026-09-13 the PZ server
   was **OOM-killed by the kernel** (`OOMKilled=true`) with 76 mods installed and
   `-Xmx4096m`, after GC-thrash symptoms in the log (`SteamnetworkingSockets
