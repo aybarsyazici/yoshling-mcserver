@@ -77,7 +77,10 @@ services:
       RCONPASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
       SELF_MANAGED_MODS: "true"
       MIN_MEMORY: "2048m"
-      MAX_MEMORY: "4096m"
+      # 12 GB on the current 16 GB box. The Settings page computes the ceiling
+      # from host RAM (total - 2.5 GB reserve) and writes this line, so don't
+      # hand-edit it — change it in the UI, which also recreates the container.
+      MAX_MEMORY: "12288m"
       PORT: "16261"
       UDPPORT: "16262"
       MODFOLDERS: "workshop,steam,mods"
