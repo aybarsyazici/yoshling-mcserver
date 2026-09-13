@@ -267,7 +267,9 @@ const sevenDtdDriver: GameDriver = {
 // The container's entrypoint traps SIGTERM, writes `quit` to the server console
 // and blocks until the world is written out. Saving can take well over docker's
 // default 10s grace period, so every stop/restart passes an explicit timeout.
-const PZ_STOP_TIMEOUT = 120;
+// 120s proved too short with a player connected — docker escalated to SIGKILL
+// mid-save. Keep this in step with `stop_grace_period` in docker-compose.yml.
+const PZ_STOP_TIMEOUT = 300;
 
 const zomboidDriver: GameDriver = {
   async status() {

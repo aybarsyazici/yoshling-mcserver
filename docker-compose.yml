@@ -87,8 +87,10 @@ services:
       - pz-workshop:/home/steam/pz-dedicated/steamapps/workshop
     # The entrypoint traps SIGTERM, writes `quit` to the server console and waits
     # for the world to be saved. Docker's default 10s grace period would SIGKILL
-    # it mid-save, so both this and the app's `docker stop -t` allow 2 minutes.
-    stop_grace_period: 120s
+    # it mid-save. 120s turned out to be too short as well: with a player
+    # connected and mods loaded, a save overran it and docker escalated to
+    # SIGKILL (exit 137). 5 minutes.
+    stop_grace_period: 300s
     # Same as 7DTD: never auto-start, the web UI powers it on deliberately so the
     # box never tries to run two worlds at once.
     restart: "no"
