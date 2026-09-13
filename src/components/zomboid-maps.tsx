@@ -37,11 +37,11 @@ interface MapsState {
  * Two map mods that claim the same 300x300 cell can't both win. Cells are read
  * off disk, so a conflict here is a fact rather than a guess.
  *
- * Two different mechanisms decide the winner, so the card has to distinguish
- * them: a standalone map is ordered by `Map=` (first wins), while an **add-on**
- * — one whose map.info declares `lots=<parent>` — rides on its mod instead, and
- * the server strips it out of `Map=` on every start. Absent-from-`Map=` is
- * therefore expected for an add-on and is not reported as a fault.
+ * `Map=` decides, first entry wins — including for add-on maps (a map.info with
+ * `lots=<parent>`), which is why every installed map has to be listed. The list
+ * is regenerated from the installed mods on every server start, so this card
+ * shows the result and lets you reorder it; a map missing after a restart is a
+ * real fault, not the normal state.
  */
 export function ZomboidMaps({ tint }: { tint: string }) {
   const [state, setState] = useState<MapsState | null>(null);
@@ -277,13 +277,15 @@ export function ZomboidMaps({ tint }: { tint: string }) {
       {addOns.length > 0 && (
         <details className="rounded-xl bg-background/50 p-3 ring-1 ring-foreground/10">
           <summary className="cursor-pointer text-xs text-muted-foreground">
-            {addOns.length} add-on {addOns.length === 1 ? "map" : "maps"} load with their mod, not
-            from this list
+            {addOns.length} installed {addOns.length === 1 ? "map is" : "maps are"} missing from the
+            load order
           </summary>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Each of these declares a parent map in its <span className="font-mono">map.info</span>,
-            so Project Zomboid drops it from the load order on every start — that&apos;s expected,
-            not a fault. They&apos;re active as long as the mod that ships them is enabled.
+            The server rebuilds this list from the installed mods every time it starts, so a map
+            should appear on its own. If one is still missing after a restart, its folder sits
+            somewhere the scanner doesn&apos;t reach — or it&apos;s named in{" "}
+            <span className="font-mono">MAP_EXCLUDE</span>, which is how the retired{" "}
+            <span className="font-mono">SZ_Checkpoint6</span> is kept out.
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {addOns.map((m) => (
