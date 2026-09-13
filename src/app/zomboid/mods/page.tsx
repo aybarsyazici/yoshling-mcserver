@@ -2,6 +2,7 @@
 
 import { SectionHeading } from "@/components/ui-bits";
 import { ZomboidMods } from "@/components/zomboid-mods";
+import { ZomboidMaps } from "@/components/zomboid-maps";
 import { GAMES } from "@/lib/games";
 
 export default function ZomboidModsPage() {
@@ -15,6 +16,8 @@ export default function ZomboidModsPage() {
         tint={tint}
       />
       <ZomboidMods tint={tint} />
+
+      <ZomboidMaps tint={tint} />
     </div>
   );
 }
