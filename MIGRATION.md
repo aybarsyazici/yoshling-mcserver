@@ -1,8 +1,21 @@
 # Migration runbook — Hetzner → netcup
 
-**Status: pending.** The netcup order (VPS Lite 3 G12S, 6 vCore / 16 GB, €12.61/mo)
-was placed 2026-09-13 and is in netcup's manual first-order review. Until it
-lands we are on Hetzner, rescaled to **16 GB** (was 8 GB) as a stopgap.
+**Status: DONE, 2026-09-13.** Live on netcup `89.58.50.155` (8 vCPU / 16 GB /
+314 GB, Debian 13). The old Hetzner box is still running as a rollback and should
+be deleted only once each game has been played on netcup.
+
+What tripped us up, for next time:
+- The provisioned SSH key file was missing its **trailing newline**, so OpenSSH
+  rejected it as "invalid format". `printf '\n' >> key` fixed it; no password needed.
+- **Seed the Workshop mods with SteamCMD before starting PZ** (see CLAUDE.md).
+  Letting PZ download 75 items crashed it twice.
+- Only ~1.3 GB actually moved, in ~13 s at 109 MB/s box-to-box. 7DTD's 16.8 GB of
+  game files and PZ's 3.8 GB of mods were re-fetched on the new box as planned.
+- The Cloudflare Origin cert moved as-is (wildcard, valid to 2041) and
+  `direct.yoshling.xyz` re-issued from Let's Encrypt automatically.
+- To prove which origin Cloudflare was using, add a temporary
+  `header X-Origin-Box "..."` to the new box's Caddyfile and curl the public URL —
+  DNS can't tell you, because the root is proxied.
 
 Why we're moving: Hetzner wanted ~€40/mo for 16 GB; netcup is €12.61 for the
 same RAM. The workload is **RAM-bound, not CPU-bound** — Project Zomboid sits at

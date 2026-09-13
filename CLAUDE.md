@@ -211,8 +211,11 @@ an ESM-only dep, so on Node 20.12 every `prisma` command dies with
 
 ## Production / deployment
 
-Host: Hetzner `178.105.163.254`, 4 vCPU / 8 GB RAM / 150 GB disk. SSH as `root`
-with `~/.ssh/mc_yoshling`. Deploy dir: `/opt/yoshling` (a git checkout tracking
+Host: **netcup `89.58.50.155`**, 8 vCPU / 16 GB RAM / 314 GB disk, Debian 13,
+8 GB swap. SSH as `root` with `~/.ssh/mc_yoshling_netcup`. Migrated off Hetzner
+2026-09-13 (€12.61 vs €40/mo for 16 GB); see MIGRATION.md. The old Hetzner box
+(`178.105.163.254`, key `~/.ssh/mc_yoshling`) is kept as a rollback until each
+game has been played on netcup. Deploy dir: `/opt/yoshling` (a git checkout tracking
 `main`). Public domain `https://yoshling.xyz` is proxied through **Cloudflare**;
 **Caddy** is the origin reverse proxy (`/etc/caddy/Caddyfile`) forwarding to
 `localhost:3000`.
@@ -394,6 +397,12 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   mods it was OOM-killed. So 8 GB is fine for a small list and has room for maybe
   a handful more mods; a large map-heavy collection needs a 16 GB box, not heap
   tuning.
+- **Seed a big mod list with SteamCMD, don't let PZ download it.** PZ's own
+  downloader fails intermittently on a long list (`result=10` Busy, `result=2`
+  Fail) and each failure kills the whole server via the NPE below — so a 75-item
+  list becomes a crash loop. `/root/seed-mods.sh` on the box loops SteamCMD over
+  every id in `WorkshopItems` with `validate` and one retry: 75/75, zero failures,
+  ~15 min for 3.8 GB. Then PZ starts cleanly because nothing needs downloading.
 - **A failed Workshop download crashes the server, and a stale manifest causes
   it.** PZ's `GameServerWorkshopItems.Install` throws an unhandled
   `NullPointerException` when an item fails to download, so the whole server
@@ -406,6 +415,15 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   Tile Pack's description implies `UnofficialMappersCommunityTilePack`, but the
   folder on disk — and the only thing that works — is `CommunityTilePack`. Always
   reconcile against `content/108600/<id>/mods/*` once an item has downloaded.
+- **PZ prunes `Map=` on load and there's no fix for it.** It rewrites the ini and
+  cuts `Map=` down to the base map plus spawn-point maps (`AZSpawn;Muldraugh, KY`)
+  even when every listed map folder exists and every owning mod loads. Mod maps
+  are loaded through the mod system instead — the log shows
+  `mod "X" overrides media/maps/…` for maps that replace base files. Setting the
+  full list back and restarting just gets it pruned again. **The Maps card's
+  "installed but not in the load order" warning is therefore misleading on B42**
+  and should be softened; the reliable check is whether the owning mod appears in
+  a `loading <id>` line.
 - **One Workshop item can ship many maps.** SecretZ Pandemic ships **20** map
   folders (16 with cells, 4 cell-less spawn/basement definitions), and every one
   of them needs a `Map=` entry. Its own maps even overlap each other
