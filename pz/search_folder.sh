@@ -38,7 +38,7 @@ search_folder() {
     local ex
     while IFS= read -r ex; do
         [ -n "$ex" ] && excluded["$ex"]=1
-    done < <(printf '%s' "$MAP_EXCLUDE" | tr ';' '\n')
+    done < <(printf '%s\n' "$MAP_EXCLUDE" | tr ';' '\n')
 
     # name -> cell count, and name -> source dir. Highest version folder wins,
     # which is why the loop walks paths in sorted order.
