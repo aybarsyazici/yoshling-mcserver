@@ -474,8 +474,9 @@ connect **directly to the box IP `178.105.163.254`**:
   `PhotoStrip`), never the landing, never blocking controls. `caption` is
   optional — most footers show the photo with no text. Only two captions are
   kept: MC mods ("approves of your mod list") and MC whitelist ("I decide who
-  gets in!"); 7DTD settings shows "I cant let you get close!". PZ pages use
-  `simba.jpg` / `cat.jpg` / `the_judge.jpg`, all captionless.
+  gets in!"); 7DTD settings shows "I cant let you get close!". **The Project
+  Zomboid pages have no photos at all** — deliberate, so don't "fix" the
+  inconsistency by adding one.
 - Easter egg: `MikuEasterEgg` (mounted in the root layout) — resting the pointer
   in the bottom-right corner for ~1.1s reveals British Miku (image only, no
   caption). Image at `public/british-miku.webp`.

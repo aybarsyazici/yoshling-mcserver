@@ -4,7 +4,6 @@ import { SectionHeading } from "@/components/ui-bits";
 import { ZomboidQuickSettings } from "@/components/zomboid-quick-settings";
 import { ZomboidAllSettings } from "@/components/zomboid-all-settings";
 import { ZomboidConfigImport } from "@/components/zomboid-config-import";
-import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
 
 export default function ZomboidSettingsPage() {
@@ -35,8 +34,6 @@ export default function ZomboidSettingsPage() {
           in the file browser on the Server page.
         </p>
       </div>
-
-      <PhotoFooter src="/cat.jpg" />
     </div>
   );
 }

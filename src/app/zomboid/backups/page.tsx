@@ -2,7 +2,6 @@
 
 import { SectionHeading } from "@/components/ui-bits";
 import { GameBackups } from "@/components/game-backups";
-import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
 
 export default function ZomboidBackupsPage() {
@@ -16,7 +15,6 @@ export default function ZomboidBackupsPage() {
         tint={tint}
       />
       <GameBackups game="zomboid" />
-      <PhotoFooter src="/simba.jpg" />
     </div>
   );
 }

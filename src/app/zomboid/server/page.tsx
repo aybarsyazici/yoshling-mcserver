@@ -7,7 +7,6 @@ import { GameControls } from "@/components/game-controls";
 import { ServerMonitor } from "@/components/server-monitor";
 import { GameConsole } from "@/components/game-console";
 import { FileBrowser } from "@/components/file-browser";
-import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
 
 const TABS = [
@@ -41,8 +40,6 @@ export default function ZomboidServerPage() {
           <FileBrowser endpoint={meta.api.files} roots={meta.fileRoots} tint={tint} />
         )}
       </div>
-
-      <PhotoFooter src="/the_judge.jpg" />
     </div>
   );
 }

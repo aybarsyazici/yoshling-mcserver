@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
 import { GameOverview } from "@/components/game-overview";
-import { PhotoStrip } from "@/components/photo-footer";
 
 export default async function ZomboidOverview() {
   const recentActivity = await db.activity
@@ -23,8 +22,6 @@ export default async function ZomboidOverview() {
           createdAt: a.createdAt.toISOString(),
         })
       )}
-    >
-      <PhotoStrip photos={[{ src: "/simba.jpg" }, { src: "/cat.jpg" }]} />
-    </GameOverview>
+    />
   );
 }

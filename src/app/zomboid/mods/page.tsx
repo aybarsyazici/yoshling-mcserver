@@ -2,7 +2,6 @@
 
 import { SectionHeading } from "@/components/ui-bits";
 import { ZomboidMods } from "@/components/zomboid-mods";
-import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
 
 export default function ZomboidModsPage() {
@@ -16,7 +15,6 @@ export default function ZomboidModsPage() {
         tint={tint}
       />
       <ZomboidMods tint={tint} />
-      <PhotoFooter src="/the_judge.jpg" />
     </div>
   );
 }
