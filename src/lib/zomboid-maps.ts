@@ -1,4 +1,4 @@
-import { readdir } from "fs/promises";
+import { readdir, readFile } from "fs/promises";
 import path from "path";
 import { PZ_APP_ID, PZ_WORKSHOP_DIR, readIniProperties, splitList, updateIni } from "@/lib/zomboid";
 
@@ -18,6 +18,19 @@ import { PZ_APP_ID, PZ_WORKSHOP_DIR, readIniProperties, splitList, updateIni } f
  * Caveat: the base game's own maps (Muldraugh, Riverside, Louisville…) live in
  * the game install, which isn't mounted here, so overlaps with vanilla can't be
  * detected — only mod-vs-mod. Vanilla should be last in `Map=` regardless.
+ *
+ * ## `Map=` does not list add-on maps, and that's not a problem
+ *
+ * A `map.info` may declare `lots=<parent map>`, which means "my cells sit on top
+ * of that map" — a checkpoint, a bunker, a mall dropped into Muldraugh. Build 42
+ * loads those through the owning **mod**, not through `Map=`, and on startup it
+ * rewrites `Map=` to drop every add-on, keeping only parentless maps. Our own
+ * server went from 23 entries to `AZSpawn;AZSpawn;Muldraugh, KY` on one restart,
+ * and putting the list back just got it pruned again.
+ *
+ * So "installed but absent from `Map=`" is normal for an add-on and must not be
+ * reported as broken — only a **parentless** map has to be listed. What still
+ * matters for add-ons is cell overlap: two of them on the same cell still fight.
  */
 
 /** Vanilla map names, so they're not reported as "missing from disk". */
@@ -42,9 +55,32 @@ export interface PzMap {
   name: string;
   /** Claimed cells as "x_y". */
   cells: string[];
+  /**
+   * `lots=` from map.info: the map this one is laid on top of. Set = an add-on
+   * that loads with its mod and is deliberately absent from `Map=`.
+   */
+  parent?: string;
+  /** `title=` from map.info, nicer than the folder name. */
+  title?: string;
 }
 
 const CELL_RE = /^(\d+)_(\d+)\.lotheader$/;
+
+/** `lots=` and `title=` out of a map's map.info. Missing file → no metadata. */
+async function readMapInfo(dir: string): Promise<{ parent?: string; title?: string }> {
+  let raw: string;
+  try {
+    raw = await readFile(path.join(dir, "map.info"), "utf8");
+  } catch {
+    return {};
+  }
+  const pick = (key: string) =>
+    raw
+      .split(/\r?\n/)
+      .map((l) => new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`, "i").exec(l))
+      .find((m): m is RegExpExecArray => m !== null && m[1] !== "")?.[1];
+  return { parent: pick("lots"), title: pick("title") };
+}
 
 /** Every `media/maps` directory inside one workshop item. */
 async function findMapDirs(root: string, depth = 0): Promise<string[]> {
@@ -122,16 +158,23 @@ export async function scanMaps(): Promise<PzMap[]> {
         // failure this card exists to surface.
         if (files.length === 0) continue;
 
+        const info = await readMapInfo(path.join(mapsDir, name));
         const key = `${workshopId}::${name}`;
         const existing = merged.get(key);
         if (existing) {
           existing.cells = Array.from(new Set([...existing.cells, ...cells]));
+          // Copies under common/ and 42.x/ can differ; keep whichever declares
+          // the metadata rather than letting an empty copy blank it out.
+          existing.parent ??= info.parent;
+          existing.title ??= info.title;
         } else {
           merged.set(key, {
             workshopId,
             modId: modIdFromPath(mapsDir),
             name,
             cells: Array.from(new Set(cells)),
+            parent: info.parent,
+            title: info.title,
           });
         }
       }

@@ -42,14 +42,26 @@ export async function GET() {
       workshopId: m.workshopId,
       modId: m.modId,
       title: titleById.get(m.workshopId) ?? "",
+      mapTitle: m.title ?? "",
+      /** `lots=` — the map this sits on top of. Set = an add-on. */
+      parent: m.parent ?? "",
       cellCount: m.cells.length,
-      /** Position in `Map=`; -1 means the server won't load it at all. */
+      /** Position in `Map=`; -1 means absent, which is normal for an add-on. */
       order: order.indexOf(m.name),
     })),
-    order,
+    // `Map=` as PZ left it, minus repeats — it writes duplicates of its own
+    // accord (we saw `AZSpawn;AZSpawn;Muldraugh, KY`) and a repeat can't mean
+    // anything, since the first occurrence already won.
+    order: Array.from(new Set(order)),
     conflicts,
-    /** Installed but absent from `Map=` — these do nothing in game. */
-    unlisted: maps.map((m) => m.name).filter((n) => !order.includes(n)),
+    /**
+     * Only maps that actually have to be in `Map=` and aren't: parentless ones
+     * with cells. An add-on (`lots=` set) loads with its mod and is stripped
+     * from `Map=` by the server on every start, so it is NOT a problem.
+     */
+    unlisted: maps
+      .filter((m) => !m.parent && m.cells.length > 0 && !order.includes(m.name))
+      .map((m) => m.name),
     /** In `Map=` but not on disk and not a stock map — probably a typo. */
     missing: order.filter((n) => !installed.has(n) && !STOCK_MAPS.includes(n)),
     stock: order.filter((n) => STOCK_MAPS.includes(n)),

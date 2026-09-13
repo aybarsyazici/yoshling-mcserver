@@ -415,15 +415,31 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   Tile Pack's description implies `UnofficialMappersCommunityTilePack`, but the
   folder on disk — and the only thing that works — is `CommunityTilePack`. Always
   reconcile against `content/108600/<id>/mods/*` once an item has downloaded.
-- **PZ prunes `Map=` on load and there's no fix for it.** It rewrites the ini and
-  cuts `Map=` down to the base map plus spawn-point maps (`AZSpawn;Muldraugh, KY`)
-  even when every listed map folder exists and every owning mod loads. Mod maps
-  are loaded through the mod system instead — the log shows
-  `mod "X" overrides media/maps/…` for maps that replace base files. Setting the
-  full list back and restarting just gets it pruned again. **The Maps card's
-  "installed but not in the load order" warning is therefore misleading on B42**
-  and should be softened; the reliable check is whether the owning mod appears in
-  a `loading <id>` line.
+- **`Map=` only lists standalone maps; add-ons are stripped and that's correct.**
+  A `map.info` may declare `lots=<parent>`, meaning "my cells sit on top of that
+  map" — a checkpoint or bunker dropped into Muldraugh. B42 loads those with their
+  **mod**, not through `Map=`, and on start it rewrites the ini to drop every
+  add-on: ours went 23 entries → `AZSpawn;AZSpawn;Muldraugh, KY` (PZ writes the
+  duplicate itself). The survivors were exactly the parentless ones. So
+  absent-from-`Map=` is **expected** for an add-on, and the Maps card no longer
+  reports it as a fault — it only warns about a *parentless* map with cells that
+  isn't listed. `scanMaps()` reads `lots=`/`title=` for this.
+- **The `mod "X" overrides media/maps/…` log lines say nothing about whether a map
+  is active** — they only fire when two paths shadow each other. `SZ_Checkpoint6`
+  logged 16 cell registrations because its 4 cells ship in 4 places. Don't use
+  them to prove a map loaded; the log has no line that does.
+- **A mod.info can mark itself deprecated, and that's how you find dead
+  duplicates.** `SZ_Checkpoint6` is `name=…[42.20 DEPRECATED]`, `versionMax=42.20`,
+  with map title `Checkpoint 6 (ONLY 42.19)`. On 42.20 its content moved into
+  `SZ_Riverside_Checkpoint_2`, which is why the two claim the same 4 cells. Grep
+  mod.info `name=` for DEPRECATED before chasing a cell overlap.
+- **Mod XML that uses `x_extends` breaks on Linux.** PZ lowercases the *whole*
+  resolved path when following `x_extends` and hands it to `FileInputStream`, so
+  `RackLeverAction_HB.xml`'s `x_extends="LoadLeverAction_HB.xml"` is looked up as
+  `…/gunsofmarz/42.16/media/animsets/…/loadleveraction_hb.xml` and fails on ext4
+  even though the file is right there. Harmless log spam (animation is
+  client-side, and clients are on case-insensitive filesystems); silence it with
+  lowercase symlinks for the dir and file names if it ever matters.
 - **One Workshop item can ship many maps.** SecretZ Pandemic ships **20** map
   folders (16 with cells, 4 cell-less spawn/basement definitions), and every one
   of them needs a `Map=` entry. Its own maps even overlap each other
