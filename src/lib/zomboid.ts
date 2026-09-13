@@ -234,14 +234,41 @@ export async function writeModState(state: { workshopIds: string[]; modIds: stri
 }
 
 /**
- * Mod ids actually present on disk for a Workshop item. The server unpacks
- * items to `content/<appid>/<workshopId>/mods/<modId>/…` (B42 adds a version
- * folder below that, but the mod id is still the directory name under `mods`).
- * Empty until the server has downloaded the item at least once.
+ * Mod ids actually present on disk for a Workshop item.
+ *
+ * **The mod id is the `id=` field inside `mod.info` — NOT the folder name.** They
+ * often differ, and assuming the folder name silently breaks the load list:
+ * folder `CommunityTilePack` declares `id=UnofficialMappersCommunityTilePack`,
+ * `Hot_Brass_Visible_Casing_Ejection_Framework` declares `id=HBVCEFb42`, and
+ * `DragBodiesFaster 50%` declares `id=DBFaster50`. PZ resolves `Mods=` against
+ * the declared id and logs `required mod "X" not found` for anything else.
+ *
+ * The server unpacks items to `content/<appid>/<workshopId>/mods/<folder>/…`,
+ * with B42 adding a version folder (`common/`, `42/`) below that. Empty until the
+ * server has downloaded the item at least once.
  */
 export async function installedModIds(workshopId: string): Promise<string[]> {
   const root = path.join(PZ_WORKSHOP_DIR, "content", PZ_APP_ID, workshopId);
   const found = new Set<string>();
+
+  /** The declared id, falling back to the folder name when there's no mod.info. */
+  async function idOf(modDir: string, folderName: string): Promise<string> {
+    // mod.info sits either directly in the mod folder (B41) or one level down
+    // under the version folder (B42: common/, 42/).
+    const candidates = [path.join(modDir, "mod.info")];
+    try {
+      for (const sub of await readdir(modDir, { withFileTypes: true })) {
+        if (sub.isDirectory()) candidates.push(path.join(modDir, sub.name, "mod.info"));
+      }
+    } catch {}
+    for (const file of candidates) {
+      try {
+        const declared = /^\s*id\s*=\s*(.+?)\s*$/im.exec(await readFile(file, "utf-8"))?.[1];
+        if (declared) return declared;
+      } catch {}
+    }
+    return folderName;
+  }
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 3) return;
@@ -255,7 +282,8 @@ export async function installedModIds(workshopId: string): Promise<string[]> {
       if (!entry.isDirectory()) continue;
       if (entry.name === "mods") {
         for (const mod of await readdir(path.join(dir, "mods"), { withFileTypes: true })) {
-          if (mod.isDirectory()) found.add(mod.name);
+          if (!mod.isDirectory()) continue;
+          found.add(await idOf(path.join(dir, "mods", mod.name), mod.name));
         }
         continue;
       }
