@@ -71,12 +71,16 @@ drop docker-cli; the app cannot control containers without them.
   per world, only the running world's branch lit), one card per world the viewer
   can see, hand-off confirm, RAM budget. A viewer with no worlds gets a "No
   worlds yet" screen instead.
-- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings, whitelist
+- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings
 - `/7dtd/*` — 7DTD overview, server (controls/monitor/console/files), backups, settings
 - `/zomboid/*` — PZ overview, mods, server (controls/monitor/console/files), backups, settings
 - Backups are their own sidebar page per game (`/{game}/backups`), not a server tab.
-- `/users` (Crew), `/activity` — shared; both wear the accent of the first world
-  the viewer can see, and the activity log hides entries for worlds they can't.
+- `/users` (Crew), `/whitelist`, `/activity` — shared, and they wear the accent of
+  the first world the viewer can see. `/whitelist` is the **app sign-in** list
+  (`ALLOWED_DISCORD_USERS` / `whitelist.json`), which was never Minecraft-specific;
+  `/minecraft/whitelist` 301s to it. Minecraft's *in-game* whitelist and ops live
+  on the MC settings page (`/api/server/{mc-whitelist,ops}`). The activity log
+  hides entries for worlds the viewer can't see.
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
   `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
@@ -484,12 +488,12 @@ connect **directly to the box IP `178.105.163.254`**:
   ("reactor", "horde", "hand over", "outlast", etc.). Say what a control does:
   "Start / stop the server", "Switch servers?".
 - The silly vacation photos go in page **footers** only (`PhotoFooter` /
-  `PhotoStrip`), never the landing, never blocking controls. `caption` is
-  optional — most footers show the photo with no text. Only two captions are
-  kept: MC mods ("approves of your mod list") and MC whitelist ("I decide who
-  gets in!"); 7DTD settings shows "I cant let you get close!". **The Project
-  Zomboid pages have no photos at all** — deliberate, so don't "fix" the
-  inconsistency by adding one.
+  `PhotoStrip`), never the landing, never blocking controls. They are now only on
+  the **Minecraft and 7 Days to Die** pages: MC mods keeps its caption
+  ("approves of your mod list") and 7DTD settings shows "I cant let you get
+  close!". **The Project Zomboid pages and the shared pages (Crew, Whitelist,
+  Activity) have none** — deliberate, so don't "fix" the inconsistency by adding
+  one back.
 - Easter egg: `MikuEasterEgg` (mounted in the root layout) — resting the pointer
   in the bottom-right corner for ~1.1s reveals British Miku (image only, no
   caption). Image at `public/british-miku.webp`.

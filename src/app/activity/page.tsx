@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { SectionHeading } from "@/components/ui-bits";
-import { PhotoFooter } from "@/components/photo-footer";
 import { PowerGlyph } from "@/components/glyphs";
 import { GAMES, isGameId } from "@/lib/games";
 import { Puzzle, FileEdit, Trash2, Users, Activity as ActivityIcon } from "lucide-react";
@@ -90,7 +89,6 @@ export default function ActivityPage() {
         )}
       </div>
 
-      <PhotoFooter src="/happy.jpg" />
     </div>
   );
 }

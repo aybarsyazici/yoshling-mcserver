@@ -39,12 +39,13 @@ function navFor(game: GameId): NavItem[] {
     { name: "Server", href: `${base}/server`, icon: Server },
     { name: "Backups", href: `${base}/backups`, icon: Archive },
     { name: "Settings", href: `${base}/settings`, icon: Settings },
-    ...(meta.hasWhitelist ? [{ name: "Whitelist", href: `${base}/whitelist`, icon: Shield }] : []),
   ];
 }
 
+// Not per-game: who may sign in at all, who may do what, and what happened.
 const SHARED: NavItem[] = [
   { name: "Users", href: "/users", icon: Users },
+  { name: "Whitelist", href: "/whitelist", icon: Shield },
   { name: "Activity", href: "/activity", icon: Clock },
 ];
 

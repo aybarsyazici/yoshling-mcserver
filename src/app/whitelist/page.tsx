@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { SectionHeading } from "@/components/ui-bits";
-import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
 
 export default function WhitelistPage() {
@@ -61,7 +60,7 @@ export default function WhitelistPage() {
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: GAMES.minecraft.tint }}>
       <SectionHeading
-        eyebrow="Minecraft · Access"
+        eyebrow="Shared · Access"
         title="App whitelist"
         sub="Control which Discord users can sign into this control panel."
         tint={GAMES.minecraft.tint}
@@ -119,7 +118,6 @@ export default function WhitelistPage() {
         </CardContent>
       </Card>
 
-      <PhotoFooter src="/the_judge.jpg" caption="I decide who gets in!" />
     </div>
   );
 }

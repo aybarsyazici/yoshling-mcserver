@@ -2,6 +2,13 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  async redirects() {
+    return [
+      // The app sign-in whitelist was never Minecraft-specific; it lives with the
+      // other shared pages now.
+      { source: "/minecraft/whitelist", destination: "/whitelist", permanent: true },
+    ];
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "cdn.modrinth.com" },

@@ -3,7 +3,6 @@ import { db } from "@/lib/db";
 import { gameAccess, hasPermission } from "@/lib/permissions";
 import { SectionHeading } from "@/components/ui-bits";
 import { CrewList, type CrewMember } from "@/components/crew-list";
-import { PhotoFooter } from "@/components/photo-footer";
 
 export default async function UsersPage() {
   const session = await auth();
@@ -48,7 +47,6 @@ export default async function UsersPage() {
 
       <CrewList members={members} canManage={canManage} selfId={session?.user?.id ?? ""} />
 
-      <PhotoFooter src="/pub-table.jpg" />
     </div>
   );
 }

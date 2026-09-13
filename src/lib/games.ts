@@ -36,8 +36,6 @@ export interface GameMeta {
   fileRoots?: GameFileRoot[];
   /** Whether this world gets a Mods page in the sidebar */
   hasMods: boolean;
-  /** Whether this world gets a Whitelist page in the sidebar */
-  hasWhitelist: boolean;
 }
 
 export const GAMES: Record<GameId, GameMeta> = {
@@ -59,7 +57,6 @@ export const GAMES: Record<GameId, GameMeta> = {
       files: "/api/server/files",
     },
     hasMods: true,
-    hasWhitelist: true,
   },
   "7dtd": {
     id: "7dtd",
@@ -85,7 +82,6 @@ export const GAMES: Record<GameId, GameMeta> = {
       { key: "saves", label: "Saves" },
     ],
     hasMods: false,
-    hasWhitelist: false,
   },
   zomboid: {
     id: "zomboid",
@@ -110,7 +106,6 @@ export const GAMES: Record<GameId, GameMeta> = {
       { key: "all", label: "All data" },
     ],
     hasMods: true,
-    hasWhitelist: false,
   },
 };
 
