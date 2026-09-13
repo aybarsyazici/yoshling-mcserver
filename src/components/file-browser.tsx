@@ -140,8 +140,11 @@ export function FileBrowser({
   }
 
   const breadcrumbs = currentPath.split("/").filter(Boolean);
+  // `lua` matters: Project Zomboid keeps its sandbox preset and spawn regions in
+  // <name>_SandboxVars.lua and <name>_spawnregions.lua, and those are the only
+  // place to change loot, XP or zombie settings — there is no .ini equivalent.
   const isEditable = viewingFile
-    ? /\.(properties|json|yml|yaml|toml|txt|cfg|conf|ini|log|csv|md|xml)$/i.test(viewingFile)
+    ? /\.(properties|json|yml|yaml|toml|txt|cfg|conf|ini|log|csv|md|xml|lua)$/i.test(viewingFile)
     : false;
 
   return (
