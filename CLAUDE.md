@@ -415,19 +415,33 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   Tile Pack's description implies `UnofficialMappersCommunityTilePack`, but the
   folder on disk — and the only thing that works — is `CommunityTilePack`. Always
   reconcile against `content/108600/<id>/mods/*` once an item has downloaded.
-- **`Map=` only lists standalone maps; add-ons are stripped and that's correct.**
-  A `map.info` may declare `lots=<parent>`, meaning "my cells sit on top of that
-  map" — a checkpoint or bunker dropped into Muldraugh. B42 loads those with their
-  **mod**, not through `Map=`, and on start it rewrites the ini to drop every
-  add-on: ours went 23 entries → `AZSpawn;AZSpawn;Muldraugh, KY` (PZ writes the
-  duplicate itself). The survivors were exactly the parentless ones. So
-  absent-from-`Map=` is **expected** for an add-on, and the Maps card no longer
-  reports it as a fault — it only warns about a *parentless* map with cells that
-  isn't listed. `scanMaps()` reads `lots=`/`title=` for this.
-- **The `mod "X" overrides media/maps/…` log lines say nothing about whether a map
-  is active** — they only fire when two paths shadow each other. `SZ_Checkpoint6`
-  logged 16 cell registrations because its 4 cells ship in 4 places. Don't use
-  them to prove a map loaded; the log has no line that does.
+- **The IMAGE overwrites `Map=` on every boot — this was the "maps do nothing" bug.**
+  `/server/scripts/entry.sh` line ~234 runs
+  `sed -i "s/Map=.*/Map=${map_list}Muldraugh, KY/"`, where `map_list` comes from
+  the image's `search_folder.sh`. That scanner only looked at
+  `<workshopId>/mods/<mod>/media/maps` — **one fixed level** — but B42 mods keep
+  content under a version folder (`Secretz42/42.20/media/maps`), so it found none
+  of them and produced `AZSpawn;AZSpawn;`. Any correct hand-written `Map=` was
+  destroyed ~3 seconds into every start. **`SELF_MANAGED_MODS` does not protect
+  `Map=`** — it only guards `Mods` and `WorkshopItems`.
+  Fixed by `pz/search_folder.sh` + `pz/Dockerfile` (a derived image, because
+  entry.sh runs `sed -i` on the script itself so a bind mount fails): finds
+  `media/maps` at any depth, dedupes, orders by cell count so a 22-cell map
+  outranks a 4-cell checkpoint, and honours `MAP_EXCLUDE` from compose.
+  **Measured before/after:** distinct maps registering cells went from **2 → 16**,
+  and `Map=` from 3 entries to 22. If maps ever stop working, check
+  `docker logs yoshling-pz | grep "INFO: Added maps"` first.
+  I previously recorded the opposite in this file — that PZ itself prunes add-on
+  maps and that this was correct behaviour. That was wrong; the pruning was the
+  image's sed, and the maps genuinely were not loading.
+- **`MAP_EXCLUDE`** keeps a map out of the generated list. `SZ_Checkpoint6` is in
+  it: retired on 42.20 (content moved into `SZ_Riverside_Checkpoint_2`, map title
+  says `ONLY 42.19`, its standalone mod is tagged `DEPRECATED`) yet still shipped
+  inside the current `Secretz42`, so both claimed cells 22_22/22_23/23_22/23_23.
+  It is also removed from `Mods=`.
+- **The `mod "X" overrides media/maps/…/<x>_<y>.lotheader` lines ARE the signal
+  that a map's cells registered.** Counting distinct map names across them is how
+  the 2 → 16 fix above was verified.
 - **A mod.info can mark itself deprecated, and that's how you find dead
   duplicates.** `SZ_Checkpoint6` is `name=…[42.20 DEPRECATED]`, `versionMax=42.20`,
   with map title `Checkpoint 6 (ONLY 42.19)`. On 42.20 its content moved into
