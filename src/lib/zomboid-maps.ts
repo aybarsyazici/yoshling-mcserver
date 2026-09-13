@@ -115,7 +115,12 @@ export async function scanMaps(): Promise<PzMap[]> {
           .map((f) => CELL_RE.exec(f))
           .filter((m): m is RegExpExecArray => m !== null)
           .map((m) => `${m[1]}_${m[2]}`);
-        if (cells.length === 0) continue;
+        // Keep maps with no cells. A mod's spawn-point and basement definitions
+        // (SZ_ExtraSpawnPoints, ArmyGroup_Spawn…) are map folders that claim no
+        // ground, so they can never conflict — but they still have to be listed
+        // in `Map=` or they do nothing, which is exactly the sort of silent
+        // failure this card exists to surface.
+        if (files.length === 0) continue;
 
         const key = `${workshopId}::${name}`;
         const existing = merged.get(key);

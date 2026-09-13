@@ -181,7 +181,11 @@ export function ZomboidMaps({ tint }: { tint: string }) {
                       ? "not installed — remove it or install the mod"
                       : isStock
                       ? "base game"
-                      : `${m?.cellCount ?? 0} cells${m?.title ? ` · ${m.title}` : ""}`}
+                      : `${
+                          m?.cellCount
+                            ? `${m.cellCount} cells`
+                            : "no cells — spawn points or basements"
+                        }${m?.title ? ` · ${m.title}` : ""}`}
                   </p>
                 </div>
                 <div className="flex flex-shrink-0 gap-1">
