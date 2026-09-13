@@ -23,13 +23,13 @@ const spaceGrotesk = Space_Grotesk({
 
 export const metadata: Metadata = {
   title: "Yoshling — Game Server Control",
-  description: "One box, two worlds. Command your Minecraft and 7 Days to Die servers.",
+  description: "One box, three worlds. Run your Minecraft, 7 Days to Die and Project Zomboid servers.",
   icons: {
     icon: "/fat-yoshi.png",
   },
   openGraph: {
     title: "Yoshling — Game Server Control",
-    description: "One box, two worlds. Command your Minecraft and 7 Days to Die servers.",
+    description: "One box, three worlds. Run your Minecraft, 7 Days to Die and Project Zomboid servers.",
     images: ["/fat-yoshi.png"],
   },
 };

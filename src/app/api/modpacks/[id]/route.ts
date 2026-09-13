@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { db } from "@/lib/db";
 
 export async function GET(
@@ -10,6 +11,8 @@ export async function GET(
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const { id } = await params;
 
@@ -33,6 +36,8 @@ export async function PUT(
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const { id } = await params;
   const { name, description } = await request.json();
@@ -57,6 +62,8 @@ export async function DELETE(
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const { id } = await params;
   await db.modpack.delete({ where: { id } });

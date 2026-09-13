@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { readFile, writeFile, rm, readdir } from "fs/promises";
@@ -25,6 +26,8 @@ function setProp(xml: string, name: string, value: string): string {
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   let xml = "";
   try { xml = await readFile(XML_PATH, "utf-8"); } catch {}
   const world = getProp(xml, "GameWorld");
@@ -43,6 +46,8 @@ function bumpName(name: string): string {
 export async function POST() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   try {

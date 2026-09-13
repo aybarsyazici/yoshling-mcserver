@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { exec } from "child_process";
 import { promisify } from "util";
 
@@ -11,6 +12,8 @@ export async function GET(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const { searchParams } = new URL(request.url);
   const lines = parseInt(searchParams.get("lines") || "100");
@@ -30,6 +33,8 @@ export async function POST(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   if (session.user.role !== "ADMIN" && session.user.role !== "MOD") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });

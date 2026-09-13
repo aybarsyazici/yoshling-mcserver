@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { powerOn, powerOff, restartGame, ControlBusyError } from "@/lib/game-manager";
 import { isGameId, GAMES } from "@/lib/games";
@@ -16,6 +17,11 @@ export async function POST(request: NextRequest) {
   if (!isGameId(game)) {
     return NextResponse.json({ error: "Unknown game" }, { status: 400 });
   }
+  // Powering a world on stops the others, so this is gated on the world being
+  // started — not on the ones being stopped.
+  const denied = denyGame(session, game);
+  if (denied) return denied;
+
   if (!["start", "stop", "restart"].includes(action)) {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }

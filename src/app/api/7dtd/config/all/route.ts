@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
@@ -44,6 +45,8 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   try {
     const xml = await readFile(XML_PATH, "utf-8");
     const properties = parseProperties(xml).filter((p) => !LOCKED.has(p.name));
@@ -61,6 +64,8 @@ export async function PUT(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   if (!hasPermission(session.user.role, "settings.edit")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

@@ -5,7 +5,7 @@ import { GAMES, HOST_RAM_GB, type GameId } from "@/lib/games";
 
 /**
  * Shows the server's 8GB memory: filled by whichever game is running, empty
- * when both are stopped. Makes the one-at-a-time limit clear.
+ * when they're all stopped. Makes the one-at-a-time limit clear.
  */
 export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
   const used = activeGame ? GAMES[activeGame].ramGb : 0;
@@ -53,8 +53,8 @@ export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
         {activeGame
-          ? `${GAMES[activeGame].name} is using the server's memory. Starting the other one stops it first.`
-          : "Both servers are stopped."}
+          ? `${GAMES[activeGame].name} is using the server's memory. Starting another one stops it first.`
+          : "All servers are stopped."}
       </p>
     </div>
   );

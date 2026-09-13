@@ -1,4 +1,5 @@
 import "next-auth";
+import type { GameId } from "@/lib/games";
 
 declare module "next-auth" {
   interface Session {
@@ -8,6 +9,8 @@ declare module "next-auth" {
       image?: string;
       role: "ADMIN" | "MOD" | "MEMBER";
       discordId: string;
+      /** Worlds this user may see, already resolved (ADMIN = all of them). */
+      games: GameId[];
     };
   }
 }
@@ -17,5 +20,7 @@ declare module "next-auth/jwt" {
     id: string;
     role: "ADMIN" | "MOD" | "MEMBER";
     discordId: string;
+    /** Raw CSV from the user row; resolved into `session.user.games`. */
+    games: string;
   }
 }

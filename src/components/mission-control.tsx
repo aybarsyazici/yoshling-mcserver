@@ -5,13 +5,13 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { GAMES, otherGame, type GameId } from "@/lib/games";
+import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { RamBudget } from "@/components/ram-budget";
 import { StatusPill } from "@/components/ui-bits";
 import { AnimatedNumber, usePrefersReducedMotion } from "@/components/motion";
-import { MinecraftGlyph, ZombieGlyph, PowerGlyph, ArrowGlyph, GearGlyph } from "@/components/glyphs";
+import { GameMark, PowerGlyph, ArrowGlyph, GearGlyph } from "@/components/glyphs";
 import {
   Dialog,
   DialogContent,
@@ -24,10 +24,28 @@ import { Button } from "@/components/ui/button";
 
 type Phase = { key: string; label: string };
 
-export function MissionControl({ userName }: { userName?: string | null }) {
+// How the world cards sit, and when the power bus above them is accurate: the
+// bus only shows while the cards are on one row, so its branches line up with
+// the columns underneath.
+const LAYOUT: Record<number, { grid: string; bus: string }> = {
+  1: { grid: "mx-auto max-w-sm", bus: "hidden" },
+  2: { grid: "mx-auto max-w-3xl sm:grid-cols-2", bus: "hidden sm:block" },
+  3: { grid: "sm:grid-cols-2 lg:grid-cols-3", bus: "hidden lg:block" },
+};
+
+export function MissionControl({
+  userName,
+  access,
+}: {
+  userName?: string | null;
+  /** Worlds this user may open, from the session (so there's no empty flash). */
+  access: GameId[];
+}) {
   const [localBusy, setLocalBusy] = useState(false);
   const { games, activeGame, busy: serverBusy, loading, refresh } = useGames(localBusy ? 1500 : 5000);
   const reduced = usePrefersReducedMotion();
+  const worlds = GAME_LIST.filter((g) => access.includes(g.id));
+  const layout = LAYOUT[worlds.length] ?? LAYOUT[3];
 
   const [pending, setPending] = useState<GameId | null>(null); // game being powered on/awaiting confirm
   const [confirmFor, setConfirmFor] = useState<GameId | null>(null);
@@ -44,6 +62,14 @@ export function MissionControl({ userName }: { userName?: string | null }) {
     ? { kind: "holding", game: activeGame }
     : { kind: "idle" };
 
+  /** The other worlds currently holding (or claiming) the box. */
+  function runningOthers(game: GameId): GameId[] {
+    return otherGames(game).filter((g) => {
+      const s = games?.[g]?.status;
+      return s === "online" || s === "starting";
+    });
+  }
+
   function onPowerClick(game: GameId, isOnline: boolean) {
     if (busy) return;
     if (isOnline) {
@@ -51,10 +77,8 @@ export function MissionControl({ userName }: { userName?: string | null }) {
       void doControl(game, "stop");
       return;
     }
-    // Power ON — if the other is running, confirm the hand-off first
-    const other = otherGame(game);
-    const otherOnline = games?.[other]?.status === "online" || games?.[other]?.status === "starting";
-    if (otherOnline) {
+    // Power ON — if another world is running, confirm the switch first
+    if (runningOthers(game).length > 0) {
       setConfirmFor(game);
     } else {
       void doControl(game, "start");
@@ -67,14 +91,14 @@ export function MissionControl({ userName }: { userName?: string | null }) {
     setConfirmFor(null);
     if (action === "start") setPending(game);
 
-    const other = otherGame(game);
-    const otherOnline = games?.[other]?.status === "online";
+    const stopping = runningOthers(game);
+    const stoppingNames = stopping.map((g) => GAMES[g].name).join(" and ");
 
     try {
-      if (action === "start" && otherOnline) {
-        setPhase({ key: "save", label: `Saving ${GAMES[other].name}…` });
+      if (action === "start" && stopping.length > 0) {
+        setPhase({ key: "save", label: `Saving ${stoppingNames}…` });
         await sleep(reduced ? 0 : 700);
-        setPhase({ key: "stop", label: `Powering down ${GAMES[other].name}…` });
+        setPhase({ key: "stop", label: `Powering down ${stoppingNames}…` });
       } else if (action === "start") {
         setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
       } else {
@@ -100,7 +124,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
       if (action === "start") {
         setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
         toast.success(`${GAMES[game].name} is powering on`, {
-          description: otherOnline ? `${GAMES[other].name} was saved and stopped.` : undefined,
+          description: stopping.length > 0 ? `${stoppingNames} was saved and stopped.` : undefined,
         });
       } else {
         toast.success(`${GAMES[game].name} saved and stopped`);
@@ -116,6 +140,8 @@ export function MissionControl({ userName }: { userName?: string | null }) {
       setPhase(null);
     }
   }
+
+  if (worlds.length === 0) return <NoWorlds userName={userName} />;
 
   return (
     <div className="relative">
@@ -136,7 +162,7 @@ export function MissionControl({ userName }: { userName?: string | null }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.05 }}
         >
-          Choose your world
+          {worlds.length > 1 ? "Choose your world" : worlds[0].name}
         </motion.h1>
         <motion.p
           className="mx-auto mt-2 max-w-md text-sm text-muted-foreground"
@@ -145,66 +171,66 @@ export function MissionControl({ userName }: { userName?: string | null }) {
           transition={{ duration: 0.6, delay: 0.15 }}
         >
           {userName ? `Welcome back, ${userName}. ` : ""}
-          Only one server runs at a time. Starting one stops the other.
+          {worlds.length > 1
+            ? "Only one server runs at a time. Starting one stops the others."
+            : "The box runs one server at a time, so starting this one stops anything else that's running."}
         </motion.p>
       </div>
 
-      {/* The trio: card — core — card */}
-      <div className="grid items-stretch gap-4 lg:grid-cols-[1fr_auto_1fr]">
-        <WorldCard
-          game="minecraft"
-          snapshot={games?.minecraft}
-          loading={loading}
-          busy={busy}
-          pending={pending}
-          onPower={onPowerClick}
-          delay={0.1}
-        />
+      {/* The single power slot, above the worlds that compete for it */}
+      <div className="flex flex-col items-center gap-4">
+        <PowerCore state={coreState} size={148} />
+        <AnimatePresence mode="wait">
+          {phase ? (
+            <motion.div
+              key={phase.key}
+              className="text-center"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+            >
+              <p className="font-mono text-xs text-foreground">{phase.label}</p>
+              <div className="mx-auto mt-1.5 h-0.5 w-24 overflow-hidden rounded-full bg-muted">
+                <motion.div
+                  className="h-full w-1/3 rounded-full bg-primary"
+                  animate={{ x: ["-100%", "300%"] }}
+                  transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
+                />
+              </div>
+            </motion.div>
+          ) : (
+            <motion.p
+              key="idle-caption"
+              className="text-center font-mono text-[11px] leading-relaxed text-muted-foreground"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              {activeGame ? `${GAMES[activeGame].short} running` : "all stopped"}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
 
-        {/* Center power indicator */}
-        <div className="flex flex-col items-center justify-center gap-4 py-2 lg:px-2">
-          <PowerCore state={coreState} size={148} />
-          <AnimatePresence mode="wait">
-            {phase ? (
-              <motion.div
-                key={phase.key}
-                className="text-center"
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-              >
-                <p className="font-mono text-xs text-foreground">{phase.label}</p>
-                <div className="mx-auto mt-1.5 h-0.5 w-24 overflow-hidden rounded-full bg-muted">
-                  <motion.div
-                    className="h-full w-1/3 rounded-full bg-primary"
-                    animate={{ x: ["-100%", "300%"] }}
-                    transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
-                  />
-                </div>
-              </motion.div>
-            ) : (
-              <motion.p
-                key="idle-caption"
-                className="max-w-[10rem] text-center font-mono text-[11px] leading-relaxed text-muted-foreground"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-              >
-                {activeGame ? `${GAMES[activeGame].short} running` : "both stopped"}
-              </motion.p>
-            )}
-          </AnimatePresence>
-        </div>
+      {/* Which world the slot is currently wired to */}
+      <div className="h-14 w-full">
+        <PowerBus worlds={worlds} live={activeGame} linesClassName={layout.bus} />
+      </div>
 
-        <WorldCard
-          game="7dtd"
-          snapshot={games?.["7dtd"]}
-          loading={loading}
-          busy={busy}
-          pending={pending}
-          onPower={onPowerClick}
-          delay={0.2}
-        />
+      {/* One card per world */}
+      <div className={cn("grid items-stretch gap-4", layout.grid)}>
+        {worlds.map((g, i) => (
+          <WorldCard
+            key={g.id}
+            game={g.id}
+            snapshot={games?.[g.id]}
+            loading={loading}
+            busy={busy}
+            pending={pending}
+            onPower={onPowerClick}
+            delay={0.1 + i * 0.08}
+          />
+        ))}
       </div>
 
       {/* RAM budget bar */}
@@ -228,16 +254,21 @@ export function MissionControl({ userName }: { userName?: string | null }) {
                   Switch servers?
                 </DialogTitle>
                 <DialogDescription>
-                  This will <strong>save and stop {GAMES[otherGame(confirmFor)].name}</strong>, then start{" "}
-                  <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing will be
-                  disconnected. Takes about a minute.
+                  This will{" "}
+                  <strong>
+                    save and stop {runningOthers(confirmFor).map((g) => GAMES[g].name).join(" and ")}
+                  </strong>
+                  , then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing will
+                  be disconnected. Takes about a minute.
                 </DialogDescription>
               </DialogHeader>
-              <div className="flex items-center justify-center gap-3 py-2 text-xs">
-                <span className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 font-mono">
-                  <GameMark game={otherGame(confirmFor)} className="h-3.5 w-3.5" />
-                  {GAMES[otherGame(confirmFor)].short} off
-                </span>
+              <div className="flex flex-wrap items-center justify-center gap-3 py-2 text-xs">
+                {runningOthers(confirmFor).map((g) => (
+                  <span key={g} className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 font-mono">
+                    <GameMark game={g} className="h-3.5 w-3.5" />
+                    {GAMES[g].short} off
+                  </span>
+                ))}
                 <ArrowGlyph className="h-4 w-4 text-muted-foreground" />
                 <span
                   className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono"
@@ -269,11 +300,121 @@ export function MissionControl({ userName }: { userName?: string | null }) {
   );
 }
 
-function GameMark({ game, className }: { game: GameId; className?: string }) {
-  return game === "minecraft" ? (
-    <MinecraftGlyph className={className} />
-  ) : (
-    <ZombieGlyph className={className} />
+/** Signed in, but not on any world's list yet. */
+function NoWorlds({ userName }: { userName?: string | null }) {
+  return (
+    <motion.div
+      className="mx-auto max-w-md text-center"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+    >
+      <div className="flex justify-center">
+        <PowerCore state={{ kind: "idle" }} size={120} />
+      </div>
+      <h1 className="mt-4 font-display text-2xl font-bold tracking-tight">No worlds yet</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {userName
+          ? `You're signed in as ${userName}, but this account can't see any of the servers yet.`
+          : "This account can't see any of the servers yet."}{" "}
+        Ask an admin to give you access on the Crew page.
+      </p>
+    </motion.div>
+  );
+}
+
+/**
+ * The power bus: one trunk out of the core, one branch per world, and only ever
+ * one branch carrying current. It makes the box's hard rule — a single world at
+ * a time — something you read at a glance instead of something we explain in a
+ * paragraph. A world running that this user can't open lights no branch, which
+ * is the truth: the slot is taken by something not on this page.
+ */
+function PowerBus({
+  worlds,
+  live,
+  linesClassName,
+}: {
+  worlds: GameMeta[];
+  live: GameId | null;
+  /** Hides the wiring (but never the gap) when the cards aren't on one row. */
+  linesClassName?: string;
+}) {
+  const reduced = usePrefersReducedMotion();
+  const liveIndex = worlds.findIndex((g) => g.id === live);
+  const tint = live ? GAMES[live].tint : "var(--muted-foreground)";
+
+  // viewBox is stretched to the grid width, so strokes have to opt out of it.
+  const x = (i: number) => ((i + 0.5) / worlds.length) * 100;
+  const branch = (i: number) => `M50 34 H${x(i)} M${x(i)} 34 V100`;
+
+  return (
+    <div className={cn("relative h-14 w-full", linesClassName)} aria-hidden>
+      <svg
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        className="h-full w-full overflow-visible"
+      >
+        <g
+          fill="none"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+          stroke="color-mix(in oklab, var(--foreground) 15%, transparent)"
+        >
+          <path d="M50 0 V34" vectorEffect="non-scaling-stroke" />
+          <path
+            d={`M${x(0)} 34 H${x(worlds.length - 1)}`}
+            vectorEffect="non-scaling-stroke"
+          />
+          {worlds.map((g, i) => (
+            <path key={g.id} d={`M${x(i)} 34 V100`} vectorEffect="non-scaling-stroke" />
+          ))}
+        </g>
+
+        {/* the energised branch */}
+        {liveIndex >= 0 && (
+          <motion.path
+            d={`M50 0 V34 ${branch(liveIndex)}`}
+            fill="none"
+            stroke={tint}
+            strokeWidth="2"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+            style={{ filter: `drop-shadow(0 0 6px color-mix(in oklab, ${tint} 70%, transparent))` }}
+            initial={{ opacity: 0 }}
+            animate={
+              reduced
+                ? { opacity: 1 }
+                : { opacity: 1, strokeDashoffset: [12, 0] }
+            }
+            transition={
+              reduced
+                ? { duration: 0.3 }
+                : { strokeDashoffset: { duration: 0.9, repeat: Infinity, ease: "linear" } }
+            }
+            strokeDasharray={reduced ? undefined : "6 6"}
+          />
+        )}
+
+      </svg>
+
+      {/* Junction dots as elements, not SVG: the viewBox above is stretched to
+          the grid width, which would squash a <circle> into an ellipse. */}
+      {worlds.map((g, i) => (
+        <span
+          key={g.id}
+          className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-1 ring-foreground/15"
+          style={{
+            left: `${x(i)}%`,
+            top: "34%",
+            background: i === liveIndex ? tint : "var(--muted)",
+            boxShadow:
+              i === liveIndex ? `0 0 8px color-mix(in oklab, ${tint} 80%, transparent)` : undefined,
+          }}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -326,32 +467,33 @@ function WorldCard({
           <GameMark game={game} className="h-40 w-40" />
         </div>
 
+        {/* Mark and status share a top rail; the name gets the card's full width
+            below it, so no game's name wraps and all the cards line up. */}
         <div className="relative flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div
-              className="grid h-12 w-12 place-items-center rounded-2xl ring-1"
-              style={{
-                background: `color-mix(in oklab, ${meta.tint} 15%, transparent)`,
-                color: meta.tint,
-                boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${meta.tint} 25%, transparent)`,
-              }}
-            >
-              <GameMark game={game} className="h-6 w-6" />
-            </div>
-            <div>
-              <h2 className="font-display text-xl font-bold leading-tight">{meta.name}</h2>
-              <p className="text-xs text-muted-foreground">{meta.tagline}</p>
-            </div>
+          <div
+            className="grid h-12 w-12 place-items-center rounded-2xl ring-1"
+            style={{
+              background: `color-mix(in oklab, ${meta.tint} 15%, transparent)`,
+              color: meta.tint,
+              boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${meta.tint} 25%, transparent)`,
+            }}
+          >
+            <GameMark game={game} className="h-6 w-6" />
           </div>
           {loading ? (
-            <div className="h-6 w-16 skeleton rounded-full" />
+            <div className="skeleton h-6 w-16 rounded-full" />
           ) : (
             <StatusPill status={isBusyThis ? "starting" : status} tint={meta.tint} />
           )}
         </div>
 
+        <div className="relative mt-3">
+          <h2 className="font-display text-xl font-bold leading-tight">{meta.name}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{meta.tagline}</p>
+        </div>
+
         {/* Live metrics */}
-        <div className="relative mt-6 grid grid-cols-2 gap-3">
+        <div className="relative mt-5 grid grid-cols-2 gap-3">
           <Metric
             label="Players"
             value={
@@ -367,7 +509,7 @@ function WorldCard({
             tint={meta.tint}
           />
           <Metric
-            label={game === "minecraft" ? "Uptime" : "In-game"}
+            label={meta.detailLabel}
             value={isOnline ? snapshot?.detail ?? snapshot?.uptime ?? "live" : "—"}
             tint={meta.tint}
           />

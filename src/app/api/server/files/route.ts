@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
@@ -21,6 +22,8 @@ export async function GET(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const { searchParams } = new URL(request.url);
   const relativePath = searchParams.get("path") || "";
@@ -85,6 +88,8 @@ export async function PUT(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   if (!hasPermission(session.user.role, "settings.edit")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -124,6 +129,8 @@ export async function DELETE(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   if (session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Admin only" }, { status: 403 });

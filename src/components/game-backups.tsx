@@ -15,15 +15,26 @@ interface Backup {
   includesWorldMap?: boolean;
 }
 
+// What a backup captures, and what a restore replaces, spelled out per game.
+const NOUN: Record<GameId, string> = {
+  minecraft: "world",
+  "7dtd": "saves",
+  zomboid: "save",
+};
+
+const DESCRIBES: Record<GameId, string> = {
+  minecraft: "Each backup is a full copy of your Minecraft world folder.",
+  "7dtd":
+    "Each backup bundles your saves (player progress), the world map, and the server settings — so a restore rebuilds everything.",
+  zomboid:
+    "Each backup bundles the world save, the player database, and the server config files — so a restore rebuilds everything.",
+};
+
 export function GameBackups({ game }: { game: GameId }) {
   const meta = GAMES[game];
-  const endpoint = game === "minecraft" ? "/api/server/backups" : "/api/7dtd/backups";
-  const noun = game === "minecraft" ? "world" : "saves";
-  // What a backup captures, spelled out per game.
-  const describes =
-    game === "minecraft"
-      ? "Each backup is a full copy of your Minecraft world folder."
-      : "Each backup bundles your saves (player progress), the world map, and the server settings — so a restore rebuilds everything.";
+  const endpoint = meta.api.backups;
+  const noun = NOUN[game];
+  const describes = DESCRIBES[game];
 
   const [backups, setBackups] = useState<Backup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -111,7 +122,7 @@ export function GameBackups({ game }: { game: GameId }) {
       <div className="flex items-start gap-2 rounded-xl bg-chart-5/10 p-3 ring-1 ring-chart-5/30">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-chart-5" />
         <p className="text-xs text-muted-foreground">
-          Restoring replaces the live {noun} (and, for 7DTD, the world map + settings). Power the server down first to avoid corruption.
+          Restoring replaces the live {noun} and everything else in the backup. Power the server down first to avoid corruption.
         </p>
       </div>
 

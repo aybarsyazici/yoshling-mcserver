@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { mkdir, writeFile, rm, readdir } from "fs/promises";
@@ -57,6 +58,8 @@ async function listDirs(dir: string): Promise<string[]> {
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   const generated = await listDirs(WORLDS_DIR);
   const stock = await listDirs(STOCK_WORLDS_DIR);
   // "RWG" = generate a random world at runtime; always a valid option.
@@ -188,6 +191,8 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   const name = new URL(request.url).searchParams.get("name") || "";

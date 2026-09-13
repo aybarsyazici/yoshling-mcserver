@@ -5,7 +5,8 @@ import { motion } from "motion/react";
 import { SectionHeading } from "@/components/ui-bits";
 import { PhotoFooter } from "@/components/photo-footer";
 import { PowerGlyph } from "@/components/glyphs";
-import { Puzzle, FileEdit, Trash2, Activity as ActivityIcon } from "lucide-react";
+import { GAMES, isGameId } from "@/lib/games";
+import { Puzzle, FileEdit, Trash2, Users, Activity as ActivityIcon } from "lucide-react";
 
 interface Activity {
   id: string;
@@ -30,7 +31,11 @@ export default function ActivityPage() {
 
   return (
     <div className="space-y-6">
-      <SectionHeading eyebrow="Shared · Log" title="Activity" sub="Everything that happened across both worlds, newest first." />
+      <SectionHeading
+        eyebrow="Shared · Log"
+        title="Activity"
+        sub="Everything that happened across your worlds, newest first."
+      />
 
       <div className="rounded-2xl bg-card/70 p-5 ring-1 ring-foreground/10 backdrop-blur">
         {loading ? (
@@ -92,17 +97,24 @@ export default function ActivityPage() {
 
 type IconT = React.ComponentType<{ className?: string }>;
 
+/** The accent of the world an entry belongs to, or a neutral one if it names none. */
+function gameTint(details: Record<string, unknown>, fallback = "var(--muted-foreground)"): string {
+  const game = details.game;
+  return typeof game === "string" && isGameId(game) ? GAMES[game].tint : fallback;
+}
+
 function actionVisual(action: string, details: Record<string, unknown>): { icon: IconT; tint: string } {
-  const game = details.game === "7dtd" ? "var(--sd)" : "var(--mc)";
-  if (action.startsWith("server_")) return { icon: PowerGlyph, tint: game };
-  if (action.includes("mod")) return { icon: Puzzle, tint: "var(--mc)" };
-  if (action === "edit_file") return { icon: FileEdit, tint: details.game === "7dtd" ? "var(--sd)" : "var(--chart-2)" };
+  if (action.startsWith("server_")) return { icon: PowerGlyph, tint: gameTint(details) };
+  if (action.includes("mod")) return { icon: Puzzle, tint: gameTint(details, "var(--mc)") };
+  if (action === "edit_file") return { icon: FileEdit, tint: gameTint(details, "var(--chart-2)") };
   if (action === "delete_file") return { icon: Trash2, tint: "var(--destructive)" };
+  if (action === "set_user_games") return { icon: Users, tint: "var(--primary)" };
   return { icon: ActivityIcon, tint: "var(--muted-foreground)" };
 }
 
 function formatAction(action: string, details: Record<string, unknown>): string {
-  const world = details.game === "7dtd" ? "7DTD" : details.game === "minecraft" ? "Minecraft" : null;
+  const game = details.game;
+  const world = typeof game === "string" && isGameId(game) ? GAMES[game].name : null;
   const on = world ? ` · ${world}` : "";
   switch (action) {
     case "install_mod":
@@ -125,6 +137,8 @@ function formatAction(action: string, details: Record<string, unknown>): string 
       return `edited ${details.file ?? details.path}${on}`;
     case "delete_file":
       return `deleted ${details.path}${on}`;
+    case "set_user_games":
+      return `changed who can see which server`;
     default:
       return action.replace(/_/g, " ");
   }

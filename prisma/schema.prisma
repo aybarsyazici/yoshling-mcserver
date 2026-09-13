@@ -13,6 +13,10 @@ model User {
   username    String
   avatar      String?
   role        String       @default("MEMBER") // ADMIN, MOD, MEMBER
+  // Which worlds this user may see, as a CSV of game ids
+  // ("minecraft,7dtd,zomboid"). Empty = no access yet, an admin has to grant it.
+  // ADMIN ignores this column and always sees every world.
+  games       String       @default("")
   createdAt   DateTime     @default(now())
   activities  Activity[]
   modRequests ModRequest[]
@@ -65,6 +69,20 @@ model SevenDaysConfig {
   // Encoded Sandbox Options preset from the game's new-game screen; written to
   // the SandboxCode property in sdtdserver.xml.
   sandboxCode    String @default("")
+}
+
+// Title/mod-id cache for the Project Zomboid Workshop items listed in the
+// server .ini. The .ini stays the source of truth for what is enabled; this
+// row just remembers what a Workshop id *is* so the UI can show a name instead
+// of a number, and which mod ids belong to it (needed to remove them again).
+model ZomboidMod {
+  id          String   @id // the Steam Workshop published file id
+  title       String   @default("")
+  // Semicolon-separated mod ids this workshop item provides.
+  modIds      String   @default("")
+  previewUrl  String?
+  addedBy     String   @default("")
+  addedAt     DateTime @default(now())
 }
 
 model Activity {

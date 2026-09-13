@@ -5,5 +5,7 @@ import { DashShell } from "@/components/dash-shell";
 export default async function MinecraftLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
-  return <DashShell game="minecraft">{children}</DashShell>;
+  // No access to this world = these pages don't exist for you.
+  if (!session.user.games.includes("minecraft")) redirect("/home");
+  return <DashShell game="minecraft" access={session.user.games}>{children}</DashShell>;
 }

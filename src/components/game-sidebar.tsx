@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { GAMES, GAME_LIST, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
-import { MinecraftGlyph, ZombieGlyph } from "@/components/glyphs";
+import { GameMark } from "@/components/glyphs";
 import {
   Gamepad2,
   Puzzle,
@@ -31,22 +31,15 @@ interface NavItem {
 }
 
 function navFor(game: GameId): NavItem[] {
-  const base = GAMES[game].base;
-  if (game === "minecraft") {
-    return [
-      { name: "Overview", href: base, icon: Gamepad2 },
-      { name: "Mods", href: `${base}/mods`, icon: Puzzle },
-      { name: "Server", href: `${base}/server`, icon: Server },
-      { name: "Backups", href: `${base}/backups`, icon: Archive },
-      { name: "Settings", href: `${base}/settings`, icon: Settings },
-      { name: "Whitelist", href: `${base}/whitelist`, icon: Shield },
-    ];
-  }
+  const meta = GAMES[game];
+  const base = meta.base;
   return [
     { name: "Overview", href: base, icon: Gamepad2 },
+    ...(meta.hasMods ? [{ name: "Mods", href: `${base}/mods`, icon: Puzzle }] : []),
     { name: "Server", href: `${base}/server`, icon: Server },
     { name: "Backups", href: `${base}/backups`, icon: Archive },
     { name: "Settings", href: `${base}/settings`, icon: Settings },
+    ...(meta.hasWhitelist ? [{ name: "Whitelist", href: `${base}/whitelist`, icon: Shield }] : []),
   ];
 }
 
@@ -55,11 +48,7 @@ const SHARED: NavItem[] = [
   { name: "Activity", href: "/activity", icon: Clock },
 ];
 
-function GameMark({ game, className }: { game: GameId; className?: string }) {
-  return game === "minecraft" ? <MinecraftGlyph className={className} /> : <ZombieGlyph className={className} />;
-}
-
-export function GameSidebar({ game }: { game: GameId }) {
+export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -67,6 +56,9 @@ export function GameSidebar({ game }: { game: GameId }) {
 
   const meta = GAMES[game];
   const nav = navFor(game);
+  // Only the worlds this user may open; comes from the session, so it's right on
+  // the first paint rather than after the first status poll.
+  const worlds = GAME_LIST.filter((g) => access.includes(g.id));
 
   return (
     <>
@@ -118,11 +110,17 @@ export function GameSidebar({ game }: { game: GameId }) {
           )}
         </Link>
 
-        {/* World switcher */}
-        <div className={cn("relative border-b border-sidebar-border p-2", collapsed && "px-1")}>
+        {/* World switcher — hidden entirely when there's only one world to pick */}
+        <div
+          className={cn(
+            "relative border-b border-sidebar-border p-2",
+            collapsed && "px-1",
+            worlds.length < 2 && "hidden"
+          )}
+        >
           {!collapsed && <p className="eyebrow px-2 pb-2 pt-1 text-muted-foreground">World</p>}
           <div className={cn("flex gap-1", collapsed ? "flex-col" : "flex-row")}>
-            {GAME_LIST.map((g) => {
+            {worlds.map((g) => {
               const on = games?.[g.id]?.status === "online";
               const isCurrent = g.id === game;
               return (
@@ -132,7 +130,7 @@ export function GameSidebar({ game }: { game: GameId }) {
                   onClick={() => setMobileOpen(false)}
                   title={g.name}
                   className={cn(
-                    "group relative flex flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium transition-all",
+                    "group relative flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-medium transition-all",
                     collapsed && "justify-center px-0",
                     isCurrent ? "text-foreground" : "text-muted-foreground hover:text-foreground"
                   )}

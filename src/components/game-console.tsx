@@ -7,13 +7,22 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Terminal } from "lucide-react";
 
-/**
- * Console for either game. Minecraft speaks RCON (/api/server/console),
- * 7DTD speaks telnet (/api/7dtd/console). Same UI, different transport.
- */
+// Same UI for every world; only the transport and the example commands differ.
+const TRANSPORT: Record<GameId, string> = {
+  minecraft: "RCON",
+  "7dtd": "telnet",
+  zomboid: "RCON",
+};
+
+const EXAMPLES: Record<GameId, string> = {
+  minecraft: "say Hello · time set day · op Player",
+  "7dtd": "say Hello · settime day · listplayers",
+  zomboid: "servermsg \"Hello\" · players · save",
+};
+
 export function GameConsole({ game }: { game: GameId }) {
   const meta = GAMES[game];
-  const endpoint = game === "minecraft" ? "/api/server/console" : "/api/7dtd/console";
+  const endpoint = meta.api.console;
   const [logs, setLogs] = useState("");
   const [command, setCommand] = useState("");
   const [sending, setSending] = useState(false);
@@ -128,7 +137,7 @@ export function GameConsole({ game }: { game: GameId }) {
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             onKeyDown={onKey}
-            placeholder={game === "minecraft" ? "say Hello · time set day · op Player" : "say Hello · settime day · listplayers"}
+            placeholder={EXAMPLES[game]}
             className="pl-7 font-mono text-sm"
             disabled={sending}
           />
@@ -138,7 +147,7 @@ export function GameConsole({ game }: { game: GameId }) {
         </Button>
       </form>
       <p className="mt-2 text-xs text-muted-foreground">
-        {game === "minecraft" ? "Sent via RCON." : "Sent via telnet."} No leading slash needed. ↑/↓ for history.
+        Sent via {TRANSPORT[game]}. No leading slash needed. ↑/↓ for history.
       </p>
     </div>
   );

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { GAMES, otherGame, type GameId } from "@/lib/games";
+import { GAMES, otherGames, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { StatusPill } from "@/components/ui-bits";
 import { PowerCore, type CoreState } from "@/components/power-core";
@@ -38,15 +38,22 @@ export function GameControls({ game }: { game: GameId }) {
   const busy = localBusy || serverBusy !== null;
   const busyAction = serverBusy?.action;
 
-  const other = otherGame(game);
-  const otherOnline = games?.[other]?.status === "online" || games?.[other]?.status === "starting";
+  // Only one world can hold the box at a time, but check every other one
+  // rather than assume which — a stale container would otherwise be missed.
+  const blocking = otherGames(game).filter((g) => {
+    const s = games?.[g]?.status;
+    return s === "online" || s === "starting";
+  });
+  const blockingNames = blocking.map((g) => GAMES[g].name).join(" and ");
+  const blockingVerb = blocking.length > 1 ? "are" : "is";
+  const blockingThem = blocking.length > 1 ? "them" : "it";
 
   const coreState: CoreState = busy && !isOnline ? { kind: "booting", game } : isOnline ? { kind: "holding", game } : { kind: "idle" };
 
   function onPower() {
     if (busy) return;
     if (isOnline) return void control("stop");
-    if (otherOnline) setConfirm(true);
+    if (blocking.length > 0) setConfirm(true);
     else void control("start");
   }
 
@@ -101,7 +108,7 @@ export function GameControls({ game }: { game: GameId }) {
 
         <div className="grid grid-cols-3 gap-2 text-center">
           <Cell label="Players" value={isOnline && players ? `${players.online}/${players.max}` : "—"} tint={meta.tint} />
-          <Cell label={game === "minecraft" ? "Uptime" : "In-game"} value={isOnline ? snap?.detail ?? snap?.uptime ?? "live" : "—"} tint={meta.tint} />
+          <Cell label={meta.detailLabel} value={isOnline ? snap?.detail ?? snap?.uptime ?? "live" : "—"} tint={meta.tint} />
           <Cell label="RAM" value={`${meta.ramGb}G`} tint={meta.tint} />
         </div>
       </div>
@@ -128,10 +135,10 @@ export function GameControls({ game }: { game: GameId }) {
         </Button>
 
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
-          {otherOnline ? (
+          {blocking.length > 0 ? (
             <span>
-              <strong className="text-foreground">{GAMES[other].name}</strong> is running. Starting this
-              one stops it first.
+              <strong className="text-foreground">{blockingNames}</strong> {blockingVerb} running.
+              Starting this one stops {blockingThem} first.
             </span>
           ) : isOnline ? (
             "Stopping saves the world first."
@@ -179,8 +186,8 @@ export function GameControls({ game }: { game: GameId }) {
               <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              This saves and stops <strong>{GAMES[other].name}</strong>, then starts <strong>{meta.name}</strong>.
-              Players on {GAMES[other].name} will be disconnected.
+              This saves and stops <strong>{blockingNames}</strong>, then starts <strong>{meta.name}</strong>.
+              Players on {blockingNames} will be disconnected.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

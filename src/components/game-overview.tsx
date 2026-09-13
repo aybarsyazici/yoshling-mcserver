@@ -5,11 +5,11 @@ import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { GAMES, otherGame, type GameId } from "@/lib/games";
+import { GAMES, otherGames, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { StatusPill, SectionHeading } from "@/components/ui-bits";
 import { AnimatedNumber, Reveal, Stagger, StaggerItem, usePrefersReducedMotion } from "@/components/motion";
-import { PowerGlyph, GearGlyph, MinecraftGlyph, ZombieGlyph } from "@/components/glyphs";
+import { PowerGlyph, GearGlyph, GameMark } from "@/components/glyphs";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -83,13 +83,17 @@ export function GameOverview({
     };
   }, [game, isOnline]);
 
-  const other = otherGame(game);
-  const otherOnline = games?.[other]?.status === "online" || games?.[other]?.status === "starting";
+  // The world(s) that would have to be saved and stopped to start this one.
+  const blocking = otherGames(game).filter((g) => {
+    const s = games?.[g]?.status;
+    return s === "online" || s === "starting";
+  });
+  const blockingNames = blocking.map((g) => GAMES[g].name).join(" and ");
 
   function onPower() {
     if (busy) return;
     if (isOnline) return void control("stop");
-    if (otherOnline) setConfirm(true);
+    if (blocking.length > 0) setConfirm(true);
     else void control("start");
   }
 
@@ -115,8 +119,6 @@ export function GameOverview({
     }
   }
 
-  const GameMark = game === "minecraft" ? MinecraftGlyph : ZombieGlyph;
-
   return (
     <div className="space-y-8" style={{ ["--tint" as string]: meta.tint }}>
       <SectionHeading
@@ -141,7 +143,7 @@ export function GameOverview({
             className="pointer-events-none absolute -right-10 -top-10 opacity-[0.06]"
             style={{ color: meta.tint }}
           >
-            <GameMark className="h-56 w-56" />
+            <GameMark game={game} className="h-56 w-56" />
           </div>
 
           <div className="relative flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
@@ -152,7 +154,7 @@ export function GameOverview({
                 animate={isOnline && !reduced ? { boxShadow: [`0 0 0 0 color-mix(in oklab, ${meta.tint} 40%, transparent)`, `0 0 0 10px transparent`] } : undefined}
                 transition={{ duration: 2, repeat: Infinity }}
               >
-                <GameMark className="h-8 w-8" />
+                <GameMark game={game} className="h-8 w-8" />
               </motion.div>
               <div>
                 <p className="eyebrow text-muted-foreground">Server</p>
@@ -216,7 +218,7 @@ export function GameOverview({
         ))}
         <StatTile
           icon={Clock}
-          label={game === "minecraft" ? "Uptime" : "In-game day"}
+          label={meta.detailLabel}
           value={isOnline ? snap?.detail ?? snap?.uptime ?? "live" : "—"}
           tint={meta.tint}
         />
@@ -263,8 +265,8 @@ export function GameOverview({
               <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              This will <strong>save and stop {GAMES[other].name}</strong>, then start{" "}
-              <strong>{meta.name}</strong>. Players on {GAMES[other].name} will be disconnected.
+              This will <strong>save and stop {blockingNames}</strong>, then start{" "}
+              <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

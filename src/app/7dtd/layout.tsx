@@ -5,5 +5,7 @@ import { DashShell } from "@/components/dash-shell";
 export default async function SevenDtdLayout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
-  return <DashShell game="7dtd">{children}</DashShell>;
+  // No access to this world = these pages don't exist for you.
+  if (!session.user.games.includes("7dtd")) redirect("/home");
+  return <DashShell game="7dtd" access={session.user.games}>{children}</DashShell>;
 }

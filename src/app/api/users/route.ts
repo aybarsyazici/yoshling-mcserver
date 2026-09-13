@@ -16,6 +16,7 @@ export async function GET() {
       username: true,
       avatar: true,
       role: true,
+      games: true,
       createdAt: true,
     },
   });

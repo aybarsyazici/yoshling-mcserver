@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { db } from "@/lib/db";
@@ -64,6 +65,8 @@ async function containerEnv(name: string): Promise<Record<string, string>> {
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
 
   const env = await containerEnv(CONTAINER);
   const branch = env.VERSION || "latest_experimental";
@@ -79,6 +82,8 @@ export async function GET() {
 export async function POST() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const denied = denyGame(session, "7dtd");
+  if (denied) return denied;
   if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   try {

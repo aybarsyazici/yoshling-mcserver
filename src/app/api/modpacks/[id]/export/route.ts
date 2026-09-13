@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { db } from "@/lib/db";
 import { getProjectVersions } from "@/lib/modrinth";
 
@@ -11,6 +12,8 @@ export async function GET(
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const { id } = await params;
 

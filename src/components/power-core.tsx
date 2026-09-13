@@ -2,7 +2,7 @@
 
 import { motion } from "motion/react";
 import { useId } from "react";
-import { type GameId } from "@/lib/games";
+import { GAMES, type GameId } from "@/lib/games";
 import { usePrefersReducedMotion } from "@/components/motion";
 
 export type CoreState =
@@ -11,14 +11,9 @@ export type CoreState =
   | { kind: "handoff"; from: GameId | null; to: GameId }
   | { kind: "booting"; game: GameId };
 
-const TINT: Record<GameId, string> = {
-  minecraft: "var(--mc)",
-  "7dtd": "var(--sd)",
-};
-
 /**
  * The Power Core — the signature element.
- * A single reactor that can only energize one world at a time, making the
+ * A single power slot that can only energize one world at a time, making the
  * host's 8GB "one world at a time" constraint physical and visible.
  */
 export function PowerCore({
@@ -40,7 +35,7 @@ export function PowerCore({
       ? state.to
       : null;
 
-  const tint = active ? TINT[active] : "var(--muted-foreground)";
+  const tint = active ? GAMES[active].tint : "var(--muted-foreground)";
   const energized = state.kind === "holding" || state.kind === "booting";
   const working = state.kind === "handoff" || state.kind === "booting";
 

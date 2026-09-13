@@ -1,9 +1,10 @@
 # Yoshling — Game Server Control
 
-A web app to control two game servers (Minecraft + 7 Days to Die) running on a
-single Hetzner box, from a Discord-authed dashboard. One box, two worlds: only
-one game runs at a time (8 GB RAM), and powering one on gracefully saves + stops
-the other.
+A web app to control three game servers (Minecraft + 7 Days to Die + Project
+Zomboid) running on a single Hetzner box, from a Discord-authed dashboard. One
+box, three worlds: only one game runs at a time (8 GB RAM), and powering one on
+gracefully saves + stops whichever other one is running. Access is per world —
+a user only sees the servers an admin has granted them.
 
 ## Stack
 
@@ -17,12 +18,13 @@ the other.
 
 ## Architecture
 
-Three containers via `docker compose` (see `docker-compose.yml`):
+Four containers via `docker compose` (see `docker-compose.yml`):
 
 | Container | Image | Purpose | Web reaches it as |
 |-----------|-------|---------|-------------------|
 | `yoshling-mc` | `itzg/minecraft-server` | Minecraft, ports 25565 + RCON 25575 | host `minecraft` |
 | `yoshling-7dtd` | `vinanrra/7dtd-server` | 7DTD, ports 26900-26902, telnet 8081, webadmin 8080 | host `sevendtd` |
+| `yoshling-pz` | `danixu86/project-zomboid-dedicated-server` | Project Zomboid, ports 16261-16262/udp + 8766-8767/udp, RCON 27015 (unpublished) | host `zomboid` |
 | `yoshling-web-1` | this app | Next.js dashboard | — |
 
 The **web container runs as root** with `docker-cli` installed and the docker
@@ -32,45 +34,100 @@ drop docker-cli; the app cannot control containers without them.
 
 ### Game abstraction
 
-- `src/lib/games.ts` — client-safe metadata for both games (accents, routes,
-  RAM, connect strings). Single source of truth for identity.
+- `src/lib/games.ts` — client-safe metadata per game (accents, routes, RAM,
+  connect strings, per-game API endpoints, file-browser roots, which sidebar
+  pages exist). Single source of truth for identity: adding a game means adding
+  a `GameMeta` entry, a driver, and the API routes — the shared components read
+  everything else from the table. `otherGames(id)` (not `otherGame`) returns
+  every *other* world, so nothing assumes there are exactly two.
 - `src/lib/game-manager.ts` — server-side driver per game. `powerOn(game)`
-  performs the graceful hand-off: if the *other* game is running, it saves +
-  stops it first, then starts the requested one. Active game is persisted in the
+  performs the graceful hand-off: it saves + stops *every other* game that is
+  running, then starts the requested one. Active game is persisted in the
   `GameState` table so a reboot only revives the intended world. A module-level
   **control lock** serializes all start/stop/restart ops — a concurrent request
   throws `ControlBusyError` → HTTP 409 (prevents Restart-button spam / racing
   `docker` commands). `/api/games/status` exposes the in-flight lock as `busy`;
   `useGames` surfaces it so every control UI disables while an op runs.
-- `src/lib/rcon.ts` — Minecraft control (save-all, player list) over RCON.
+- `src/lib/rcon.ts` — the shared Source-RCON transport, keyed per target with one
+  cached authenticated socket each. Minecraft (25575) and Project Zomboid (27015)
+  both speak it; `sendCommand`/`getPlayerList` are the Minecraft wrappers.
 - `src/lib/telnet.ts` — 7DTD control over telnet. `telnetSession()` runs multiple
   commands in ONE connection and always sends `exit` to close cleanly (dropping
   the socket makes 7DTD spam `IOException ... socket has been shut down` in its
   console). Status probe = one session (`getSdtdStatus`: listplayers+gettime+
   version), cached ~4s + single-flight in `game-manager` so many tabs don't each
   hit telnet.
+- `src/lib/zomboid.ts` — Project Zomboid: RCON control (`players`/`save`), the
+  `.ini` parser/writer, and the mod-list helpers. Status probe = one RCON
+  `players` call, cached ~4s + single-flight like 7DTD's (see `cachedProbe` in
+  `game-manager`).
 - `src/lib/server-manager.ts` — thin backward-compat shim delegating to
   `game-manager` for the legacy Minecraft-only `/api/server/*` routes.
 
 ### Routes
 
 - `/` → redirect to `/home` (or `/login`)
-- `/home` — dual-world landing (the Power Core + one-click power, hand-off confirm)
+- `/home` — the landing: the Power Core, the **power bus** (one trunk, one branch
+  per world, only the running world's branch lit), one card per world the viewer
+  can see, hand-off confirm, RAM budget. A viewer with no worlds gets a "No
+  worlds yet" screen instead.
 - `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings, whitelist
 - `/7dtd/*` — 7DTD overview, server (controls/monitor/console/files), backups, settings
+- `/zomboid/*` — PZ overview, mods, server (controls/monitor/console/files), backups, settings
 - Backups are their own sidebar page per game (`/{game}/backups`), not a server tab.
-- `/users`, `/activity` — shared across both games
+- `/users` (Crew), `/activity` — shared; both wear the accent of the first world
+  the viewer can see, and the activity log hides entries for worlds they can't.
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
-  and the legacy `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
+  `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
+  `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
 - `src/components/file-browser.tsx` is shared: MC uses the default
-  `/api/server/files`; 7DTD passes `/api/7dtd/files` + `roots` (Config = the
-  serverfiles mount `/sevendtd-config`, Saves = `/sevendtd`).
+  `/api/server/files`; 7DTD and PZ pass their own endpoint + `roots` from
+  `GAMES[game].fileRoots` (7DTD: Config = `/sevendtd-config`, Saves =
+  `/sevendtd`; PZ: Config = `/zomboid/Server`, Saves = `/zomboid/Saves`, All
+  data = `/zomboid`).
+- `src/components/config-panel.tsx` is the shared "All settings" expander. Both
+  7DTD's XML and PZ's .ini document themselves with a comment per setting, so
+  both config endpoints return the same `{properties:[{name,value,help}]}` shape
+  and only the grouping/dropdowns/copy differ per game.
 
-### Roles & permissions
+### Roles & per-world access
 
-`src/lib/permissions.ts` — ADMIN / MOD / MEMBER. Server power is ADMIN-only;
-mod management is ADMIN/MOD; browsing is everyone. First Discord user to sign in
-becomes ADMIN.
+Two orthogonal axes, both in `src/lib/permissions.ts`:
+
+- **Role** — ADMIN / MOD / MEMBER, says what a user may *do*. Server power is
+  ADMIN-only; mod management is ADMIN/MOD; browsing is everyone.
+- **World access** — the `User.games` column, a CSV of game ids
+  (`"minecraft,7dtd"`), says which servers they may *see at all*. `gameAccess()`
+  resolves it; **ADMIN ignores the column and always has every world**, and is
+  the only role that can hand access out.
+
+So a MOD with only `zomboid` can install PZ mods and never learns the Minecraft
+pages exist. The **first** Discord account to sign in becomes ADMIN with all
+worlds; **every account after that starts as MEMBER with no worlds** and an admin
+grants them on the Crew page. (Before this, *every* new account was created as
+ADMIN — that was a bug.)
+
+Enforcement, in layers:
+
+- `src/lib/game-gate.ts` — `gameGate(game)` (session + access in one call, used
+  by the newer routes) and `denyGame(session, game)` (drop-in for routes that
+  already resolved a session). **Every** route that touches one game's
+  containers, files or config starts with one of these; `/api/games/control` and
+  `/api/games/stats` gate on the `game` request parameter.
+- The three game layouts (`src/app/{minecraft,7dtd,zomboid}/layout.tsx`) redirect
+  to `/home` when the viewer lacks that world, so the pages simply don't exist
+  for them.
+- `/api/games/status` returns `access: GameId[]`, which `useGames` surfaces and
+  the UI filters on (sidebar world switcher, landing cards). It still reports the
+  *run state* of worlds the user can't open — only one server fits on the box, so
+  their Start button stops whatever is running and the confirm dialog has to be
+  able to name it — but strips player names from those.
+- Access changes take effect immediately: the NextAuth `jwt` callback re-reads
+  `role` + `games` from the DB on **every** call, because a JWT would otherwise
+  stay frozen until the user signed out.
+
+`/users` (Crew) is where an admin toggles worlds — one tinted chip per world per
+user, lit = granted. Admin rows show all three chips lit and locked.
 
 ## Local development
 
@@ -82,11 +139,18 @@ npx tsc --noEmit # typecheck
 ```
 
 `.env` (gitignored) needs at least: `DATABASE_URL`, `DISCORD_CLIENT_ID`,
-`DISCORD_CLIENT_SECRET`, `AUTH_SECRET`, `AUTH_URL`, `RCON_*`, and
-`SDTD_TELNET_PASSWORD`. Local dev uses `dev.db`.
+`DISCORD_CLIENT_SECRET`, `AUTH_SECRET`, `AUTH_URL`, `RCON_*`,
+`SDTD_TELNET_PASSWORD`, and `PZ_RCON_PASSWORD` + `PZ_ADMIN_PASSWORD`. Local dev
+uses `dev.db`.
 
 Migrations: `npx prisma migrate dev --name <x>` locally. **Production has no
 automatic migrations** — apply schema changes to the prod DB by hand (below).
+
+**Prisma CLI needs Node ≥ 20.19 / 22.** `prisma@7`'s `@prisma/dev` `require()`s
+an ESM-only dep, so on Node 20.12 every `prisma` command dies with
+`ERR_REQUIRE_ESM`. Run it with a newer Node, e.g.
+`PATH="$HOME/.local/share/mise/installs/node/22.18.0/bin:$PATH" npx prisma generate`.
+(The Docker build is fine — `node:20-alpine` is 20.19+.)
 
 ## Production / deployment
 
@@ -112,8 +176,23 @@ ssh -i ~/.ssh/mc_yoshling root@178.105.163.254 '
   docker compose up -d --no-deps web'    # rebuild web only; leave game containers
 ```
 
+The web service gained the `pz-data` + `pz-workshop` mounts and the `PZ_*` env, so
+that deploy **recreates** the web container (not just restarts it) — expected.
+Project Zomboid itself is created on first use with
+`docker compose up -d --no-deps zomboid` (it must NOT start automatically; see
+below).
+
 Back up the DB before schema-affecting deploys:
 `docker cp yoshling-web-1:/app/data/yoshling.db /root/yoshling-deploy-backup/`.
+
+**`/api/settings` edits `/opt/yoshling/docker-compose.yml` in place.** Changing the
+Minecraft version/loader/memory in the UI rewrites exactly the `TYPE`, `VERSION`
+and `MEMORY` lines *inside the `minecraft:` service block* (`patchServiceEnv`), then
+runs `docker compose up -d --force-recreate minecraft`. It used to regenerate the
+whole file from a two-service template, which silently deleted the `sevendtd` (and
+now `zomboid`) services and the volume declarations the web container mounts. If
+you ever touch that route: keep it a scoped patch, and remember `VERSION` means the
+Minecraft version in one block and the Steam branch in another.
 
 ### Applying DB migrations in production (manual)
 
@@ -127,6 +206,25 @@ docker exec yoshling-web-1 node -e "
   const c=createClient({url:'file:/app/data/yoshling.db'});
   c.execute('CREATE TABLE IF NOT EXISTS ...').then(()=>console.log('ok'));
 "
+```
+
+**Pending for the per-world-access + Project Zomboid deploy** (migration
+`20260913144054_add_game_access_and_zomboid_mods`) — run these four statements in
+order, and note the backfill: it grants every existing account all three worlds,
+so nobody currently signed in loses anything. Skip it and everyone but ADMINs
+sees an empty dashboard.
+
+```sql
+CREATE TABLE "ZomboidMod" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "title" TEXT NOT NULL DEFAULT '',
+    "modIds" TEXT NOT NULL DEFAULT '',
+    "previewUrl" TEXT,
+    "addedBy" TEXT NOT NULL DEFAULT '',
+    "addedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE "User" ADD COLUMN "games" TEXT NOT NULL DEFAULT '';
+UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 ```
 
 ### 7 Days to Die specifics
@@ -203,6 +301,79 @@ docker exec yoshling-web-1 node -e "
   (MC backups remain just the `world/` folder.) Note: tar stores members as
   `./name`, so manifest reads try `./manifest.json` first.
 
+### Project Zomboid specifics
+
+- Image: **`danixu86/project-zomboid-dedicated-server`** (Danixu/project-zomboid-server-docker
+  — the actively maintained one). The game files are **baked into the image**, so
+  there's no long SteamCMD install like 7DTD's; the only thing downloaded at
+  runtime is Workshop mods. Build 42 is what the default tag ships.
+- Everything lives in one data dir, mounted into web as `/zomboid`
+  (`PZ_SERVER_DIR`): `Server/<name>.ini` (all ~139 settings **and the mod
+  lists**), `Server/<name>_SandboxVars.lua` (loot/zombie/XP preset),
+  `Server/<name>_spawnregions.lua`, `Saves/Multiplayer/<name>/` (the world),
+  `db/<name>.db` (player accounts). Server name is `yoshling` (`SERVERNAME` /
+  `PZ_SERVER_NAME`); `serverName()` in `src/lib/zomboid.ts` discovers it from
+  disk if it ever differs.
+- **Control is RCON on 27015**, not published to the host — the web container
+  reaches it as `zomboid:27015`. `PZ_RCON_PASSWORD` (web) must match
+  `RCONPASSWORD` (the game container); the entrypoint writes that value into the
+  .ini on every boot, which is why `RCONPassword` is locked out of the settings
+  editor. `IP`/`BIND_IP` is deliberately **not** set, so RCON listens on all
+  interfaces and stays reachable from the web container.
+- **Graceful stop:** the image's entrypoint traps SIGTERM, writes `quit` to the
+  server console and blocks until the world is saved. Docker's default 10s grace
+  period would SIGKILL it mid-save, so `stop_grace_period: 120s` is set in
+  compose *and* the driver passes `docker stop -t 120` / `docker restart -t 120`.
+  (`LOCK_MAX_MS` in `game-manager` is 300s to cover a hand-off that includes one.)
+- **The .ini is the single source of truth, and that's load-bearing.** The image
+  rewrites .ini keys from env vars, but only for keys whose env var is *set*. So:
+  - `SELF_MANAGED_MODS: "true"` keeps its hands off `Mods` / `WorkshopItems`.
+  - `PASSWORD`, `PUBLIC` and `DISPLAYNAME` are deliberately **absent** from
+    docker-compose, because those are `Password` / `Public` / `PublicName` in the
+    Settings page. Setting any of them in compose would silently overwrite the UI
+    on every restart.
+- **Mods = two lists that must agree** (`/zomboid/mods`, `/api/zomboid/mods`):
+  - `WorkshopItems=2169435993;2200148440` — what the server *downloads*.
+  - `Mods=\AuthenticZ;\Brita` — what it then *loads* (mod folder names).
+    **Build 42 requires the leading backslash** per entry; B41 does not.
+    `modIdPrefix()` mirrors whatever the file already uses and defaults to B42.
+  - Having one without the other is the classic "my mods aren't working" trap, so
+    the route always writes both, and a mod with no mod id is flagged in the UI
+    rather than failing silently.
+  - Mod ids come from, in order: what's already on disk
+    (`/zomboid-workshop/content/108600/<id>/mods/<modId>/`, read-only mount), the
+    `Mod ID: X` line in the Workshop description, or typed in by hand on the
+    card. Titles/thumbnails come from Steam's public
+    `ISteamRemoteStorage/GetPublishedFileDetails` (no API key needed) and are
+    cached in the `ZomboidMod` table — the .ini stays authoritative for what's
+    enabled.
+  - Timing to tell players: a mod **downloads on the next start and loads on the
+    one after that**.
+- **Settings:** `/api/zomboid/config` exposes the whole .ini generically (the `#`
+  comment above each key becomes its help text). `INFRA_KEYS` in
+  `src/lib/zomboid.ts` (RCON + the published ports) plus `Mods`/`WorkshopItems`
+  are locked out of that editor — the ports would break connectivity, and the mod lists
+  belong to the Mods page. Quick settings (name/password/max players/public/PVP/
+  pause-when-empty) write to the same endpoint, so there's no second copy to
+  drift. Sandbox options are Lua, not .ini — the page points at the file browser.
+- **Config import** (`/api/zomboid/config/import`, the card on the Settings page):
+  upload an existing server's `.ini` to move a server you already ran. It
+  replaces the file wholesale — settings *and* both mod lists, which is usually
+  the point — but **puts this box's `INFRA_KEYS` back** (RCON password/port,
+  DefaultPort, UDPPort, SteamPort1/2), so an imported config can't take the app's
+  control channel or point the server at unpublished ports. POST without
+  `apply` returns a preview (what changes / what's added / what's dropped / which
+  keys stay local / which mods come across); POST with `apply: true` backs the
+  current file up to `<name>.ini.bak-<stamp>` and writes. An import whose
+  `Mods=` names ids that no Workshop item provides shows up in the Mods page's
+  "Loaded without a Workshop item" list — that's the intended catch.
+- **Backups** bundle `Saves/Multiplayer/<name>` + `db/<name>.db` + `Server/<name>*`
+  + a `manifest.json`, so one restore rebuilds the world, the accounts and the
+  settings together.
+- **Firewall:** as with the other games, the ports must be open in BOTH the box's
+  `ufw` and the Hetzner Cloud Firewall — 16261/udp + 16262/udp (game) and
+  8766-8767/udp (Steam query, needed for the public server list).
+
 ### TLS / the domain
 
 `yoshling.xyz` is proxied through **Cloudflare** (DNS resolves to Cloudflare IPs,
@@ -244,9 +415,13 @@ connect **directly to the box IP `178.105.163.254`**:
   `178.105.163.254:26900`. 7DTD's direct-connect box often only accepts a
   **literal IP**, so the IP is the reliable one. The `7dtd` A record is also
   DNS-only. (`connect` in `games.ts` is a `string[]` so a game can list several.)
+- **Project Zomboid:** `pz.yoshling.xyz:16261` or the raw
+  `178.105.163.254:16261`. **The `pz` A record still has to be created** as a
+  DNS-only (grey-cloud) record → the box; until then, use the IP.
 - **Firewall is two layers** — the game ports must be open in BOTH the server's
-  `ufw` (25565/tcp, 26900/tcp, 26900-26902/udp) AND the Hetzner Cloud Firewall in
-  the console. Missing either = "connect hangs, nothing in logs".
+  `ufw` (25565/tcp, 26900/tcp, 26900-26902/udp, 16261-16262/udp, 8766-8767/udp)
+  AND the Hetzner Cloud Firewall in the console. Missing either = "connect hangs,
+  nothing in logs".
 - Server-browser listing: 7DTD `ServerVisibility=2` (public) in `sdtdserver.xml`;
   set a unique `ServerName` (via 7DTD Settings) to find it, or just direct-connect.
 
@@ -259,8 +434,19 @@ connect **directly to the box IP `178.105.163.254`**:
   branch (game **V3.1.0 b11**). Telnet control, file browser (Config/Saves), world
   upload, and in-game join verified. Powered off by default (MC is the default
   active world; `GameState.activeGame = minecraft`).
-- Both `main` (local + `/opt/yoshling` on the box) at the merge of the dual-world
-  work. `GameState` + `SevenDaysConfig` tables applied to the prod DB.
+- **Project Zomboid + per-world access: written and verified locally, NOT YET
+  DEPLOYED.** Build passes, both themes reviewed, and the risky parts were tested
+  against real inputs: the .ini parser/writer round-trips a real 139-key
+  `servertest.ini` (127 keys pick up help text, a write touches only the intended
+  lines and keeps every comment) and the Steam Workshop lookup + `Mod ID:` parse
+  were checked against live Workshop items. What has **not** run yet, because it
+  needs the box: the PZ container itself, RCON control, backups, and a real mod
+  download. To deploy: apply the SQL above, `docker compose up -d --no-deps web`,
+  then `docker compose up -d --no-deps zomboid`, add the `pz` DNS record, and open
+  16261-16262/udp + 8766-8767/udp in ufw *and* the Hetzner firewall.
+- `main` (local + `/opt/yoshling` on the box) is at the dual-world merge; the
+  three-world work is on top of it locally. `GameState` + `SevenDaysConfig` are
+  applied to the prod DB; `User.games` + `ZomboidMod` are not.
 
 > Keep this file current. It's the project's living status doc — update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
@@ -269,10 +455,18 @@ connect **directly to the box IP `178.105.163.254`**:
 ## Conventions
 
 - Match the existing component style (shadcn/base-ui + Tailwind, `cn()` helper).
-- Per-game accent via the `--tint` CSS var (`GAMES[game].tint`): Minecraft =
-  emerald/teal, 7DTD = rust/orange.
+- Per-game accent via the `--tint` CSS var (`GAMES[game].tint`), all Catppuccin:
+  Minecraft = green/teal (`--mc`), 7DTD = peach/red (`--sd`), Project Zomboid =
+  blue/sapphire (`--pz`). Each has a Latte and a Mocha value in `globals.css`.
+- Per-game glyph via `GameMark` in `glyphs.tsx` (MC = creeper face, 7DTD = hazmat
+  skull, PZ = boarded window). Never branch on the game id for a glyph inline.
 - Reusable motion primitives live in `src/components/motion.tsx`; shared bits in
-  `src/components/ui-bits.tsx`. The central power indicator is `power-core.tsx`.
+  `src/components/ui-bits.tsx`. The central power indicator is `power-core.tsx`;
+  the landing's signature element is the **power bus** in `mission-control.tsx`
+  (one trunk from the core, one branch per world, only the running one energised).
+  It only draws while the cards are on a single row — the branches have to line up
+  with the columns underneath — but it always reserves its height so the spacing
+  doesn't jump.
 - **Copy tone: plain and to-the-point.** No gamer lingo or theatrical framing
   ("reactor", "horde", "hand over", "outlast", etc.). Say what a control does:
   "Start / stop the server", "Switch servers?".
@@ -280,7 +474,8 @@ connect **directly to the box IP `178.105.163.254`**:
   `PhotoStrip`), never the landing, never blocking controls. `caption` is
   optional — most footers show the photo with no text. Only two captions are
   kept: MC mods ("approves of your mod list") and MC whitelist ("I decide who
-  gets in!"); 7DTD settings shows "I cant let you get close!".
+  gets in!"); 7DTD settings shows "I cant let you get close!". PZ pages use
+  `simba.jpg` / `cat.jpg` / `the_judge.jpg`, all captionless.
 - Easter egg: `MikuEasterEgg` (mounted in the root layout) — resting the pointer
   in the bottom-right corner for ~1.1s reveals British Miku (image only, no
   caption). Image at `public/british-miku.webp`.

@@ -1,55 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { writeFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 
 const execAsync = promisify(exec);
 const COMPOSE_FILE = "/opt/yoshling/docker-compose.yml";
 
-function generateCompose(version: string, type: string, memory: string): string {
-  return `services:
-  minecraft:
-    image: itzg/minecraft-server
-    container_name: yoshling-mc
-    ports:
-      - "25565:25565"
-    environment:
-      EULA: "TRUE"
-      TYPE: "${type.toUpperCase()}"
-      VERSION: "${version}"
-      MEMORY: "${memory}"
-      RCON_PASSWORD: "\${RCON_PASSWORD}"
-      ENABLE_RCON: "true"
-      RCON_PORT: 25575
-    volumes:
-      - mc-data:/data
-    restart: unless-stopped
-    tty: true
-    stdin_open: true
+/**
+ * Rewrite `KEY: value` lines inside ONE compose service block, leaving the rest
+ * of the file byte-for-byte alone.
+ *
+ * This used to regenerate the whole file from a template, which silently dropped
+ * every service the template didn't know about — the 7 Days to Die and Project
+ * Zomboid containers, and the volume declarations the web container mounts. It
+ * also has to be scoped to the service: `VERSION` means the Minecraft version
+ * here and the Steam branch two services down.
+ */
+function patchServiceEnv(
+  compose: string,
+  service: string,
+  updates: Record<string, string>
+): { text: string; applied: string[] } {
+  const lines = compose.split("\n");
+  const applied: string[] = [];
 
-  web:
-    build: .
-    ports:
-      - "3000:3000"
-    env_file: .env
-    environment:
-      NODE_ENV: production
-      DOCKER_HOST: unix:///var/run/docker.sock
-    volumes:
-      - mc-data:/minecraft
-      - web-data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - minecraft
-    restart: unless-stopped
+  const startRe = new RegExp(`^(\\s*)${service}:\\s*$`);
+  let start = -1;
+  let indent = "";
+  for (let i = 0; i < lines.length; i++) {
+    const m = startRe.exec(lines[i]);
+    if (m) {
+      start = i;
+      indent = m[1];
+      break;
+    }
+  }
+  if (start < 0) return { text: compose, applied };
 
-volumes:
-  mc-data:
-  web-data:
-`;
+  // The block ends at the next non-blank line indented no deeper than the key.
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    if ((lines[i].match(/^\s*/)?.[0].length ?? 0) <= indent.length) {
+      end = i;
+      break;
+    }
+  }
+
+  for (let i = start + 1; i < end; i++) {
+    for (const [key, value] of Object.entries(updates)) {
+      const re = new RegExp(`^(\\s*${key}:\\s*)(.*)$`);
+      if (!re.test(lines[i])) continue;
+      lines[i] = lines[i].replace(re, `$1"${value}"`);
+      applied.push(key);
+    }
+  }
+
+  return { text: lines.join("\n"), applied };
 }
 
 export async function GET() {
@@ -57,6 +68,8 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   const config = await db.serverConfig.findUnique({ where: { id: "main" } });
   return NextResponse.json(config);
@@ -67,6 +80,8 @@ export async function PUT(request: NextRequest) {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   if (!hasPermission(session.user.role, "settings.edit")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -103,9 +118,20 @@ export async function PUT(request: NextRequest) {
       const finalLoader = modLoader || oldConfig?.modLoader || "fabric";
       const finalMemory = maxMemory || oldConfig?.maxMemory || "4G";
 
-      // Update docker-compose.yml with new values
-      const composeContent = generateCompose(finalVersion, finalLoader, finalMemory);
-      await writeFile(COMPOSE_FILE, composeContent, "utf-8");
+      // Patch only the minecraft service's env in docker-compose.yml
+      const current = await readFile(COMPOSE_FILE, "utf-8");
+      const { text, applied } = patchServiceEnv(current, "minecraft", {
+        TYPE: finalLoader.toUpperCase(),
+        VERSION: finalVersion,
+        MEMORY: finalMemory,
+      });
+      if (applied.length === 0) {
+        return NextResponse.json({
+          success: true,
+          warning: "Settings saved, but the minecraft service wasn't found in docker-compose.yml.",
+        });
+      }
+      await writeFile(COMPOSE_FILE, text, "utf-8");
 
       // Recreate only the minecraft container with new config
       await execAsync(

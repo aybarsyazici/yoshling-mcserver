@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { getServerStatus } from "@/lib/server-manager";
 import { getPlayerList } from "@/lib/rcon";
 import { db } from "@/lib/db";
@@ -9,6 +10,8 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = denyGame(session, "minecraft");
+  if (denied) return denied;
 
   let status: { status: string; uptime?: string } = { status: "offline" };
   try {

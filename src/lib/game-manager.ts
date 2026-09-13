@@ -2,32 +2,40 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { readFile } from "fs/promises";
 import path from "path";
-import { type GameId } from "@/lib/games";
+import { GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { getPlayerList, sendCommand as rconSend } from "@/lib/rcon";
-import { getSdtdStatus, sdtdSaveWorld, type SdtdStatus } from "@/lib/telnet";
+import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
+import { getPzStatus, pzSave } from "@/lib/zomboid";
 
 const execAsync = promisify(exec);
 
-// Cache the 7DTD telnet probe so N browser tabs / rapid polls share ONE telnet
-// session instead of each opening a connection (which spammed the game console
-// and churned the socket). Short TTL keeps the UI feeling live.
-const SDTD_STATUS_TTL = 4000;
-let sdtdStatusCache: { at: number; data: SdtdStatus } | null = null;
-let sdtdStatusInflight: Promise<SdtdStatus> | null = null;
-async function cachedSdtdStatus(): Promise<SdtdStatus> {
-  const now = Date.now();
-  if (sdtdStatusCache && now - sdtdStatusCache.at < SDTD_STATUS_TTL) return sdtdStatusCache.data;
-  if (sdtdStatusInflight) return sdtdStatusInflight; // single-flight: coalesce concurrent probes
-  sdtdStatusInflight = getSdtdStatus(8)
-    .then((data) => {
-      sdtdStatusCache = { at: Date.now(), data };
-      return data;
-    })
-    .finally(() => {
-      sdtdStatusInflight = null;
-    });
-  return sdtdStatusInflight;
+/**
+ * Wrap a live probe (7DTD telnet, PZ RCON) so N browser tabs / rapid polls
+ * share ONE connection instead of each opening its own — which spammed the
+ * game console and churned the socket. Short TTL keeps the UI feeling live;
+ * single-flight coalesces concurrent callers onto the same request.
+ */
+function cachedProbe<T>(ttlMs: number, probe: () => Promise<T>): () => Promise<T> {
+  let cache: { at: number; data: T } | null = null;
+  let inflight: Promise<T> | null = null;
+  return () => {
+    if (cache && Date.now() - cache.at < ttlMs) return Promise.resolve(cache.data);
+    if (inflight) return inflight;
+    inflight = probe()
+      .then((data) => {
+        cache = { at: Date.now(), data };
+        return data;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+    return inflight;
+  };
 }
+
+const PROBE_TTL = 4000;
+const cachedSdtdStatus = cachedProbe(PROBE_TTL, () => getSdtdStatus(8));
+const cachedPzStatus = cachedProbe(PROBE_TTL, () => getPzStatus());
 
 export type RunStatus = "online" | "offline" | "starting" | "stopping" | "installing";
 
@@ -50,6 +58,18 @@ export const RUNTIME: Record<GameId, GameRuntime> = {
     dir: process.env.SDTD_SERVER_DIR || "/sevendtd",
     ram: "5G",
   },
+  zomboid: {
+    container: "yoshling-pz",
+    dir: process.env.PZ_SERVER_DIR || "/zomboid",
+    ram: "4G",
+  },
+};
+
+/** Player cap to show before the game itself can tell us (i.e. while offline). */
+const DEFAULT_MAX_PLAYERS: Record<GameId, number> = {
+  minecraft: 20,
+  "7dtd": 8,
+  zomboid: 16,
 };
 
 // ── low-level docker helpers ────────────────────────────────────────────────
@@ -103,15 +123,21 @@ interface GameDriver {
   restart(): Promise<void>;
 }
 
+function offlineStatus(game: GameId): GameStatus {
+  return {
+    game,
+    status: "offline",
+    players: { online: 0, max: DEFAULT_MAX_PLAYERS[game], players: [] },
+  };
+}
+
 // ── Minecraft driver ────────────────────────────────────────────────────────
 
 const minecraftDriver: GameDriver = {
   async status() {
     const { container } = RUNTIME.minecraft;
     const state = await containerState(container);
-    if (state !== "running") {
-      return { game: "minecraft", status: "offline", players: { online: 0, max: 20, players: [] } };
-    }
+    if (state !== "running") return offlineStatus("minecraft");
     const startedAt = await containerStartedAt(container);
     let players = { online: 0, max: 20, players: [] as string[] };
     try {
@@ -149,12 +175,7 @@ const sevenDtdDriver: GameDriver = {
   async status() {
     const { container } = RUNTIME["7dtd"];
     const state = await containerState(container);
-    if (state === "missing") {
-      return { game: "7dtd", status: "offline", players: { online: 0, max: 8, players: [] } };
-    }
-    if (state !== "running") {
-      return { game: "7dtd", status: "offline", players: { online: 0, max: 8, players: [] } };
-    }
+    if (state !== "running") return offlineStatus("7dtd");
     const startedAt = await containerStartedAt(container);
     // The container can be "running" while SteamCMD is still installing or the
     // world is still generating; probe telnet (ONE session) to see if the game
@@ -186,9 +207,51 @@ const sevenDtdDriver: GameDriver = {
   },
 };
 
+// ── Project Zomboid driver ──────────────────────────────────────────────────
+
+// The container's entrypoint traps SIGTERM, writes `quit` to the server console
+// and blocks until the world is written out. Saving can take well over docker's
+// default 10s grace period, so every stop/restart passes an explicit timeout.
+const PZ_STOP_TIMEOUT = 120;
+
+const zomboidDriver: GameDriver = {
+  async status() {
+    const { container } = RUNTIME.zomboid;
+    const state = await containerState(container);
+    if (state !== "running") return offlineStatus("zomboid");
+    const startedAt = await containerStartedAt(container);
+    // The container is "running" while the JVM boots and Workshop mods
+    // download; RCON only answers once the world is actually loaded.
+    const s = await cachedPzStatus();
+    return {
+      game: "zomboid",
+      status: s.reachable ? "online" : "starting",
+      uptime: startedAt ? fmtUptime(startedAt) : undefined,
+      players: s.players,
+    };
+  },
+  async start() {
+    await execAsync(`docker start ${RUNTIME.zomboid.container}`);
+  },
+  async gracefulStop() {
+    try {
+      await pzSave();
+      await new Promise((r) => setTimeout(r, 1000));
+    } catch {}
+    await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${RUNTIME.zomboid.container}`);
+  },
+  async restart() {
+    try {
+      await pzSave();
+    } catch {}
+    await execAsync(`docker restart -t ${PZ_STOP_TIMEOUT} ${RUNTIME.zomboid.container}`);
+  },
+};
+
 const DRIVERS: Record<GameId, GameDriver> = {
   minecraft: minecraftDriver,
   "7dtd": sevenDtdDriver,
+  zomboid: zomboidDriver,
 };
 
 // ── public API ──────────────────────────────────────────────────────────────
@@ -198,19 +261,12 @@ export async function getGameStatus(game: GameId): Promise<GameStatus> {
 }
 
 export async function getAllStatus(): Promise<Record<GameId, GameStatus>> {
-  const [mc, sd] = await Promise.all([
-    DRIVERS.minecraft.status().catch(() => ({
-      game: "minecraft" as GameId,
-      status: "offline" as RunStatus,
-      players: { online: 0, max: 20, players: [] },
-    })),
-    DRIVERS["7dtd"].status().catch(() => ({
-      game: "7dtd" as GameId,
-      status: "offline" as RunStatus,
-      players: { online: 0, max: 8, players: [] },
-    })),
-  ]);
-  return { minecraft: mc, "7dtd": sd };
+  const entries = await Promise.all(
+    GAME_LIST.map(
+      async (g) => [g.id, await DRIVERS[g.id].status().catch(() => offlineStatus(g.id))] as const
+    )
+  );
+  return Object.fromEntries(entries) as Record<GameId, GameStatus>;
 }
 
 export interface HandoffStep {
@@ -235,7 +291,9 @@ export interface ControlLock {
   since: number;
 }
 
-const LOCK_MAX_MS = 120_000;
+// Generous: a Project Zomboid stop waits for the world to finish saving (up to
+// PZ_STOP_TIMEOUT), and a hand-off does that *before* starting the next world.
+const LOCK_MAX_MS = 300_000;
 let controlLock: ControlLock | null = null;
 
 export class ControlBusyError extends Error {
@@ -267,17 +325,16 @@ async function withControlLock<T>(game: GameId, action: ControlAction, fn: () =>
 }
 
 /**
- * Power on `game`. Because the host cannot run both at once, this first
- * gracefully saves + stops the *other* game if it is running. Returns the
- * sequence of steps performed (for the UI's live progress display).
+ * Power on `game`. Because the host cannot run more than one world at a time,
+ * this first gracefully saves + stops any *other* game that is running.
+ * Returns the sequence of steps performed (for the UI's live progress display).
  */
 export async function powerOn(game: GameId): Promise<HandoffStep[]> {
   return withControlLock(game, "start", async () => {
-    const other: GameId = game === "minecraft" ? "7dtd" : "minecraft";
     const steps: HandoffStep[] = [];
 
-    const otherState = await containerState(RUNTIME[other].container);
-    if (otherState === "running") {
+    for (const other of otherGames(game)) {
+      if ((await containerState(RUNTIME[other].container)) !== "running") continue;
       steps.push({ step: "save", game: other });
       steps.push({ step: "stop", game: other });
       await DRIVERS[other].gracefulStop();

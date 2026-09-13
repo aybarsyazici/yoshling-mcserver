@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { denyGame } from "@/lib/game-gate";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { readFile } from "fs/promises";
@@ -32,6 +33,9 @@ export async function GET(request: NextRequest) {
   if (!isGameId(game)) {
     return NextResponse.json({ error: "Unknown game" }, { status: 400 });
   }
+  const denied = denyGame(session, game);
+  if (denied) return denied;
+
   const container = RUNTIME[game].container;
   const history = await getHistory(game);
 

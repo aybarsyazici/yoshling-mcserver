@@ -9,9 +9,12 @@ export async function register() {
 
     // Record CPU/memory history per game container so each world's Monitor
     // tab keeps its own graph, independent of which one is currently running.
+    // Kept inline (not imported from game-manager) because this runs before the
+    // app boots; keep it in step with RUNTIME there.
     const CONTAINERS: Record<string, string> = {
       minecraft: "yoshling-mc",
       "7dtd": "yoshling-7dtd",
+      zomboid: "yoshling-pz",
     };
 
     async function collectFor(game: string, container: string) {

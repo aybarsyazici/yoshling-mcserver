@@ -1,5 +1,7 @@
-// Hand-drawn SVG glyphs that give the two worlds their own visual language,
-// plus a few utility marks. Kept crisp at any size; inherit currentColor.
+// Hand-drawn SVG glyphs that give each world its own visual language, plus a
+// few utility marks. Kept crisp at any size; inherit currentColor.
+
+import { type GameId } from "@/lib/games";
 
 type P = { className?: string; style?: React.CSSProperties };
 
@@ -31,6 +33,31 @@ export function ZombieGlyph({ className, style }: P) {
       <path d="M9 17h6M10 15.6v2.8M12 15.6v2.8M14 15.6v2.8" />
     </svg>
   );
+}
+
+/** Boarded-up window — the Project Zomboid image, and not another skull. */
+export function ZomboidGlyph({ className, style }: P) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden>
+      {/* window frame + panes */}
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
+        <rect x="3.6" y="3.2" width="16.8" height="17.6" rx="1.2" />
+        <path d="M12 3.2v17.6M3.6 12h16.8" opacity="0.4" />
+      </g>
+      {/* boards nailed across it */}
+      <g fill="currentColor">
+        <path d="M1.6 8.9 22.4 5.6v3.3L1.6 12.2z" />
+        <path d="M1.6 15.1 22.4 11.8v3.3L1.6 18.4z" />
+      </g>
+    </svg>
+  );
+}
+
+/** The right glyph for a world. Keeps the per-game branch in exactly one place. */
+export function GameMark({ game, className, style }: P & { game: GameId }) {
+  if (game === "minecraft") return <MinecraftGlyph className={className} style={style} />;
+  if (game === "7dtd") return <ZombieGlyph className={className} style={style} />;
+  return <ZomboidGlyph className={className} style={style} />;
 }
 
 export function PowerGlyph({ className, style }: P) {

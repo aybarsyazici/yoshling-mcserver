@@ -52,6 +52,49 @@ services:
     tty: true
     stdin_open: true
 
+  # Project Zomboid dedicated server. The game files are baked into the image, so
+  # there's no long first-boot install like 7DTD's; Workshop mods are what gets
+  # downloaded, on the first start after they're added.
+  #
+  # IMPORTANT: SELF_MANAGED_MODS keeps the image's entrypoint away from the
+  # Mods/WorkshopItems lines in the server .ini — the web UI owns those. For the
+  # same reason PASSWORD, PUBLIC and DISPLAYNAME are deliberately NOT set here:
+  # the entrypoint only rewrites those keys when the env var exists, and the
+  # Settings page is where they're meant to be edited.
+  zomboid:
+    image: danixu86/project-zomboid-dedicated-server:latest
+    container_name: yoshling-pz
+    ports:
+      - "16261:16261/udp" # game
+      - "16262:16262/udp" # direct connections
+      - "8766:8766/udp" # steam query
+      - "8767:8767/udp" # steam
+    environment:
+      SERVERNAME: "yoshling"
+      ADMINUSERNAME: "admin"
+      ADMINPASSWORD: "${PZ_ADMIN_PASSWORD:-changemeplease}"
+      # Must match PZ_RCON_PASSWORD below; the app controls the server over RCON.
+      RCONPASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
+      SELF_MANAGED_MODS: "true"
+      MIN_MEMORY: "2048m"
+      MAX_MEMORY: "4096m"
+      PORT: "16261"
+      UDPPORT: "16262"
+      MODFOLDERS: "workshop,steam,mods"
+      TZ: "Europe/London"
+    volumes:
+      - pz-data:/home/steam/Zomboid
+      - pz-workshop:/home/steam/pz-dedicated/steamapps/workshop
+    # The entrypoint traps SIGTERM, writes `quit` to the server console and waits
+    # for the world to be saved. Docker's default 10s grace period would SIGKILL
+    # it mid-save, so both this and the app's `docker stop -t` allow 2 minutes.
+    stop_grace_period: 120s
+    # Same as 7DTD: never auto-start, the web UI powers it on deliberately so the
+    # box never tries to run two worlds at once.
+    restart: "no"
+    tty: true
+    stdin_open: true
+
   web:
     build: .
     ports:
@@ -68,6 +111,13 @@ services:
       SDTD_TELNET_HOST: "sevendtd"
       SDTD_TELNET_PORT: "8081"
       SDTD_TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
+      PZ_SERVER_DIR: "/zomboid"
+      PZ_WORKSHOP_DIR: "/zomboid-workshop"
+      PZ_SERVER_NAME: "yoshling"
+      # RCON isn't published to the host; reached over the compose network.
+      PZ_RCON_HOST: "zomboid"
+      PZ_RCON_PORT: "27015"
+      PZ_RCON_PASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
       # Large world uploads bypass Cloudflare's 100MB cap via this direct host.
       NEXT_PUBLIC_DIRECT_UPLOAD_HOST: "${DIRECT_UPLOAD_HOST:-}"
       NEXT_PUBLIC_DIRECT_UPLOAD_ORIGIN: "${DIRECT_UPLOAD_HOST:-}"
@@ -75,6 +125,9 @@ services:
       - mc-data:/minecraft
       - sdtd-saves:/sevendtd
       - sdtd-server:/sevendtd-config
+      - pz-data:/zomboid
+      # Read-only: the mods page only reads mod ids off disk from here.
+      - pz-workshop:/zomboid-workshop:ro
       - web-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -88,3 +141,5 @@ volumes:
   sdtd-saves:
   sdtd-backup:
   sdtd-log:
+  pz-data:
+  pz-workshop:

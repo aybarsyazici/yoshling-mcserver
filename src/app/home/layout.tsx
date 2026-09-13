@@ -26,7 +26,7 @@ export default async function HomeLayout({ children }: { children: React.ReactNo
         >
           yoshiane
         </a>
-        {" · "}one box, two worlds
+        {" · "}one box, three worlds
       </footer>
     </div>
   );
