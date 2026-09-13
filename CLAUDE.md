@@ -27,10 +27,23 @@ Four containers via `docker compose` (see `docker-compose.yml`):
 | `yoshling-pz` | `danixu86/project-zomboid-dedicated-server` | Project Zomboid, ports 16261-16262/udp + 8766-8767/udp, RCON 27015 (unpublished) | host `zomboid` |
 | `yoshling-web-1` | this app | Next.js dashboard | — |
 
-The **web container runs as root** with `docker-cli` installed and the docker
-socket bind-mounted — that's how it does `docker start/stop/inspect/stats/logs`
-on the game containers. **Do not** revert the Dockerfile to a non-root user or
-drop docker-cli; the app cannot control containers without them.
+The **web container runs as root** with `docker-cli` **and `docker-cli-compose`**
+installed, the docker socket bind-mounted, and the deploy dir mounted at
+`/opt/yoshling` (same path inside and out). **Do not** revert the Dockerfile to a
+non-root user, drop either docker package, or remove the `./:/opt/yoshling` mount.
+
+- socket + docker-cli → `docker start/stop/inspect/stats/logs`
+- compose plugin + the mounted deploy dir → recreating a container to apply a
+  config change. **A container's env, ports and mounts are fixed when it is
+  created**, so `docker restart` can never apply a new memory value or image
+  version. Only a recreate can, and compose is the only way to do that without
+  losing the container's labels, network aliases and mounts.
+- `recreateService()` in `game-manager` is the one sanctioned way to do it, and
+  `assertSingleContainer()` runs afterwards: it refuses to continue if the name
+  now has 0 or 2+ containers, or if the container lost its compose labels. Never
+  hand-build `docker run` — that produces a container compose can't adopt, and
+  the next `docker compose up` either errors on the name or orphans it. (The 7DTD
+  update route used to do exactly that; it flips `START_MODE` in compose now.)
 
 ### Game abstraction
 
@@ -376,6 +389,25 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
     docker-compose, because those are `Password` / `Public` / `PublicName` in the
     Settings page. Setting any of them in compose would silently overwrite the UI
     on every restart.
+- **Memory: 4 GB is not enough for a big mod list.** On 2026-09-13 the PZ server
+  was **OOM-killed by the kernel** (`OOMKilled=true`) with 76 mods installed and
+  `-Xmx4096m`, after GC-thrash symptoms in the log (`SteamnetworkingSockets
+  service thread waited 132ms for lock`, `IPC function call ... took too long`).
+  The box has 7.6 GB total. Note the failure was a *kernel* OOM kill, not a Java
+  `OutOfMemoryError`, so total RSS — heap **plus** the off-heap/mmap'd map and
+  tile data — was the limit. Raising the heap alone may not be enough; a large
+  collection of map/tile packs may simply not fit on this box. Change it on the
+  Settings page (see "Server memory").
+- **Dependency resolution needs `STEAM_API_KEY`.** The keyless Workshop endpoint
+  returns no dependency data at all; `IPublishedFileService/GetDetails` with a key
+  adds `children`, which is the Workshop's "Required items" list. Adding a mod
+  pulls its required items in and puts them **before** it in both lists, since PZ
+  loads `Mods=` in order and a library must precede its consumer. Without a key it
+  falls back and behaves as before.
+- **Map mods need a THIRD list the mod manager does not own yet: `Map=`.** A map
+  mod that's in `WorkshopItems` and `Mods` still shows nothing in-game until its
+  map name is added to `Map=` (first entry wins where two maps overlap). The add
+  route detects the Workshop "Map" tag and says so, but doesn't edit `Map=`.
 - **Mods = two lists that must agree** (`/zomboid/mods`, `/api/zomboid/mods`):
   - `WorkshopItems=2169435993;2200148440` — what the server *downloads*.
   - `Mods=\AuthenticZ;\Brita` — what it then *loads* (mod folder names).
