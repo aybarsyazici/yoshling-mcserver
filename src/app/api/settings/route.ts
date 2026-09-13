@@ -4,6 +4,7 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { COMPOSE_FILE, patchServiceEnv, readCompose, writeCompose } from "@/lib/compose";
+import { COMPOSE_PROJECT } from "@/lib/game-manager";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -79,7 +80,7 @@ export async function PUT(request: NextRequest) {
 
       // Recreate only the minecraft container with new config
       await execAsync(
-        `cd ${path.dirname(COMPOSE_FILE)} && docker compose up -d --force-recreate minecraft`
+        `cd ${path.dirname(COMPOSE_FILE)} && docker compose -p ${COMPOSE_PROJECT} up -d --no-deps --force-recreate minecraft`
       );
     } catch (e: any) {
       return NextResponse.json({

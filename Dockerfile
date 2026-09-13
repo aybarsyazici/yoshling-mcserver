@@ -18,7 +18,13 @@ ENV NODE_ENV=production
 # The web app controls game containers by shelling out to the Docker CLI
 # against the mounted /var/run/docker.sock, so it needs the client installed
 # and must run as root to access the socket.
-RUN apk add --no-cache docker-cli
+#
+# docker-cli-compose is the `docker compose` plugin, and it is REQUIRED: the
+# routes that change a container's configuration (memory, MC version, 7DTD
+# update) recreate it through compose. Without the plugin those commands fail,
+# and the temptation is to hand-build `docker run` instead — which produces a
+# container with no compose labels that a later `docker compose up` can't adopt.
+RUN apk add --no-cache docker-cli docker-cli-compose
 RUN mkdir -p /app/data
 
 COPY --from=builder /app/public ./public

@@ -128,6 +128,11 @@ services:
       - pz-data:/zomboid
       # Read-only: the mods page only reads mod ids off disk from here.
       - pz-workshop:/zomboid-workshop:ro
+      # The deploy dir itself, at the same path inside and out, so the app can
+      # read and patch THIS file and run `docker compose` against it. Changing a
+      # container's memory/version means recreating it, and compose is the only
+      # way to do that without losing its labels, aliases and mounts.
+      - ./:/opt/yoshling
       - web-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:

@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
+import { recreateService } from "@/lib/game-manager";
 import { installMod, removeMod } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
 import { exec } from "child_process";
@@ -10,7 +11,6 @@ import { promisify } from "util";
 import { writeFile } from "fs/promises";
 
 const execAsync = promisify(exec);
-const MC_CONTAINER = "yoshling-mc";
 const COMPOSE_FILE = "/opt/yoshling/docker-compose.yml";
 
 function generateCompose(version: string, type: string, memory: string): string {
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
       const memory = serverConfig.maxMemory || "4G";
       const composeContent = generateCompose(finalMcVersion, finalLoader, memory);
       await writeFile(COMPOSE_FILE, composeContent, "utf-8");
-      await execAsync(`cd /opt/yoshling && docker compose up -d --force-recreate minecraft`);
+      await recreateService("minecraft", { start: true });
     } catch {}
 
     serverConfig = { ...serverConfig, mcVersion: finalMcVersion, modLoader: finalLoader };

@@ -113,6 +113,45 @@ async function containerStartedAt(container: string): Promise<number | null> {
   }
 }
 
+/**
+ * Every recreate goes through compose, pinned to the same project name, so the
+ * new container inherits the labels, network aliases, ports and mounts of the
+ * old one. Hand-building `docker run` instead is what produces a container
+ * compose can't adopt — and then the next `docker compose up` either errors on
+ * the name or orphans it.
+ */
+export const COMPOSE_PROJECT = process.env.COMPOSE_PROJECT_NAME || "yoshling";
+
+function composeCmd(args: string): string {
+  return `cd ${path.dirname(COMPOSE_FILE)} && docker compose -p ${COMPOSE_PROJECT} ${args}`;
+}
+
+/**
+ * After any recreate: exactly one container may own the name, and it must be
+ * compose-managed. Anything else means we've made a mess and should say so
+ * loudly rather than leave a duplicate or an orphan behind.
+ */
+async function assertSingleContainer(name: string, service: string): Promise<void> {
+  const { stdout } = await execAsync(
+    `docker ps -a --filter name=^/${name}$ --format '{{.ID}}|{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}'`
+  );
+  const rows = stdout.trim().split("\n").filter(Boolean);
+
+  if (rows.length === 0) throw new Error(`${name} is gone after the recreate — check the server`);
+  if (rows.length > 1) {
+    throw new Error(
+      `${name} now has ${rows.length} containers. Remove the extras with \`docker rm\` before continuing.`
+    );
+  }
+  const [, project, svc] = rows[0].split("|");
+  if (project !== COMPOSE_PROJECT || svc !== service) {
+    throw new Error(
+      `${name} isn't managed by compose any more (project=${project || "none"}, service=${svc || "none"}). ` +
+        `Recreate it with \`docker compose up -d --no-deps ${service}\`.`
+    );
+  }
+}
+
 function fmtUptime(startMs: number): string {
   const diff = Date.now() - startMs;
   const h = Math.floor(diff / 3600000);
@@ -382,6 +421,32 @@ export async function restartGame(game: GameId): Promise<void> {
 /** Host RAM to leave for the OS, the web app and the other containers. */
 export const MAX_GAME_GB = 6;
 
+/**
+ * Replace a game's container from the compose file — the ONLY sanctioned way to
+ * apply a configuration change, because a container's env, ports and mounts are
+ * fixed when it's created.
+ *
+ * `start: false` uses `compose create`, which recreates the container without
+ * running it: a stopped world must stay stopped, or changing its settings would
+ * quietly start it and evict whichever world currently holds the box.
+ * Either way the result is checked for duplicates before we return.
+ */
+export async function recreateService(
+  game: GameId,
+  { start }: { start: boolean }
+): Promise<void> {
+  const rt = RUNTIME[game];
+  await execAsync(
+    composeCmd(
+      start
+        ? `up -d --no-deps --force-recreate ${rt.service}`
+        : `create --force-recreate ${rt.service}`
+    ),
+    { timeout: 180000 }
+  );
+  await assertSingleContainer(rt.container, rt.service);
+}
+
 export interface MemoryState {
   game: GameId;
   /** False for games with no configurable heap (7 Days to Die). */
@@ -490,12 +555,8 @@ export async function setMemory(game: GameId, gb: number): Promise<MemoryState> 
       await DRIVERS[game].gracefulStop();
     }
 
-    // `create` rather than `up`: a stopped world must STAY stopped, or changing
-    // its memory would quietly start it and evict whichever world holds the box.
-    await execAsync(
-      `cd ${path.dirname(COMPOSE_FILE)} && docker compose create --force-recreate ${rt.service}`,
-      { timeout: 180000 }
-    );
+    // Recreate without starting, then start again only if it was running before.
+    await recreateService(game, { start: false });
     if (wasRunning) await DRIVERS[game].start();
 
     return getMemoryState(game);
