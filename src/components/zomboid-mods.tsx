@@ -73,8 +73,15 @@ export function ZomboidMods({ tint }: { tint: string }) {
         return;
       }
       setInput("");
+      const deps = (data.addedDependencies ?? []) as { title: string }[];
+      const depNote =
+        deps.length > 0
+          ? `Also added ${deps.length} required mod${deps.length === 1 ? "" : "s"}: ${deps
+              .map((d) => d.title)
+              .join(", ")}. `
+          : "";
       toast.success(`Added ${data.title || data.workshopId}`, {
-        description: data.warning ?? "Restart Project Zomboid to download and load it.",
+        description: depNote + (data.warning ?? "Restart Project Zomboid to download and load it."),
       });
       await load();
     } catch {

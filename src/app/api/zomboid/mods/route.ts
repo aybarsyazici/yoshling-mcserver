@@ -16,8 +16,14 @@ import { installedModIds, readModState, splitList, writeModState } from "@/lib/z
  * server has downloaded an item we read the real mod ids off disk instead.
  */
 
+// Two Steam endpoints, because they return different things:
+//  - the keyless one has no dependency data at all
+//  - the keyed one adds `children`, i.e. the Workshop's own "Required items"
+// So required items can only be resolved when STEAM_API_KEY is set.
 const STEAM_DETAILS_URL =
   "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
+const STEAM_KEYED_DETAILS_URL =
+  "https://api.steampowered.com/IPublishedFileService/GetDetails/v1/";
 const PZ_STEAM_APP_ID = 108600;
 
 interface WorkshopDetail {
@@ -26,6 +32,10 @@ interface WorkshopDetail {
   previewUrl: string | null;
   /** Mod ids advertised in the item's description. */
   describedModIds: string[];
+  /** Workshop ids this item lists as required. Empty without an API key. */
+  requires: string[];
+  /** True when the item is tagged as a map — those also need a `Map=` entry. */
+  isMap: boolean;
   ok: boolean;
   wrongGame: boolean;
 }
@@ -49,15 +59,57 @@ function modIdsFromDescription(description: string): string[] {
   return Array.from(found);
 }
 
+function toDetail(d: Record<string, unknown>): WorkshopDetail {
+  const appId = Number(d.consumer_app_id ?? d.consumer_appid ?? d.creator_app_id ?? 0);
+  const tags = (Array.isArray(d.tags) ? d.tags : []).map((t) =>
+    String((t as Record<string, unknown>)?.tag ?? "").toLowerCase()
+  );
+  const children = Array.isArray(d.children) ? d.children : [];
+  return {
+    id: String(d.publishedfileid),
+    title: String(d.title ?? ""),
+    previewUrl: d.preview_url ? String(d.preview_url) : null,
+    describedModIds: modIdsFromDescription(
+      String(d.file_description ?? d.description ?? "")
+    ),
+    requires: children.map((c) => String((c as Record<string, unknown>).publishedfileid)),
+    isMap: tags.includes("map"),
+    ok: Number(d.result ?? 1) === 1,
+    wrongGame: Number(d.result ?? 1) === 1 && appId !== 0 && appId !== PZ_STEAM_APP_ID,
+  };
+}
+
 async function fetchWorkshopDetails(ids: string[]): Promise<Map<string, WorkshopDetail>> {
   const out = new Map<string, WorkshopDetail>();
   if (ids.length === 0) return out;
 
-  const body = new URLSearchParams();
-  body.set("itemcount", String(ids.length));
-  ids.forEach((id, i) => body.set(`publishedfileids[${i}]`, id));
+  const key = process.env.STEAM_API_KEY;
 
+  // Preferred: the keyed endpoint, which also tells us the required items.
+  if (key) {
+    try {
+      const q = new URLSearchParams({ key, includechildren: "true", includetags: "true" });
+      ids.forEach((id, i) => q.set(`publishedfileids[${i}]`, id));
+      const res = await fetch(`${STEAM_KEYED_DETAILS_URL}?${q}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) {
+        for (const d of (await res.json())?.response?.publishedfiledetails ?? []) {
+          out.set(String(d.publishedfileid), toDetail(d));
+        }
+        if (out.size > 0) return out;
+      }
+    } catch {
+      // fall through to the keyless endpoint
+    }
+  }
+
+  // Fallback: no key, or the keyed call failed. Same data minus dependencies.
   try {
+    const body = new URLSearchParams();
+    body.set("itemcount", String(ids.length));
+    ids.forEach((id, i) => body.set(`publishedfileids[${i}]`, id));
     const res = await fetch(STEAM_DETAILS_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -65,18 +117,8 @@ async function fetchWorkshopDetails(ids: string[]): Promise<Map<string, Workshop
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });
-    const json = await res.json();
-    const details = json?.response?.publishedfiledetails ?? [];
-    for (const d of details) {
-      const appId = Number(d?.consumer_app_id ?? d?.creator_app_id ?? 0);
-      out.set(String(d.publishedfileid), {
-        id: String(d.publishedfileid),
-        title: String(d.title ?? ""),
-        previewUrl: d.preview_url ? String(d.preview_url) : null,
-        describedModIds: modIdsFromDescription(d.description ?? ""),
-        ok: Number(d.result) === 1,
-        wrongGame: Number(d.result) === 1 && appId !== 0 && appId !== PZ_STEAM_APP_ID,
-      });
+    for (const d of (await res.json())?.response?.publishedfiledetails ?? []) {
+      out.set(String(d.publishedfileid), toDetail(d));
     }
   } catch {
     // Steam unreachable — callers fall back to whatever is cached / on disk.
@@ -243,11 +285,46 @@ export async function POST(request: NextRequest) {
     explicit.length > 0 ? explicit : onDisk.length > 0 ? onDisk : detail?.describedModIds ?? []
   );
 
+  // Required items, from the Workshop's own "Required items" list. A mod whose
+  // dependency is missing usually fails quietly, so pull them in with it rather
+  // than leaving the user to notice. One level deep, which is as deep as PZ
+  // dependency chains realistically go.
+  const missingDeps = (detail?.requires ?? []).filter(
+    (id) => id !== workshopId && !state.workshopIds.includes(id)
+  );
+  const depDetails = await fetchWorkshopDetails(missingDeps);
+  const addedDeps: { workshopId: string; title: string; modIds: string[] }[] = [];
+  for (const depId of missingDeps) {
+    const dep = depDetails.get(depId);
+    if (dep && !dep.ok) continue;
+    const depMods = dedupe(
+      (await installedModIds(depId)).concat(dep?.describedModIds ?? [])
+    );
+    addedDeps.push({ workshopId: depId, title: dep?.title ?? depId, modIds: depMods });
+  }
+
   await writeModState({
-    workshopIds: dedupe([...state.workshopIds, workshopId]),
-    modIds: dedupe([...state.modIds, ...modIds]),
+    // Dependencies go BEFORE the mod that needs them: PZ loads `Mods=` in order
+    // and a library has to be loaded before whatever uses it.
+    workshopIds: dedupe([...state.workshopIds, ...addedDeps.map((d) => d.workshopId), workshopId]),
+    modIds: dedupe([...state.modIds, ...addedDeps.flatMap((d) => d.modIds), ...modIds]),
     prefix: state.prefix,
   });
+
+  for (const dep of addedDeps) {
+    await db.zomboidMod
+      .upsert({
+        where: { id: dep.workshopId },
+        update: { title: dep.title, modIds: dep.modIds.join(";") },
+        create: {
+          id: dep.workshopId,
+          title: dep.title,
+          modIds: dep.modIds.join(";"),
+          addedBy: session.user.id,
+        },
+      })
+      .catch(() => {});
+  }
 
   await db.zomboidMod
     .upsert({
@@ -281,17 +358,29 @@ export async function POST(request: NextRequest) {
     })
     .catch(() => {});
 
+  const notes: string[] = [];
+  if (modIds.length === 0) {
+    // No mod id means the server can download the item but won't load it.
+    notes.push(
+      "Couldn't work out this mod's id. Start the server once to download it — the id will then be read off disk — or type it in on the mod's card."
+    );
+  }
+  if (detail?.isMap) {
+    // A map mod needs a third list the mod manager doesn't own.
+    notes.push(
+      "This is a map mod, so it also needs its map name added to `Map=` in the server settings before the new areas appear."
+    );
+  }
+
   return NextResponse.json({
     success: true,
     workshopId,
     title: detail?.title ?? "",
     previewUrl: detail?.previewUrl ?? null,
     modIds,
-    // No mod id means the server can download the item but won't load it.
-    warning:
-      modIds.length === 0
-        ? "Couldn't work out this mod's id. Start the server once to download it — the id will then be read off disk — or type it in on the mod's card."
-        : undefined,
+    isMap: detail?.isMap ?? false,
+    addedDependencies: addedDeps.map((d) => ({ workshopId: d.workshopId, title: d.title })),
+    warning: notes.length > 0 ? notes.join(" ") : undefined,
   });
 }
 
