@@ -434,19 +434,32 @@ connect **directly to the box IP `178.105.163.254`**:
   branch (game **V3.1.0 b11**). Telnet control, file browser (Config/Saves), world
   upload, and in-game join verified. Powered off by default (MC is the default
   active world; `GameState.activeGame = minecraft`).
-- **Project Zomboid + per-world access: written and verified locally, NOT YET
-  DEPLOYED.** Build passes, both themes reviewed, and the risky parts were tested
-  against real inputs: the .ini parser/writer round-trips a real 139-key
-  `servertest.ini` (127 keys pick up help text, a write touches only the intended
-  lines and keeps every comment) and the Steam Workshop lookup + `Mod ID:` parse
-  were checked against live Workshop items. What has **not** run yet, because it
-  needs the box: the PZ container itself, RCON control, backups, and a real mod
-  download. To deploy: apply the SQL above, `docker compose up -d --no-deps web`,
-  then `docker compose up -d --no-deps zomboid`, add the `pz` DNS record, and open
-  16261-16262/udp + 8766-8767/udp in ufw *and* the Hetzner firewall.
-- `main` (local + `/opt/yoshling` on the box) is at the dual-world merge; the
-  three-world work is on top of it locally. `GameState` + `SevenDaysConfig` are
-  applied to the prod DB; `User.games` + `ZomboidMod` are not.
+- **Project Zomboid: deployed 2026-09-13.** Container `yoshling-pz` is **created
+  but not started** (7DTD held the box at deploy time), so the first Power on from
+  the UI is what boots it. Image pulled (10.4 GB; box went 47% → 55% disk). ufw
+  has 16261/udp, 16262/udp and 8766-8767/udp. `PZ_RCON_PASSWORD` +
+  `PZ_ADMIN_PASSWORD` were generated and appended to `/opt/yoshling/.env`.
+  Verified in production: every route 401s unauthenticated, all pages render, the
+  web container can `docker inspect yoshling-pz`, the `zomboid` network alias is
+  in place, `SELF_MANAGED_MODS=true`, `PASSWORD`/`PUBLIC`/`DISPLAYNAME` absent,
+  StopTimeout=120, and the stats collector is writing `stats-zomboid.json`.
+  Verified locally against real inputs: the .ini parser/writer round-trips a real
+  139-key `servertest.ini` (writes touch only the intended lines, all comments
+  survive), the Steam Workshop lookup + `Mod ID:` parse work on live items, and
+  add/edit/remove/import all produce the correct `Mods=` / `WorkshopItems=` lines.
+  **Still untested because it needs the game running:** RCON control, backups, and
+  a real Workshop download.
+- **Per-world access: deployed.** `User.games` + `ZomboidMod` applied to the prod
+  DB; all 5 existing accounts backfilled with all three worlds. Note they are
+  **all ADMIN** — a consequence of the old signup bug (every new account was
+  created ADMIN). Demote whoever shouldn't be on the Crew page; a non-ADMIN role
+  is what makes the per-world chips take effect.
+- **Not done, needs a dashboard I don't have:** the `pz.yoshling.xyz` DNS record
+  (DNS-only / grey-cloud → the box) and the **Hetzner Cloud Firewall** rules for
+  the PZ ports. Until both exist, players connect on `178.105.163.254:16261` and
+  only if the cloud firewall lets them.
+- At deploy time the active world was **7 Days to Die** (up 6 weeks), Minecraft
+  stopped — not what an earlier version of this file claimed.
 
 > Keep this file current. It's the project's living status doc — update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
