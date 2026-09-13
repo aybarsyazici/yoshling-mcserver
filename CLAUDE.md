@@ -94,6 +94,36 @@ drop docker-cli; the app cannot control containers without them.
   both config endpoints return the same `{properties:[{name,value,help}]}` shape
   and only the grouping/dropdowns/copy differ per game.
 
+### Server memory
+
+`/api/games/memory` + the `MemoryCard` on each game's Settings page.
+
+**A container's environment is fixed when the container is created.** Editing
+`docker-compose.yml` and running `docker restart` looks like it worked and
+silently doesn't — the old heap size stays. This is the trap the Minecraft memory
+setting fell into before. So `setMemory` in `game-manager`:
+
+1. patches only that service's env in compose (`lib/compose.ts`, scoped — `MEMORY`
+   and `VERSION` mean different things in different service blocks),
+2. gracefully saves + stops the world **if it was running**,
+3. `docker compose create --force-recreate <service>` — `create`, not `up`, so a
+   stopped world **stays stopped** and changing its memory can't evict whichever
+   world currently holds the box,
+4. starts it again only if it was running before, and
+5. reads the value back off the new container.
+
+The card shows the compose value next to what the existing container was actually
+created with, and warns when they disagree — so "applied" is something you can
+see rather than assume. Verified on the box: `MAX_MEMORY=4096m` in compose →
+`MAX_MEMORY=4096m` on the container → `-Xmx4096m` in the running JVM.
+
+Per-game support lives in `RUNTIME[game].memory`: Minecraft uses `MEMORY` (`4G`
+form), Project Zomboid uses `MAX_MEMORY` (`4096m` form), and **7 Days to Die has
+none** — it's a Unity native server with no JVM, so the card says so instead of
+offering a control that does nothing. Cap is `MAX_GAME_GB` (6), leaving room for
+the OS and the dashboard on the 8 GB box. `/api/settings` no longer touches
+memory at all; it only patches `TYPE`/`VERSION`.
+
 ### Roles & per-world access
 
 Two orthogonal axes, both in `src/lib/permissions.ts`:
@@ -110,6 +140,16 @@ pages exist. The **first** Discord account to sign in becomes ADMIN with all
 worlds; **every account after that starts as MEMBER with no worlds** and an admin
 grants them on the Crew page. (Before this, *every* new account was created as
 ADMIN — that was a bug.)
+
+**Signing in vs. seeing a world are two different lists**, and conflating them
+was a bug: `/whitelist` (the page) controls who may sign in *at all*, and it and
+the `signIn` callback now share `src/lib/whitelist.ts`. Before that the page wrote
+`/app/data/whitelist.json` while `signIn` only read `ALLOWED_DISCORD_USERS`, so
+adding someone in the UI silently did nothing and Discord refused them. The file
+wins; the env var is only the seed for a fresh install; a missing or corrupt file
+falls back to env rather than locking everyone out; and matching accepts the
+Discord @handle *or* the display name. Refusals are logged with the attempted
+name. Being whitelisted grants **no** world — that's `User.games` on the Crew page.
 
 Enforcement, in layers:
 

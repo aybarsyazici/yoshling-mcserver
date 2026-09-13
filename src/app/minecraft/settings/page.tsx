@@ -17,12 +17,12 @@ import {
 import { toast } from "sonner";
 import { SectionHeading } from "@/components/ui-bits";
 import { PhotoFooter } from "@/components/photo-footer";
+import { MemoryCard } from "@/components/memory-card";
 import { GAMES } from "@/lib/games";
 
 interface ServerConfig {
   mcVersion: string;
   modLoader: string;
-  maxMemory: string;
 }
 
 interface OpEntry {
@@ -59,7 +59,6 @@ export default function SettingsPage() {
   const [config, setConfig] = useState<ServerConfig>({
     mcVersion: "1.21.4",
     modLoader: "fabric",
-    maxMemory: "4G",
   });
   const [saving, setSaving] = useState(false);
   const [mcVersions, setMcVersions] = useState<string[]>([]);
@@ -77,7 +76,7 @@ export default function SettingsPage() {
       .then((r) => r.json())
       .then((data) => {
         if (data && data.mcVersion) {
-          setConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader, maxMemory: data.maxMemory });
+          setConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader });
         }
       })
       .catch(() => {});
@@ -208,24 +207,14 @@ export default function SettingsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Max Memory</Label>
-              <Select value={config.maxMemory} onValueChange={(v) => setConfig((p) => ({ ...p, maxMemory: v ?? p.maxMemory }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2G">2 GB</SelectItem>
-                  <SelectItem value="4G">4 GB</SelectItem>
-                  <SelectItem value="6G">6 GB</SelectItem>
-                  <SelectItem value="8G">8 GB</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </div>
           <Button onClick={handleSaveConfig} disabled={saving}>
             {saving ? "Saving..." : "Save & Restart Server"}
           </Button>
         </CardContent>
       </Card>
+
+      <MemoryCard game="minecraft" tint={GAMES.minecraft.tint} />
 
       {/* Server Properties */}
       <Card className="border-border/50 shadow-sm">

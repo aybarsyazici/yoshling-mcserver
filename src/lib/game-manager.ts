@@ -6,6 +6,7 @@ import { GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { getPlayerList, sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
 import { getPzStatus, pzSave } from "@/lib/zomboid";
+import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
 
 const execAsync = promisify(exec);
 
@@ -41,27 +42,42 @@ export type RunStatus = "online" | "offline" | "starting" | "stopping" | "instal
 
 export interface GameRuntime {
   container: string;
+  /** docker-compose service name — NOT the same as the container name */
+  service: string;
   /** Directory (mounted in the web container) that holds this game's files */
   dir: string;
   ram: string;
+  /**
+   * How this game's JVM heap is configured, or undefined when it has none.
+   * 7 Days to Die is a Unity native server with no heap setting, so there is
+   * genuinely nothing to change there.
+   */
+  memory?: { keys: string[]; format: (gb: number) => string };
 }
 
 /** Per-game container + path config. Kept in one place. */
 export const RUNTIME: Record<GameId, GameRuntime> = {
   minecraft: {
     container: "yoshling-mc",
+    service: "minecraft",
     dir: process.env.MC_SERVER_DIR || "/minecraft",
     ram: "4G",
+    // itzg/minecraft-server: MEMORY sets both -Xms and -Xmx.
+    memory: { keys: ["MEMORY"], format: (gb) => `${gb}G` },
   },
   "7dtd": {
     container: "yoshling-7dtd",
+    service: "sevendtd",
     dir: process.env.SDTD_SERVER_DIR || "/sevendtd",
     ram: "5G",
   },
   zomboid: {
     container: "yoshling-pz",
+    service: "zomboid",
     dir: process.env.PZ_SERVER_DIR || "/zomboid",
     ram: "4G",
+    // The PZ image passes MAX_MEMORY straight to -Xmx.
+    memory: { keys: ["MAX_MEMORY"], format: (gb) => `${gb * 1024}m` },
   },
 };
 
@@ -352,6 +368,138 @@ export async function powerOff(game: GameId): Promise<void> {
 
 export async function restartGame(game: GameId): Promise<void> {
   return withControlLock(game, "restart", () => DRIVERS[game].restart());
+}
+
+// ── server memory ────────────────────────────────────────────────────────────
+//
+// A container's environment is fixed when the container is CREATED. `docker
+// restart` re-runs the same container with the same env, so editing compose and
+// restarting looks like it worked and silently doesn't — which is exactly the
+// trap this hit before. The only thing that applies a new heap size is
+// recreating the container, so that's what setMemory does, and it reads the
+// value back off the new container afterwards to prove it took.
+
+/** Host RAM to leave for the OS, the web app and the other containers. */
+export const MAX_GAME_GB = 6;
+
+export interface MemoryState {
+  game: GameId;
+  /** False for games with no configurable heap (7 Days to Die). */
+  supported: boolean;
+  reason?: string;
+  /** What docker-compose.yml says. */
+  configuredGb: number | null;
+  /** What the existing container was actually created with. */
+  liveGb: number | null;
+  /** configured === live, i.e. the setting is really in effect. */
+  applied: boolean;
+  running: boolean;
+  maxGb: number;
+}
+
+/** "4G" / "4096m" → GB. */
+function parseGb(value: string | null): number | null {
+  if (!value) return null;
+  const m = /^(\d+)\s*([gGmM])?$/.exec(value.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return (m[2] || "m").toLowerCase() === "g" ? n : Math.round((n / 1024) * 100) / 100;
+}
+
+/** The value a key has in the container that exists right now. */
+async function liveEnv(container: string, key: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync(
+      `docker inspect ${container} --format '{{range .Config.Env}}{{println .}}{{end}}'`
+    );
+    for (const line of stdout.split("\n")) {
+      const [k, ...rest] = line.split("=");
+      if (k.trim() === key) return rest.join("=").trim();
+    }
+  } catch {}
+  return null;
+}
+
+export async function getMemoryState(game: GameId): Promise<MemoryState> {
+  const rt = RUNTIME[game];
+  const running = (await containerState(rt.container)) === "running";
+  const base = { game, running, maxGb: MAX_GAME_GB };
+
+  if (!rt.memory) {
+    return {
+      ...base,
+      supported: false,
+      reason: `${game === "7dtd" ? "7 Days to Die" : game} has no memory setting — it's a native server, not a JVM, so the container uses what it needs.`,
+      configuredGb: null,
+      liveGb: null,
+      applied: true,
+    };
+  }
+
+  const key = rt.memory.keys[0];
+  let configuredGb: number | null = null;
+  try {
+    configuredGb = parseGb(readServiceEnv(await readCompose(), rt.service, key));
+  } catch {
+    return {
+      ...base,
+      supported: false,
+      reason: `Can't read ${COMPOSE_FILE}. Memory can only be changed on the server itself.`,
+      configuredGb: null,
+      liveGb: null,
+      applied: true,
+    };
+  }
+
+  const liveGb = parseGb(await liveEnv(rt.container, key));
+  return {
+    ...base,
+    supported: true,
+    configuredGb,
+    liveGb,
+    // No container yet = nothing to disagree with; it'll be created with the
+    // configured value on first power on.
+    applied: liveGb === null || liveGb === configuredGb,
+  };
+}
+
+/**
+ * Change the heap size and make it take effect. Serialized with the power
+ * controls, because it stops and recreates a container.
+ */
+export async function setMemory(game: GameId, gb: number): Promise<MemoryState> {
+  const rt = RUNTIME[game];
+  if (!rt.memory) throw new Error("This server has no memory setting");
+  if (!Number.isFinite(gb) || gb < 1 || gb > MAX_GAME_GB) {
+    throw new Error(`Memory must be between 1 and ${MAX_GAME_GB} GB`);
+  }
+
+  return withControlLock(game, "restart", async () => {
+    const value = rt.memory!.format(gb);
+    const updates = Object.fromEntries(rt.memory!.keys.map((k) => [k, value]));
+
+    const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
+    if (applied.length === 0) {
+      throw new Error(`Couldn't find ${rt.memory!.keys.join("/")} in the ${rt.service} service`);
+    }
+    await writeCompose(text);
+
+    const wasRunning = (await containerState(rt.container)) === "running";
+    if (wasRunning) {
+      // Save first — recreating a running game server is otherwise a hard kill.
+      await DRIVERS[game].gracefulStop();
+    }
+
+    // `create` rather than `up`: a stopped world must STAY stopped, or changing
+    // its memory would quietly start it and evict whichever world holds the box.
+    await execAsync(
+      `cd ${path.dirname(COMPOSE_FILE)} && docker compose create --force-recreate ${rt.service}`,
+      { timeout: 180000 }
+    );
+    if (wasRunning) await DRIVERS[game].start();
+
+    return getMemoryState(game);
+  });
 }
 
 // ── config file readers (shared) ─────────────────────────────────────────────

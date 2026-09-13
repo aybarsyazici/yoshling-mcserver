@@ -4,6 +4,7 @@ import { SectionHeading } from "@/components/ui-bits";
 import { ZomboidQuickSettings } from "@/components/zomboid-quick-settings";
 import { ZomboidAllSettings } from "@/components/zomboid-all-settings";
 import { ZomboidConfigImport } from "@/components/zomboid-config-import";
+import { MemoryCard } from "@/components/memory-card";
 import { GAMES } from "@/lib/games";
 
 export default function ZomboidSettingsPage() {
@@ -18,6 +19,8 @@ export default function ZomboidSettingsPage() {
       />
 
       <ZomboidQuickSettings tint={tint} />
+
+      <MemoryCard game="zomboid" tint={tint} />
 
       <ZomboidAllSettings tint={tint} />
 
