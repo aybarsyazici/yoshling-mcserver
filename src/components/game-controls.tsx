@@ -25,7 +25,7 @@ export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, busy: serverBusy, refresh } = useGames(localBusy ? 1500 : 4000);
+  const { games, busy: serverBusy, memoryGb, refresh } = useGames(localBusy ? 1500 : 4000);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
@@ -109,7 +109,13 @@ export function GameControls({ game }: { game: GameId }) {
         <div className="grid grid-cols-3 gap-2 text-center">
           <Cell label="Players" value={isOnline && players ? `${players.online}/${players.max}` : "—"} tint={meta.tint} />
           <Cell label={meta.detailLabel} value={isOnline ? snap?.detail ?? snap?.uptime ?? "live" : "—"} tint={meta.tint} />
-          <Cell label="RAM" value={`${meta.ramGb}G`} tint={meta.tint} />
+          {/* The configured heap, not a hardcoded guess — it changes when someone
+              edits it on the Settings page or the box is resized. */}
+          <Cell
+            label="RAM"
+            value={memoryGb[game] != null ? `${memoryGb[game]}G` : "—"}
+            tint={meta.tint}
+          />
         </div>
       </div>
 

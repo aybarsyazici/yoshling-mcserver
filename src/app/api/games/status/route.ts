@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getAllStatus, currentControlLock } from "@/lib/game-manager";
+import {
+  getAllStatus,
+  currentControlLock,
+  configuredMemoryGb,
+  hostTotalGb,
+} from "@/lib/game-manager";
 import { GAME_LIST } from "@/lib/games";
 import { db } from "@/lib/db";
 
@@ -33,10 +38,15 @@ export async function GET() {
     GAME_LIST.find((g) => games[g.id].status === "online" || games[g.id].status === "starting")?.id ??
     null;
 
+  // Real values, so the UI never shows a stale hardcoded number.
+  const [memoryGb, hostGb] = await Promise.all([configuredMemoryGb(), hostTotalGb()]);
+
   return NextResponse.json({
     games,
     activeGame: onlineGame ?? activeGame,
     busy: currentControlLock(),
     access,
+    memoryGb,
+    hostGb: Math.round(hostGb * 10) / 10,
   });
 }

@@ -1,29 +1,44 @@
 "use client";
 
 import { motion } from "motion/react";
-import { GAMES, HOST_RAM_GB, type GameId } from "@/lib/games";
+import { GAMES, type GameId } from "@/lib/games";
 
 /**
- * Shows the server's 8GB memory: filled by whichever game is running, empty
- * when they're all stopped. Makes the one-at-a-time limit clear.
+ * The box's memory: filled by whichever game is running, empty when they're all
+ * stopped. Makes the one-at-a-time limit clear.
+ *
+ * Both numbers come from the server (host RAM, and the world's configured heap)
+ * rather than constants — a hardcoded 8 GB was still being shown after the box
+ * was resized to 16.
  */
-export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
-  const used = activeGame ? GAMES[activeGame].ramGb : 0;
+export function RamBudget({
+  activeGame,
+  hostGb,
+  memoryGb,
+}: {
+  activeGame: GameId | null;
+  hostGb: number | null;
+  memoryGb: Partial<Record<GameId, number | null>>;
+}) {
+  const total = Math.round(hostGb ?? 0);
+  const used = activeGame ? memoryGb[activeGame] ?? 0 : 0;
   const tint = activeGame ? GAMES[activeGame].tint : "var(--muted-foreground)";
-  const pct = Math.min(100, (used / HOST_RAM_GB) * 100);
+  const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
 
   return (
     <div className="w-full">
       <div className="mb-2 flex items-center justify-between text-xs">
-        <span className="eyebrow text-muted-foreground">Server memory · {HOST_RAM_GB} GB</span>
+        <span className="eyebrow text-muted-foreground">
+          Server memory{total > 0 ? ` · ${total} GB` : ""}
+        </span>
         <span className="font-mono font-medium" style={{ color: tint }}>
-          {used} / {HOST_RAM_GB} GB
+          {used} / {total} GB
         </span>
       </div>
       <div className="relative h-3 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10">
         {/* ghost tick marks per GB */}
         <div className="absolute inset-0 flex">
-          {Array.from({ length: HOST_RAM_GB }).map((_, i) => (
+          {Array.from({ length: Math.max(1, total) }).map((_, i) => (
             <div key={i} className="flex-1 border-r border-background/60 last:border-r-0" />
           ))}
         </div>
@@ -53,7 +68,7 @@ export function RamBudget({ activeGame }: { activeGame: GameId | null }) {
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
         {activeGame
-          ? `${GAMES[activeGame].name} is using the server's memory. Starting another one stops it first.`
+          ? `${GAMES[activeGame].name} is allocated ${used} GB of the box's ${total} GB. Starting another one stops it first.`
           : "All servers are stopped."}
       </p>
     </div>

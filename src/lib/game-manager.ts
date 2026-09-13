@@ -470,6 +470,33 @@ export async function recreateService(
   await assertSingleContainer(rt.container, rt.service);
 }
 
+/**
+ * The heap size compose is configured with, per game. Read from the compose file
+ * (not `docker inspect`, which forks a process) and cached, because the status
+ * endpoint that shows it is polled every few seconds by every open tab.
+ *
+ * The UI used to display a hardcoded `ramGb` from games.ts, which silently went
+ * stale the moment anyone changed the setting or resized the box.
+ */
+const configuredMemory = cachedProbe(15_000, async (): Promise<Record<GameId, number | null>> => {
+  let compose = "";
+  try {
+    compose = await readCompose();
+  } catch {
+    return { minecraft: null, "7dtd": null, zomboid: null };
+  }
+  const out = {} as Record<GameId, number | null>;
+  for (const g of GAME_LIST) {
+    const rt = RUNTIME[g.id];
+    out[g.id] = rt.memory ? parseGb(readServiceEnv(compose, rt.service, rt.memory.keys[0])) : null;
+  }
+  return out;
+});
+
+export async function configuredMemoryGb(): Promise<Record<GameId, number | null>> {
+  return configuredMemory();
+}
+
 export interface MemoryState {
   game: GameId;
   /** Total host RAM, so the UI can explain the ceiling. */

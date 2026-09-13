@@ -42,7 +42,8 @@ export function MissionControl({
   access: GameId[];
 }) {
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, activeGame, busy: serverBusy, loading, refresh } = useGames(localBusy ? 1500 : 5000);
+  const { games, activeGame, busy: serverBusy, memoryGb, hostGb, loading, refresh } =
+    useGames(localBusy ? 1500 : 5000);
   const reduced = usePrefersReducedMotion();
   const worlds = GAME_LIST.filter((g) => access.includes(g.id));
   const layout = LAYOUT[worlds.length] ?? LAYOUT[3];
@@ -240,7 +241,7 @@ export function MissionControl({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, delay: 0.35 }}
       >
-        <RamBudget activeGame={activeGame} />
+        <RamBudget activeGame={activeGame} hostGb={hostGb} memoryGb={memoryGb} />
       </motion.div>
 
       {/* Hand-off confirm */}

@@ -28,6 +28,10 @@ export interface GamesState {
    * this list gets a card, a nav entry or a page.
    */
   access: GameId[];
+  /** Configured heap per world, from the compose file. null = no heap setting. */
+  memoryGb: Partial<Record<GameId, number | null>>;
+  /** Total host RAM in GB. */
+  hostGb: number | null;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -38,6 +42,8 @@ export function useGames(interval = 5000): GamesState {
   const [activeGame, setActiveGame] = useState<GameId | null>(null);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
+  const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
+  const [hostGb, setHostGb] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
 
@@ -51,6 +57,8 @@ export function useGames(interval = 5000): GamesState {
       setActiveGame(data.activeGame ?? null);
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
+      setMemoryGb(data.memoryGb ?? {});
+      setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
     } catch {
       /* keep last known */
     } finally {
@@ -74,5 +82,5 @@ export function useGames(interval = 5000): GamesState {
     };
   }, [refresh, interval]);
 
-  return { games, activeGame, busy, access, loading, refresh };
+  return { games, activeGame, busy, access, memoryGb, hostGb, loading, refresh };
 }

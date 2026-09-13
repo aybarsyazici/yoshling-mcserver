@@ -26,7 +26,11 @@ export interface GameMeta {
   tintDeep: string;
   /** The connect address(es) players use. Multiple = show all (e.g. hostname + IP). */
   connect: string[];
-  /** Approx RAM this world reserves, in GB, for the budget bar */
+  /**
+   * Rough RAM this world wants, in GB. Display fallback ONLY — the real figure
+   * comes from the compose file via /api/games/status, because this one goes
+   * stale the moment the setting or the box changes.
+   */
   ramGb: number;
   /** Label for the free-form `detail` metric (uptime, in-game day, …) */
   detailLabel: string;
@@ -111,7 +115,10 @@ export const GAMES: Record<GameId, GameMeta> = {
 
 export const GAME_LIST: GameMeta[] = [GAMES.minecraft, GAMES["7dtd"], GAMES.zomboid];
 
-/** Total RAM budget of the host box, in GB. Drives the "one world at a time" bar. */
+/**
+ * Fallback only. The real host size is reported by /api/games/status; this
+ * exists so nothing crashes if that hasn't loaded yet.
+ */
 export const HOST_RAM_GB = 8;
 
 /** The other worlds — the ones that must be stopped for `id` to get the box. */
