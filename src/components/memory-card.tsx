@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { GAMES, HOST_RAM_GB, type GameId } from "@/lib/games";
+import { GAMES, type GameId } from "@/lib/games";
 import { AlertTriangle, Check, MemoryStick } from "lucide-react";
 
 interface MemoryState {
+  hostGb: number;
   supported: boolean;
   reason?: string;
   configuredGb: number | null;
@@ -96,7 +97,7 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
           <p className="font-display text-base font-semibold">Server memory</p>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {state.supported
-              ? `How much RAM ${meta.name} may use. The box has ${HOST_RAM_GB} GB in total and only runs one world at a time, so up to ${state.maxGb} GB is safe — the rest is for the OS and the dashboard.`
+              ? `Heap size for ${meta.name}. This box has ${state.hostGb} GB, and the server's real memory use runs about a gigabyte above its heap — so ${state.maxGb} GB is the most that leaves room for the OS and the dashboard. Going higher gets the server killed, not faster.`
               : state.reason}
           </p>
         </div>

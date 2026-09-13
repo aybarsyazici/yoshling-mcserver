@@ -418,8 +418,29 @@ export async function restartGame(game: GameId): Promise<void> {
 // recreating the container, so that's what setMemory does, and it reads the
 // value back off the new container afterwards to prove it took.
 
-/** Host RAM to leave for the OS, the web app and the other containers. */
-export const MAX_GAME_GB = 6;
+/**
+ * The most heap we can hand a game, worked out from the host rather than
+ * guessed. Two things eat memory beyond `-Xmx`:
+ *   - the JVM's own off-heap use. Measured on this box: Project Zomboid's RSS
+ *     runs ~0.9 GB above its heap (native Steam libs, mmap'd map/tile data).
+ *   - the OS, docker and the dashboard: ~1.6 GB measured.
+ * So reserve 2.5 GB and the rest is available as heap. A hardcoded number was
+ * wrong here — it offered 6 GB on a 7.5 GB box, which OOM-kills the server.
+ */
+const HOST_RESERVE_GB = 2.5;
+
+export async function hostTotalGb(): Promise<number> {
+  try {
+    const meminfo = await readFile("/proc/meminfo", "utf-8");
+    const kb = Number(/MemTotal:\s+(\d+)/.exec(meminfo)?.[1] ?? 0);
+    if (kb > 0) return kb / 1024 / 1024;
+  } catch {}
+  return 8;
+}
+
+export async function maxGameGb(): Promise<number> {
+  return Math.max(1, Math.floor((await hostTotalGb()) - HOST_RESERVE_GB));
+}
 
 /**
  * Replace a game's container from the compose file — the ONLY sanctioned way to
@@ -449,6 +470,8 @@ export async function recreateService(
 
 export interface MemoryState {
   game: GameId;
+  /** Total host RAM, so the UI can explain the ceiling. */
+  hostGb: number;
   /** False for games with no configurable heap (7 Days to Die). */
   supported: boolean;
   reason?: string;
@@ -488,7 +511,12 @@ async function liveEnv(container: string, key: string): Promise<string | null> {
 export async function getMemoryState(game: GameId): Promise<MemoryState> {
   const rt = RUNTIME[game];
   const running = (await containerState(rt.container)) === "running";
-  const base = { game, running, maxGb: MAX_GAME_GB };
+  const base = {
+    game,
+    running,
+    maxGb: await maxGameGb(),
+    hostGb: Math.round((await hostTotalGb()) * 10) / 10,
+  };
 
   if (!rt.memory) {
     return {
@@ -535,8 +563,13 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
 export async function setMemory(game: GameId, gb: number): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");
-  if (!Number.isFinite(gb) || gb < 1 || gb > MAX_GAME_GB) {
-    throw new Error(`Memory must be between 1 and ${MAX_GAME_GB} GB`);
+  const cap = await maxGameGb();
+  if (!Number.isFinite(gb) || gb < 1 || gb > cap) {
+    throw new Error(
+      `Memory must be between 1 and ${cap} GB. This host has ` +
+        `${Math.round(await hostTotalGb())} GB, and the server needs roughly a gigabyte ` +
+        `above its heap plus room for the OS and the dashboard.`
+    );
   }
 
   return withControlLock(game, "restart", async () => {
