@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { SectionHeading } from "@/components/ui-bits";
-import { GAMES } from "@/lib/games";
 
 export default function WhitelistPage() {
   const [users, setUsers] = useState<string[]>([]);
@@ -58,12 +58,12 @@ export default function WhitelistPage() {
   }
 
   return (
-    <div className="space-y-6" style={{ ["--tint" as string]: GAMES.minecraft.tint }}>
+    <div className="space-y-6" style={{ ["--tint" as string]: "var(--primary)" }}>
       <SectionHeading
         eyebrow="Shared · Access"
         title="App whitelist"
-        sub="Control which Discord users can sign into this control panel."
-        tint={GAMES.minecraft.tint}
+        sub="Who can sign in at all. Granting someone a server is a separate step on the Crew page."
+        tint="var(--primary)"
       />
 
       <Card className="bg-card/70 backdrop-blur">
@@ -72,7 +72,17 @@ export default function WhitelistPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Only these Discord usernames can sign in. If the list is empty, anyone can sign in.
+            Only these Discord users can sign in. Use their Discord username (the @handle) or
+            their display name — either works. If the list is empty, anyone with Discord can sign
+            in.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Being on this list doesn&rsquo;t give anyone a server. After they sign in once they
+            appear on the{" "}
+            <Link href="/users" className="text-primary hover:underline">
+              Crew page
+            </Link>
+            , where you pick which worlds they can see.
           </p>
 
           {loading ? (

@@ -1,26 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { readFile, writeFile } from "fs/promises";
-import path from "path";
-
-const WHITELIST_FILE = "/app/data/whitelist.json";
-
-async function getWhitelist(): Promise<string[]> {
-  try {
-    const content = await readFile(WHITELIST_FILE, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    const envList = (process.env.ALLOWED_DISCORD_USERS || "")
-      .split(",")
-      .map((u) => u.trim())
-      .filter(Boolean);
-    return envList;
-  }
-}
-
-async function saveWhitelist(users: string[]): Promise<void> {
-  await writeFile(WHITELIST_FILE, JSON.stringify(users, null, 2), "utf-8");
-}
+// Same store the sign-in gate reads, so the page can't promise access it
+// doesn't grant.
+import { getWhitelist, saveWhitelist } from "@/lib/whitelist";
 
 export async function GET() {
   const session = await auth();

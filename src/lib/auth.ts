@@ -2,6 +2,7 @@ import NextAuth from "next-auth";
 import Discord from "next-auth/providers/discord";
 import { db } from "./db";
 import { ALL_GAMES, gameAccess } from "./permissions";
+import { isWhitelisted } from "./whitelist";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
@@ -14,13 +15,17 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async signIn({ user, profile }) {
       if (!profile?.id) return false;
 
-      const username = ((profile as any).username || user.name || "").toLowerCase();
-      const allowedUsers = (process.env.ALLOWED_DISCORD_USERS || "")
-        .split(",")
-        .map((u) => u.trim().toLowerCase())
-        .filter(Boolean);
+      // Match on the @handle or the display name, whichever was whitelisted.
+      // Reads the same store the Whitelist page writes — see lib/whitelist.ts.
+      const handle = (profile as any).username as string | undefined;
+      const displayName = ((profile as any).global_name as string | undefined) ?? user.name;
 
-      if (allowedUsers.length > 0 && !allowedUsers.includes(username)) {
+      if (!(await isWhitelisted([handle, displayName]))) {
+        // Say who was turned away: a silent refusal is why a whitelist that
+        // looked correct in the UI took so long to explain.
+        console.warn(
+          `[auth] sign-in refused: not on the whitelist (username=${handle ?? "?"}, display=${displayName ?? "?"})`
+        );
         return false;
       }
 
