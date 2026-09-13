@@ -408,9 +408,24 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   `NullPointerException` when an item fails to download, so the whole server
   exits ~17s after start. Seen when an item had just been updated on Steam: the
   server had a stale manifest (tried to fetch the old 179 MB version of a 429 MB
-  item) and got `result=2`. Fix: delete
-  `appworkshop_108600.acf` from the workshop volume and re-download with
-  `steamcmd … +workshop_download_item 108600 <id> validate`, which then succeeds.
+  item) and got `result=2`. Fix: re-download the one item with
+  `steamcmd … +workshop_download_item 108600 <id> validate`.
+  **Do NOT delete `appworkshop_108600.acf` to do this.** That file is Steam's
+  record of which items are installed and at what version; removing it makes all
+  75 look missing, so the next start re-downloads ~3.8 GB one item at a time —
+  which is exactly the crash-prone path the seeding note above exists to avoid.
+  (Done on 2026-09-14 while fixing a single stale mod; cost a second restart and
+  a full re-seed.) Only nuke the manifest if an item still fails `validate`
+  because its recorded version is wrong, and then re-seed everything deliberately.
+
+- **When a mod updates on Steam, the server keeps serving the old version until it
+  restarts, and clients that auto-updated cannot join.** No mismatch line appears
+  in the server log — the join just fails, so it looks like the server is broken.
+  To find the culprit, compare each `WorkshopItems` id's Steam `time_updated`
+  against the newest file mtime under
+  `pz-workshop/_data/content/108600/<id>/`; that pinpointed Authentic Z
+  (`2335368829`) in about a minute. Then `validate`-download that one id and
+  restart. A normal restart with nothing updated downloads nothing.
 - **Mod ids from a Workshop description are a guess; disk is truth.** Community
   Tile Pack's description implies `UnofficialMappersCommunityTilePack`, but the
   folder on disk — and the only thing that works — is `CommunityTilePack`. Always
