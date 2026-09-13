@@ -62,7 +62,10 @@ services:
   # the entrypoint only rewrites those keys when the env var exists, and the
   # Settings page is where they're meant to be edited.
   zomboid:
-    image: danixu86/project-zomboid-dedicated-server:latest
+    # Upstream image plus a corrected map scanner — see pz/Dockerfile for why.
+    build:
+      context: ./pz
+    image: yoshling/project-zomboid:latest
     container_name: yoshling-pz
     ports:
       - "16261:16261/udp" # game
@@ -84,6 +87,11 @@ services:
       PORT: "16261"
       UDPPORT: "16262"
       MODFOLDERS: "workshop,steam,mods"
+      # Maps to keep out of the generated `Map=`; read by pz/search_folder.sh.
+      # SZ_Checkpoint6 is retired on 42.20 (its content moved into
+      # SZ_Riverside_Checkpoint_2) but still ships inside Secretz42, and the two
+      # claim the same four cells.
+      MAP_EXCLUDE: "SZ_Checkpoint6"
       TZ: "Europe/London"
     volumes:
       - pz-data:/home/steam/Zomboid
