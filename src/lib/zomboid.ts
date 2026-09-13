@@ -251,23 +251,42 @@ export async function installedModIds(workshopId: string): Promise<string[]> {
   const root = path.join(PZ_WORKSHOP_DIR, "content", PZ_APP_ID, workshopId);
   const found = new Set<string>();
 
-  /** The declared id, falling back to the folder name when there's no mod.info. */
-  async function idOf(modDir: string, folderName: string): Promise<string> {
-    // mod.info sits either directly in the mod folder (B41) or one level down
-    // under the version folder (B42: common/, 42/).
-    const candidates = [path.join(modDir, "mod.info")];
-    try {
-      for (const sub of await readdir(modDir, { withFileTypes: true })) {
-        if (sub.isDirectory()) candidates.push(path.join(modDir, sub.name, "mod.info"));
-      }
-    } catch {}
-    for (const file of candidates) {
+  /**
+   * EVERY id a mod folder declares. A folder commonly ships several `mod.info`
+   * files — one at the root for Build 41 and one per version folder for B42 —
+   * with DIFFERENT ids, e.g. `Hot_Brass_…Framework` declares `zHBVCEF` at the
+   * root and `HBVCEFb42` under `42.15/`. A server on B42 references the B42 id,
+   * so returning only the first one found makes valid entries look invalid.
+   */
+  async function idsIn(modDir: string, folderName: string): Promise<string[]> {
+    const ids = new Set<string>();
+
+    async function scan(dir: string, depth: number): Promise<void> {
+      if (depth > 2) return;
+      let entries;
       try {
-        const declared = /^\s*id\s*=\s*(.+?)\s*$/im.exec(await readFile(file, "utf-8"))?.[1];
-        if (declared) return declared;
-      } catch {}
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === "mod.info") {
+          try {
+            const declared = /^\s*id\s*=\s*(.+?)\s*$/im.exec(
+              await readFile(path.join(dir, "mod.info"), "utf-8")
+            )?.[1];
+            if (declared) ids.add(declared);
+          } catch {}
+        } else if (entry.isDirectory()) {
+          await scan(path.join(dir, entry.name), depth + 1);
+        }
+      }
     }
-    return folderName;
+
+    await scan(modDir, 0);
+    // No mod.info at all: the folder name is the best guess left.
+    if (ids.size === 0) ids.add(folderName);
+    return Array.from(ids);
   }
 
   async function walk(dir: string, depth: number): Promise<void> {
@@ -283,7 +302,9 @@ export async function installedModIds(workshopId: string): Promise<string[]> {
       if (entry.name === "mods") {
         for (const mod of await readdir(path.join(dir, "mods"), { withFileTypes: true })) {
           if (!mod.isDirectory()) continue;
-          found.add(await idOf(path.join(dir, "mods", mod.name), mod.name));
+          for (const id of await idsIn(path.join(dir, "mods", mod.name), mod.name)) {
+            found.add(id);
+          }
         }
         continue;
       }
