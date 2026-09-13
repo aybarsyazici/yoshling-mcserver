@@ -57,6 +57,16 @@ export function ZomboidMods({ tint }: { tint: string }) {
     load();
   }, []);
 
+  // While items are still arriving, poll so the progress bar moves on its own
+  // instead of needing a manual refresh.
+  const pending = mods.filter((m) => !m.downloaded).length;
+  useEffect(() => {
+    if (pending === 0) return;
+    const id = setInterval(load, 15000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending]);
+
   async function add(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || adding) return;
@@ -177,9 +187,7 @@ export function ZomboidMods({ tint }: { tint: string }) {
         </div>
       ) : (
         <>
-          <p className="text-xs text-muted-foreground">
-            {mods.length} mod{mods.length === 1 ? "" : "s"} · they load in the order listed
-          </p>
+          <ModSummary mods={mods} tint={tint} />
           <div className="space-y-2">
             <AnimatePresence initial={false}>
               {mods.map((mod) => (
@@ -355,6 +363,42 @@ function ModRow({
         )}
       </div>
     </motion.div>
+  );
+}
+
+/**
+ * How far the download has got, and how many mods can't load yet. Workshop items
+ * download on the server's next start (or, for a big list, by pre-seeding with
+ * SteamCMD), and until an item is on disk its mod id can't be read — so this is
+ * the difference between "still working" and "actually broken".
+ */
+function ModSummary({ mods, tint }: { mods: ZomboidMod[]; tint: string }) {
+  const onDisk = mods.filter((m) => m.downloaded).length;
+  const noId = mods.filter((m) => m.provides.length === 0).length;
+  const pending = mods.length - onDisk;
+  const pct = mods.length > 0 ? Math.round((onDisk / mods.length) * 100) : 0;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs">
+        <span className="text-muted-foreground">
+          {mods.length} mod{mods.length === 1 ? "" : "s"} · they load in the order listed
+        </span>
+        <span className="font-mono" style={{ color: pending > 0 ? tint : undefined }}>
+          {onDisk} of {mods.length} downloaded
+          {pending > 0 ? ` · ${pending} pending` : ""}
+          {noId > 0 ? ` · ${noId} without a mod id` : ""}
+        </span>
+      </div>
+      {pending > 0 && (
+        <div className="h-1 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full transition-[width] duration-500"
+            style={{ width: `${pct}%`, background: tint }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
