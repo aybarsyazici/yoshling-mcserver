@@ -28,6 +28,12 @@ export interface GamesState {
    * this list gets a card, a nav entry or a page.
    */
   access: GameId[];
+  /**
+   * Which power controls this user may use, so the UI can hide or disable a
+   * button instead of letting it 403. Restart is open to MOD; start/stop are
+   * ADMIN-only, because starting a world stops whichever one is running.
+   */
+  can: { start: boolean; stop: boolean; restart: boolean };
   /** Configured heap per world, from the compose file. null = no heap setting. */
   memoryGb: Partial<Record<GameId, number | null>>;
   /** Total host RAM in GB. */
@@ -42,6 +48,7 @@ export function useGames(interval = 5000): GamesState {
   const [activeGame, setActiveGame] = useState<GameId | null>(null);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
+  const [can, setCan] = useState({ start: false, stop: false, restart: false });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +64,7 @@ export function useGames(interval = 5000): GamesState {
       setActiveGame(data.activeGame ?? null);
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
+      if (data.can) setCan(data.can);
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
     } catch {
@@ -82,5 +90,5 @@ export function useGames(interval = 5000): GamesState {
     };
   }, [refresh, interval]);
 
-  return { games, activeGame, busy, access, memoryGb, hostGb, loading, refresh };
+  return { games, activeGame, busy, access, can, memoryGb, hostGb, loading, refresh };
 }

@@ -2,12 +2,23 @@ import { GAME_LIST, isGameId, type GameId } from "@/lib/games";
 
 type Role = "ADMIN" | "MOD" | "MEMBER";
 
+/**
+ * MOD can do everything ADMIN can — the difference is *scope*, not capability.
+ * A MOD only ever acts on the worlds they've been granted (`User.games`), while
+ * ADMIN implicitly holds every world. So a MOD who looks after Project Zomboid
+ * can power it, restart it, edit its settings and manage its mods, and never
+ * sees the Minecraft or 7 Days to Die pages at all.
+ *
+ * The single exception is `users.manage`. If a MOD could edit world access they
+ * could grant themselves the worlds they were deliberately kept out of, which
+ * would make the whole gate decorative — so handing out access stays ADMIN-only.
+ */
 const PERMISSIONS = {
-  "server.start": ["ADMIN"],
-  "server.stop": ["ADMIN"],
-  "server.restart": ["ADMIN"],
-  "server.version": ["ADMIN"],
-  "server.loader": ["ADMIN"],
+  "server.start": ["ADMIN", "MOD"],
+  "server.stop": ["ADMIN", "MOD"],
+  "server.restart": ["ADMIN", "MOD"],
+  "server.version": ["ADMIN", "MOD"],
+  "server.loader": ["ADMIN", "MOD"],
   "mods.install": ["ADMIN", "MOD"],
   "mods.remove": ["ADMIN", "MOD"],
   "mods.update": ["ADMIN", "MOD"],

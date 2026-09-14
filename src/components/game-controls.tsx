@@ -25,7 +25,7 @@ export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, busy: serverBusy, memoryGb, refresh } = useGames(localBusy ? 1500 : 4000);
+  const { games, busy: serverBusy, can, memoryGb, refresh } = useGames(localBusy ? 1500 : 4000);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
@@ -49,6 +49,10 @@ export function GameControls({ game }: { game: GameId }) {
   const blockingThem = blocking.length > 1 ? "them" : "it";
 
   const coreState: CoreState = busy && !isOnline ? { kind: "booting", game } : isOnline ? { kind: "holding", game } : { kind: "idle" };
+
+  // Whether the power button would actually be allowed, so a viewer who can't
+  // use it sees that up front instead of a "Forbidden" toast after pressing it.
+  const canPower = isOnline ? can.stop : can.start;
 
   function onPower() {
     if (busy) return;
@@ -124,7 +128,7 @@ export function GameControls({ game }: { game: GameId }) {
         <p className="eyebrow text-muted-foreground">Controls</p>
         <button
           onClick={onPower}
-          disabled={busy}
+          disabled={busy || !canPower}
           className="inline-flex h-12 items-center justify-center gap-2 rounded-xl font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-60"
           style={{
             background: isOnline ? "transparent" : meta.tint,
@@ -135,13 +139,15 @@ export function GameControls({ game }: { game: GameId }) {
           <PowerGlyph className="h-5 w-5" />
           {busy ? busyLabel(busyAction) : isOnline ? "Power off" : "Power on"}
         </button>
-        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !isOnline} onClick={() => control("restart")}>
+        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !isOnline || !can.restart} onClick={() => control("restart")}>
           <RotateCw className={cn("h-4 w-4", busyAction === "restart" && "animate-spin")} />
           {busyAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
 
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
-          {blocking.length > 0 ? (
+          {!canPower && !can.restart ? (
+            "You can view this server but not power it. Ask an admin for Mod access."
+          ) : blocking.length > 0 ? (
             <span>
               <strong className="text-foreground">{blockingNames}</strong> {blockingVerb} running.
               Starting this one stops {blockingThem} first.

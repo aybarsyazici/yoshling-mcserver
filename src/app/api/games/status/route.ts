@@ -7,6 +7,7 @@ import {
   hostTotalGb,
 } from "@/lib/game-manager";
 import { GAME_LIST } from "@/lib/games";
+import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 
 export async function GET() {
@@ -46,6 +47,14 @@ export async function GET() {
     activeGame: onlineGame ?? activeGame,
     busy: currentControlLock(),
     access,
+    // Which power controls this user may actually use. The buttons used to be
+    // shown to everyone and only the API refused, so a MEMBER pressed Power on
+    // and got "forbidden" with no idea why.
+    can: {
+      start: hasPermission(session.user.role, "server.start"),
+      stop: hasPermission(session.user.role, "server.stop"),
+      restart: hasPermission(session.user.role, "server.restart"),
+    },
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,
   });

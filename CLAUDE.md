@@ -141,8 +141,14 @@ memory at all; it only patches `TYPE`/`VERSION`.
 
 Two orthogonal axes, both in `src/lib/permissions.ts`:
 
-- **Role** — ADMIN / MOD / MEMBER, says what a user may *do*. Server power is
-  ADMIN-only; mod management is ADMIN/MOD; browsing is everyone.
+- **Role** — ADMIN / MOD / MEMBER, says what a user may *do*. **MOD has the same
+  capabilities as ADMIN** — power, restart, settings, mods — and differs only in
+  *scope*: a MOD acts solely on the worlds in `User.games`, while ADMIN implicitly
+  holds all of them. The one exception is `users.manage`, which stays ADMIN-only:
+  a MOD who could edit world access could grant themselves the worlds they were
+  kept out of, making the gate decorative. MEMBER is read-only (browse + activity).
+  Changed 2026-09-14 — power used to be ADMIN-only, which meant a trusted mod
+  couldn't restart after a Workshop mod update locked players out.
 - **World access** — the `User.games` column, a CSV of game ids
   (`"minecraft,7dtd"`), says which servers they may *see at all*. `gameAccess()`
   resolves it; **ADMIN ignores the column and always has every world**, and is
@@ -174,6 +180,10 @@ Enforcement, in layers:
 - The three game layouts (`src/app/{minecraft,7dtd,zomboid}/layout.tsx`) redirect
   to `/home` when the viewer lacks that world, so the pages simply don't exist
   for them.
+- `/api/games/status` also returns `can: {start, stop, restart}`, and
+  `game-controls.tsx` disables the buttons accordingly. Without it the controls
+  were shown to everyone and only the API refused, so a MEMBER pressed Power on
+  and got an unexplained "Forbidden" — which is exactly how this was reported.
 - `/api/games/status` returns `access: GameId[]`, which `useGames` surfaces and
   the UI filters on (sidebar world switcher, landing cards). It still reports the
   *run state* of worlds the user can't open — only one server fits on the box, so
