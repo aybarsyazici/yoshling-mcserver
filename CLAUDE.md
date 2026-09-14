@@ -485,10 +485,12 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   `pz-workshop/_data/content/108600/<id>/`; that pinpointed Authentic Z
   (`2335368829`) in about a minute. Then `validate`-download that one id and
   restart. A normal restart with nothing updated downloads nothing.
-- **Mod ids from a Workshop description are a guess; disk is truth.** Community
-  Tile Pack's description implies `UnofficialMappersCommunityTilePack`, but the
-  folder on disk — and the only thing that works — is `CommunityTilePack`. Always
-  reconcile against `content/108600/<id>/mods/*` once an item has downloaded.
+- **Mod ids come from `mod.info`'s `id=`, not the folder name — and this file had
+  it backwards for Community Tile Pack.** The folder on disk is `CommunityTilePack`
+  but the declared id is `UnofficialMappersCommunityTilePack`, which is what `Mods=`
+  contains and what the log confirms loading. An earlier version of this note
+  claimed the reverse. Reconcile against the `id=` inside
+  `content/108600/<id>/mods/*/[<version>/]mod.info`, never against `ls`.
 - **The IMAGE overwrites `Map=` on every boot — this was the "maps do nothing" bug.**
   `/server/scripts/entry.sh` line ~234 runs
   `sed -i "s/Map=.*/Map=${map_list}Muldraugh, KY/"`, where `map_list` comes from
@@ -521,7 +523,12 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   with map title `Checkpoint 6 (ONLY 42.19)`. On 42.20 its content moved into
   `SZ_Riverside_Checkpoint_2`, which is why the two claim the same 4 cells. Grep
   mod.info `name=` for DEPRECATED before chasing a cell overlap.
-- **Mod XML that uses `x_extends` breaks on Linux.** PZ lowercases the *whole*
+- **Mod XML that uses `x_extends` breaks on Linux — in FIVE mods, not one.**
+  565 failures/run: `GunsOfMarz` 400, **`Authentic Z - Current` 60**, `HBVCEF` 30,
+  `tsarslib` 10, `TrueSmoking` 5. The Authentic Z ones are the trap: the `LOG` line
+  names a *vanilla* file (`media/AnimSets/player/ext/Ext02_1Handed.xml`) while the
+  actual `FileNotFoundException` is on the mod's own lowercased path, so they read
+  as a vanilla fault. PZ lowercases the *whole*
   resolved path when following `x_extends` and hands it to `FileInputStream`, so
   `RackLeverAction_HB.xml`'s `x_extends="LoadLeverAction_HB.xml"` is looked up as
   `…/gunsofmarz/42.16/media/animsets/…/loadleveraction_hb.xml` and fails on ext4

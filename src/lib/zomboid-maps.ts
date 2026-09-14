@@ -5,10 +5,16 @@ import { PZ_APP_ID, PZ_WORKSHOP_DIR, readIniProperties, splitList, updateIni } f
 /**
  * Map conflict detection for Project Zomboid.
  *
- * The world is a grid of 300x300-tile cells, and a map mod "claims" the cells it
- * ships. Two mods claiming the same cell conflict: only one can win, and which
+ * The world is a grid of 256x256-tile cells (32 chunks of 8), and a map mod
+ * "claims" the cells it ships. Two mods claiming the same cell conflict: only one can win, and which
  * one is decided by `Map=` in the server .ini — **the first entry wins**. Get it
  * wrong and you get missing buildings, holes, or a broken world.
+ *
+ * 256 is Build 42's `IsoCell.CELL_SIZE_IN_SQUARES`; Build 41 used 300, and that
+ * stale number is how a set of teleport coordinates derived as `cell * 300 + 150`
+ * came out pointing at the wrong place. Verified two ways: the save stores chunks
+ * as `map/<x/8>/<y/8>.bin`, and square 23700,12060 resolves to the shipped cell
+ * 92_47 (23700/256 = 92.6), which 300 would have made 79.
  *
  * Cell coordinates don't need a database: they're the filenames. A map mod on
  * disk looks like
@@ -19,18 +25,18 @@ import { PZ_APP_ID, PZ_WORKSHOP_DIR, readIniProperties, splitList, updateIni } f
  * the game install, which isn't mounted here, so overlaps with vanilla can't be
  * detected — only mod-vs-mod. Vanilla should be last in `Map=` regardless.
  *
- * ## `Map=` does not list add-on maps, and that's not a problem
+ * ## Every installed map must be in `Map=`, add-ons included
  *
- * A `map.info` may declare `lots=<parent map>`, which means "my cells sit on top
- * of that map" — a checkpoint, a bunker, a mall dropped into Muldraugh. Build 42
- * loads those through the owning **mod**, not through `Map=`, and on startup it
- * rewrites `Map=` to drop every add-on, keeping only parentless maps. Our own
- * server went from 23 entries to `AZSpawn;AZSpawn;Muldraugh, KY` on one restart,
- * and putting the list back just got it pruned again.
+ * A `map.info` may declare `lots=<parent map>` — "my cells sit on top of that
+ * map" — for a checkpoint or bunker dropped into Muldraugh. Those still need a
+ * `Map=` entry; `lots=` only says what they build on.
  *
- * So "installed but absent from `Map=`" is normal for an add-on and must not be
- * reported as broken — only a **parentless** map has to be listed. What still
- * matters for add-ons is cell overlap: two of them on the same cell still fight.
+ * An earlier version of this comment claimed the opposite: that Build 42 loads
+ * add-ons through their mod and deliberately strips them from `Map=`. That was
+ * wrong. The list really was being rewritten to `AZSpawn;AZSpawn;Muldraugh, KY`
+ * seconds into every boot, but by the **Docker image**, not the game — see the
+ * `Map=` section of CLAUDE.md and `pz/search_folder.sh`. Believing the game did it
+ * on purpose left 20 maps inert and this card calling that normal.
  */
 
 /** Vanilla map names, so they're not reported as "missing from disk". */

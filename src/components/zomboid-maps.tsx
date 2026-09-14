@@ -34,7 +34,7 @@ interface MapsState {
 /**
  * Map load order and cell conflicts.
  *
- * Two map mods that claim the same 300x300 cell can't both win. Cells are read
+ * Two map mods that claim the same 256x256 cell can't both win. Cells are read
  * off disk, so a conflict here is a fact rather than a guess.
  *
  * `Map=` decides, first entry wins — including for add-on maps (a map.info with
@@ -123,7 +123,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
           <p className="font-display text-base font-semibold">Maps</p>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Map mods claim cells on the world grid. Cells are read from the installed mods, so the
-            overlaps below are measured rather than guessed — though a cell is 300×300 tiles, so two
+            overlaps below are measured rather than guessed — though a cell is 256×256 tiles, so two
             add-ons sharing one may just be neighbours. Standalone maps are ordered here, first wins;
             keep the base game last.
           </p>
