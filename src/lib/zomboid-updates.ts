@@ -277,11 +277,8 @@ function announcement(stale: StaleMod[]): string {
   const names = stale.map((s) => s.title);
   const shown = names.slice(0, 3).join(", ");
   const rest = names.length > 3 ? ` and ${names.length - 3} more` : "";
-  const noun = names.length === 1 ? "A mod has" : "Mods have";
-  return (
-    `${noun} been updated on Steam: ${shown}${rest}. ` +
-    `The server will restart to apply the update once everyone has logged off.`
-  );
+  const label = names.length === 1 ? "Update found for" : "Updates found for";
+  return `${label} ${shown}${rest}: the server will restart to update once all players leave.`;
 }
 
 /**
