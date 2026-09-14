@@ -1,10 +1,24 @@
 # Yoshling — Game Server Control
 
 A web app to control three game servers (Minecraft + 7 Days to Die + Project
-Zomboid) running on a single Hetzner box, from a Discord-authed dashboard. One
-box, three worlds: only one game runs at a time (8 GB RAM), and powering one on
+Zomboid) running on a single netcup box, from a Discord-authed dashboard. One
+box, three worlds: only one game runs at a time (16 GB RAM), and powering one on
 gracefully saves + stops whichever other one is running. Access is per world —
 a user only sees the servers an admin has granted them.
+
+## Per-game deep docs — load on demand
+
+This file is the **shared** architecture. Anything specific to one game lives in
+its own doc, so an agent working on one game doesn't carry the others' history:
+
+| Working on | Read first |
+|------------|-----------|
+| **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
+| 7 Days to Die | the "7 Days to Die specifics" section below (not yet split out) |
+| Minecraft | this file; MC has no separate doc |
+
+**Do not guess PZ behaviour from this file's summary.** Several of its traps we got
+wrong twice and documented wrong once; the corrected versions are only in that doc.
 
 ## Stack
 
@@ -24,7 +38,7 @@ Four containers via `docker compose` (see `docker-compose.yml`):
 |-----------|-------|---------|-------------------|
 | `yoshling-mc` | `itzg/minecraft-server` | Minecraft, ports 25565 + RCON 25575 | host `minecraft` |
 | `yoshling-7dtd` | `vinanrra/7dtd-server` | 7DTD, ports 26900-26902, telnet 8081, webadmin 8080 | host `sevendtd` |
-| `yoshling-pz` | `danixu86/project-zomboid-dedicated-server` | Project Zomboid, ports 16261-16262/udp + 8766-8767/udp, RCON 27015 (unpublished) | host `zomboid` |
+| `yoshling-pz` | `yoshling/project-zomboid` (built from `pz/`) | Project Zomboid, ports 16261-16262/udp + 8766-8767/udp, RCON 27015 (unpublished) | host `zomboid` |
 | `yoshling-web-1` | this app | Next.js dashboard | — |
 
 The **web container runs as root** with `docker-cli` **and `docker-cli-compose`**
@@ -224,7 +238,7 @@ an ESM-only dep, so on Node 20.12 every `prisma` command dies with
 Host: **netcup `89.58.50.155`**, 8 vCPU / 16 GB RAM / 314 GB disk, Debian 13,
 8 GB swap. SSH as `root` with `~/.ssh/mc_yoshling_netcup`. Migrated off Hetzner
 2026-09-13 (€12.61 vs €40/mo for 16 GB); see MIGRATION.md. The old Hetzner box
-(`178.105.163.254`, key `~/.ssh/mc_yoshling`) is kept as a rollback until each
+(`89.58.50.155`, key `~/.ssh/mc_yoshling`) is kept as a rollback until each
 game has been played on netcup. Deploy dir: `/opt/yoshling` (a git checkout tracking
 `main`). Public domain `https://yoshling.xyz` is proxied through **Cloudflare**;
 **Caddy** is the origin reverse proxy (`/etc/caddy/Caddyfile`) forwarding to
@@ -236,8 +250,8 @@ game has been played on netcup. Deploy dir: `/opt/yoshling` (a git checkout trac
 
 ```bash
 git bundle create /tmp/y.bundle main
-scp -i ~/.ssh/mc_yoshling /tmp/y.bundle root@178.105.163.254:/root/
-ssh -i ~/.ssh/mc_yoshling root@178.105.163.254 '
+scp -i ~/.ssh/mc_yoshling /tmp/y.bundle root@89.58.50.155:/root/
+ssh -i ~/.ssh/mc_yoshling root@89.58.50.155 '
   cd /opt/yoshling
   git fetch /root/y.bundle main
   git checkout -f -B main FETCH_HEAD
@@ -248,9 +262,9 @@ ssh -i ~/.ssh/mc_yoshling root@178.105.163.254 '
 
 The web service gained the `pz-data` + `pz-workshop` mounts and the `PZ_*` env, so
 that deploy **recreates** the web container (not just restarts it) — expected.
-Project Zomboid itself is created on first use with
-`docker compose up -d --no-deps zomboid` (it must NOT start automatically; see
-below).
+Project Zomboid is a **locally built** image (`pz/Dockerfile`), so a deploy that
+touches it needs `docker compose build zomboid`. It must NOT start automatically —
+see [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md).
 
 Back up the DB before schema-affecting deploys:
 `docker cp yoshling-web-1:/app/data/yoshling.db /root/yoshling-deploy-backup/`.
@@ -278,11 +292,11 @@ docker exec yoshling-web-1 node -e "
 "
 ```
 
-**Pending for the per-world-access + Project Zomboid deploy** (migration
-`20260913144054_add_game_access_and_zomboid_mods`) — run these four statements in
-order, and note the backfill: it grants every existing account all three worlds,
-so nobody currently signed in loses anything. Skip it and everyone but ADMINs
-sees an empty dashboard.
+**APPLIED 2026-09-13** — migration `20260913144054_add_game_access_and_zomboid_mods`.
+Kept as the worked example of a hand-applied migration, and because the backfill is
+the part that's easy to forget: it grants every existing account all three worlds,
+so nobody signed in loses access. Omit it and everyone but ADMINs sees an empty
+dashboard.
 
 ```sql
 CREATE TABLE "ZomboidMod" (
@@ -373,234 +387,35 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 
 ### Project Zomboid specifics
 
-- Image: **`danixu86/project-zomboid-dedicated-server`** (Danixu/project-zomboid-server-docker
-  — the actively maintained one). The game files are **baked into the image**, so
-  there's no long SteamCMD install like 7DTD's; the only thing downloaded at
-  runtime is Workshop mods. Build 42 is what the default tag ships.
-- Everything lives in one data dir, mounted into web as `/zomboid`
-  (`PZ_SERVER_DIR`): `Server/<name>.ini` (all ~139 settings **and the mod
-  lists**), `Server/<name>_SandboxVars.lua` (loot/zombie/XP preset),
-  `Server/<name>_spawnregions.lua`, `Saves/Multiplayer/<name>/` (the world),
-  `db/<name>.db` (player accounts). Server name is `yoshling` (`SERVERNAME` /
-  `PZ_SERVER_NAME`); `serverName()` in `src/lib/zomboid.ts` discovers it from
-  disk if it ever differs.
-- **Control is RCON on 27015**, not published to the host — the web container
-  reaches it as `zomboid:27015`. `PZ_RCON_PASSWORD` (web) must match
-  `RCONPASSWORD` (the game container); the entrypoint writes that value into the
-  .ini on every boot, which is why `RCONPassword` is locked out of the settings
-  editor. `IP`/`BIND_IP` is deliberately **not** set, so RCON listens on all
-  interfaces and stays reachable from the web container.
-- **Graceful stop:** the image's entrypoint traps SIGTERM, writes `quit` to the
-  server console and blocks until the world is saved. Docker's default 10s grace
-  period would SIGKILL it mid-save, so `stop_grace_period: 120s` is set in
-  compose *and* the driver passes `docker stop -t 120` / `docker restart -t 120`.
-  (`LOCK_MAX_MS` in `game-manager` is 300s to cover a hand-off that includes one.)
-- **The .ini is the single source of truth, and that's load-bearing.** The image
-  rewrites .ini keys from env vars, but only for keys whose env var is *set*. So:
-  - `SELF_MANAGED_MODS: "true"` keeps its hands off `Mods` / `WorkshopItems`.
-  - `PASSWORD`, `PUBLIC` and `DISPLAYNAME` are deliberately **absent** from
-    docker-compose, because those are `Password` / `Public` / `PublicName` in the
-    Settings page. Setting any of them in compose would silently overwrite the UI
-    on every restart.
-- **Measured memory use (2026-09-13):** with just 2 mods installed, PZ sits at
-  **4.83 GiB RSS** of the box's 7.56 GiB (~1.2 GB free) on `-Xmx4096m`. With 76
-  mods it was OOM-killed. So 8 GB is fine for a small list and has room for maybe
-  a handful more mods; a large map-heavy collection needs a 16 GB box, not heap
-  tuning.
-- **Seed a big mod list with SteamCMD, don't let PZ download it.** PZ's own
-  downloader fails intermittently on a long list (`result=10` Busy, `result=2`
-  Fail) and each failure kills the whole server via the NPE below — so a 75-item
-  list becomes a crash loop. `/root/seed-mods.sh` on the box loops SteamCMD over
-  every id in `WorkshopItems` with `validate` and one retry: 75/75, zero failures,
-  ~15 min for 3.8 GB. Then PZ starts cleanly because nothing needs downloading.
-- **A failed Workshop download crashes the server, and a stale manifest causes
-  it.** PZ's `GameServerWorkshopItems.Install` throws an unhandled
-  `NullPointerException` when an item fails to download, so the whole server
-  exits ~17s after start. Seen when an item had just been updated on Steam: the
-  server had a stale manifest (tried to fetch the old 179 MB version of a 429 MB
-  item) and got `result=2`. Fix: re-download the one item with
-  `steamcmd … +workshop_download_item 108600 <id> validate`.
-  **Do NOT delete `appworkshop_108600.acf` to do this.** That file is Steam's
-  record of which items are installed and at what version; removing it makes all
-  75 look missing, so the next start re-downloads ~3.8 GB one item at a time —
-  which is exactly the crash-prone path the seeding note above exists to avoid.
-  (Done on 2026-09-14 while fixing a single stale mod; cost a second restart and
-  a full re-seed.) Only nuke the manifest if an item still fails `validate`
-  because its recorded version is wrong, and then re-seed everything deliberately.
+> ## ⚠️ READ `docs/PROJECT-ZOMBOID.md` FIRST
+>
+> **Anything Project Zomboid — mods, maps, the `.ini`, Workshop updates, memory,
+> sandbox options, anti-cheat, backups, a log error — is documented in
+> [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md). Open it before you touch
+> PZ.** It is ~480 lines of hard-won specifics and it is kept out of this file on
+> purpose: an agent working on Minecraft or 7 Days to Die should not carry
+> Workshop-manifest archaeology it will never need.
+>
+> Several traps in there are ones we got wrong *twice* and wrote down wrong once,
+> so guessing from this summary is actively expensive.
 
-- **Automatic Workshop mod updates** (`src/lib/zomboid-updates.ts`, driven by a
-  5-min timer in `src/instrumentation.ts`; knobs `PZ_UPDATE_WATCH` /
-  `PZ_UPDATE_POLL_MS` on the web service). Policy, chosen deliberately: it
-  **never interrupts play** — if anyone is connected it announces the update over
-  RCON `servermsg` and waits; it applies one only when the server is empty. If PZ
-  is already stopped it just seeds the files so the next start is clean.
-  `GET/POST /api/zomboid/updates` exposes and force-runs it.
-  - **It compares Steam's manifest, not file mtimes.**
-    `appworkshop_108600.acf` → `WorkshopItemsInstalled.<id>.timeupdated` is the
-    version on disk; `GetPublishedFileDetails` → `time_updated` is the published
-    one, cross-checked against `WorkshopItemDetails.<id>.latest_timeupdated` with
-    the newer of the two winning. Exact, and one small file read plus **one batched
-    HTTP request for all 75 mods** (not one per mod) — which is what makes 5-min
-    polling free.
-  - **TRAP: that .acf has TWO sections keyed by workshop id** —
-    `WorkshopItemsInstalled` (on disk) and `WorkshopItemDetails` (what Steam knows,
-    incl. `latest_timeupdated`) — and **both carry a `timeupdated`**. The first
-    version of this read from `"WorkshopItemsInstalled"` to end-of-file, so the
-    second section's values overwrote the first, `installed` came out equal to
-    `published` for every mod, and the check could never fire. Parse it with
-    brace-matched bounds (`kvSection()`), never a slice-to-EOF.
-    Worth remembering *how* that got through: the first validation run reported
-    "0 stale" and I read that as a pass, when the server genuinely had an
-    out-of-date mod — the bug agreeing with itself. **Validate a detector by
-    planting a fault it must find**, not by observing it find nothing. Rolling one
-    mod's `timeupdated` back by a day in the manifest is the cheap way to do it;
-    it self-heals, because applying the update re-downloads that mod.
-  - Verified in production this way: planted stale mod → detected as
-    `Better Push (3715137752)`, one player online → **announced and did not
-    restart**, `StartedAt` unchanged, state file written.
-  - It holds the **control lock** via `withGameStopped()`, so it can't interleave
-    with a restart from the UI; a busy lock just skips that round.
-  - **There is no push alternative — this was checked, not assumed.** Steam has no
-    Workshop webhook. PICS changelists are a timer poll (`changelistUpdateInterval`
-    → `ClientPICSChangesSinceRequest`) and carry **only appIDs and packageIDs**, so
-    they would report a Project Zomboid *game* patch and never a mod update. PZ has
-    no server option for it and no Lua event that fires on an upstream change
-    (`OnModsModified` is the local list). And the version check is **client-side**
-    (`gameStates/ConnectToServerState`), so the server logs nothing when a join is
-    refused — there is no failed-join event to trigger on either. Don't re-litigate
-    this without new evidence.
-  - Measured 2026-09-14: **~9 mod updates/week** across the 75-mod list, 3 in one
-    day. That is why a nightly scheduled restart (what most community servers do)
-    is not sufficient here.
-- **`checkModsNeedUpdate` is PZ's own check, over RCON**, and it is authoritative:
-  it went `Mods need update` → (fix) → `Mods updated` for us. **But its reply says
-  the answer is written "in the log file and in the chat"**, so do NOT poll it on a
-  timer — it would likely spam players. Use it for confirmation around a restart;
-  use the Steam manifest comparison for detection.
-- **When a mod updates on Steam, the server keeps serving the old version until it
-  restarts, and clients that auto-updated cannot join.** No mismatch line appears
-  in the server log — the join just fails, so it looks like the server is broken.
-  To find the culprit, compare each `WorkshopItems` id's Steam `time_updated`
-  against the newest file mtime under
-  `pz-workshop/_data/content/108600/<id>/`; that pinpointed Authentic Z
-  (`2335368829`) in about a minute. Then `validate`-download that one id and
-  restart. A normal restart with nothing updated downloads nothing.
-- **Mod ids come from `mod.info`'s `id=`, not the folder name — and this file had
-  it backwards for Community Tile Pack.** The folder on disk is `CommunityTilePack`
-  but the declared id is `UnofficialMappersCommunityTilePack`, which is what `Mods=`
-  contains and what the log confirms loading. An earlier version of this note
-  claimed the reverse. Reconcile against the `id=` inside
-  `content/108600/<id>/mods/*/[<version>/]mod.info`, never against `ls`.
-- **The IMAGE overwrites `Map=` on every boot — this was the "maps do nothing" bug.**
-  `/server/scripts/entry.sh` line ~234 runs
-  `sed -i "s/Map=.*/Map=${map_list}Muldraugh, KY/"`, where `map_list` comes from
-  the image's `search_folder.sh`. That scanner only looked at
-  `<workshopId>/mods/<mod>/media/maps` — **one fixed level** — but B42 mods keep
-  content under a version folder (`Secretz42/42.20/media/maps`), so it found none
-  of them and produced `AZSpawn;AZSpawn;`. Any correct hand-written `Map=` was
-  destroyed ~3 seconds into every start. **`SELF_MANAGED_MODS` does not protect
-  `Map=`** — it only guards `Mods` and `WorkshopItems`.
-  Fixed by `pz/search_folder.sh` + `pz/Dockerfile` (a derived image, because
-  entry.sh runs `sed -i` on the script itself so a bind mount fails): finds
-  `media/maps` at any depth, dedupes, orders by cell count so a 22-cell map
-  outranks a 4-cell checkpoint, and honours `MAP_EXCLUDE` from compose.
-  **Measured before/after:** distinct maps registering cells went from **2 → 16**,
-  and `Map=` from 3 entries to 22. If maps ever stop working, check
-  `docker logs yoshling-pz | grep "INFO: Added maps"` first.
-  I previously recorded the opposite in this file — that PZ itself prunes add-on
-  maps and that this was correct behaviour. That was wrong; the pruning was the
-  image's sed, and the maps genuinely were not loading.
-- **`MAP_EXCLUDE`** keeps a map out of the generated list. `SZ_Checkpoint6` is in
-  it: retired on 42.20 (content moved into `SZ_Riverside_Checkpoint_2`, map title
-  says `ONLY 42.19`, its standalone mod is tagged `DEPRECATED`) yet still shipped
-  inside the current `Secretz42`, so both claimed cells 22_22/22_23/23_22/23_23.
-  It is also removed from `Mods=`.
-- **The `mod "X" overrides media/maps/…/<x>_<y>.lotheader` lines ARE the signal
-  that a map's cells registered.** Counting distinct map names across them is how
-  the 2 → 16 fix above was verified.
-- **A mod.info can mark itself deprecated, and that's how you find dead
-  duplicates.** `SZ_Checkpoint6` is `name=…[42.20 DEPRECATED]`, `versionMax=42.20`,
-  with map title `Checkpoint 6 (ONLY 42.19)`. On 42.20 its content moved into
-  `SZ_Riverside_Checkpoint_2`, which is why the two claim the same 4 cells. Grep
-  mod.info `name=` for DEPRECATED before chasing a cell overlap.
-- **Mod XML that uses `x_extends` breaks on Linux — in FIVE mods, not one.**
-  565 failures/run: `GunsOfMarz` 400, **`Authentic Z - Current` 60**, `HBVCEF` 30,
-  `tsarslib` 10, `TrueSmoking` 5. The Authentic Z ones are the trap: the `LOG` line
-  names a *vanilla* file (`media/AnimSets/player/ext/Ext02_1Handed.xml`) while the
-  actual `FileNotFoundException` is on the mod's own lowercased path, so they read
-  as a vanilla fault. PZ lowercases the *whole*
-  resolved path when following `x_extends` and hands it to `FileInputStream`, so
-  `RackLeverAction_HB.xml`'s `x_extends="LoadLeverAction_HB.xml"` is looked up as
-  `…/gunsofmarz/42.16/media/animsets/…/loadleveraction_hb.xml` and fails on ext4
-  even though the file is right there. Harmless log spam (animation is
-  client-side, and clients are on case-insensitive filesystems); silence it with
-  lowercase symlinks for the dir and file names if it ever matters.
-- **One Workshop item can ship many maps.** SecretZ Pandemic ships **20** map
-  folders (16 with cells, 4 cell-less spawn/basement definitions), and every one
-  of them needs a `Map=` entry. Its own maps even overlap each other
-  (`SZ_Checkpoint6`/`SZ_Riverside_Checkpoint_2`,
-  `SZ_Checkpoint5`/`SZ_MuldraughCrossroads_Checkpoint`), so the order within a
-  single mod matters too.
-- **Memory: 4 GB is not enough for a big mod list.** On 2026-09-13 the PZ server
-  was **OOM-killed by the kernel** (`OOMKilled=true`) with 76 mods installed and
-  `-Xmx4096m`, after GC-thrash symptoms in the log (`SteamnetworkingSockets
-  service thread waited 132ms for lock`, `IPC function call ... took too long`).
-  The box has 7.6 GB total. Note the failure was a *kernel* OOM kill, not a Java
-  `OutOfMemoryError`, so total RSS — heap **plus** the off-heap/mmap'd map and
-  tile data — was the limit. Raising the heap alone may not be enough; a large
-  collection of map/tile packs may simply not fit on this box. Change it on the
-  Settings page (see "Server memory").
-- **Dependency resolution needs `STEAM_API_KEY`.** The keyless Workshop endpoint
-  returns no dependency data at all; `IPublishedFileService/GetDetails` with a key
-  adds `children`, which is the Workshop's "Required items" list. Adding a mod
-  pulls its required items in and puts them **before** it in both lists, since PZ
-  loads `Mods=` in order and a library must precede its consumer. Without a key it
-  falls back and behaves as before.
-- **Map mods need a THIRD list the mod manager does not own yet: `Map=`.** A map
-  mod that's in `WorkshopItems` and `Mods` still shows nothing in-game until its
-  map name is added to `Map=` (first entry wins where two maps overlap). The add
-  route detects the Workshop "Map" tag and says so, but doesn't edit `Map=`.
-- **Mods = two lists that must agree** (`/zomboid/mods`, `/api/zomboid/mods`):
-  - `WorkshopItems=2169435993;2200148440` — what the server *downloads*.
-  - `Mods=\AuthenticZ;\Brita` — what it then *loads* (mod folder names).
-    **Build 42 requires the leading backslash** per entry; B41 does not.
-    `modIdPrefix()` mirrors whatever the file already uses and defaults to B42.
-  - Having one without the other is the classic "my mods aren't working" trap, so
-    the route always writes both, and a mod with no mod id is flagged in the UI
-    rather than failing silently.
-  - Mod ids come from, in order: what's already on disk
-    (`/zomboid-workshop/content/108600/<id>/mods/<modId>/`, read-only mount), the
-    `Mod ID: X` line in the Workshop description, or typed in by hand on the
-    card. Titles/thumbnails come from Steam's public
-    `ISteamRemoteStorage/GetPublishedFileDetails` (no API key needed) and are
-    cached in the `ZomboidMod` table — the .ini stays authoritative for what's
-    enabled.
-  - Timing to tell players: a mod **downloads on the next start and loads on the
-    one after that**.
-- **Settings:** `/api/zomboid/config` exposes the whole .ini generically (the `#`
-  comment above each key becomes its help text). `INFRA_KEYS` in
-  `src/lib/zomboid.ts` (RCON + the published ports) plus `Mods`/`WorkshopItems`
-  are locked out of that editor — the ports would break connectivity, and the mod lists
-  belong to the Mods page. Quick settings (name/password/max players/public/PVP/
-  pause-when-empty) write to the same endpoint, so there's no second copy to
-  drift. Sandbox options are Lua, not .ini — the page points at the file browser.
-- **Config import** (`/api/zomboid/config/import`, the card on the Settings page):
-  upload an existing server's `.ini` to move a server you already ran. It
-  replaces the file wholesale — settings *and* both mod lists, which is usually
-  the point — but **puts this box's `INFRA_KEYS` back** (RCON password/port,
-  DefaultPort, UDPPort, SteamPort1/2), so an imported config can't take the app's
-  control channel or point the server at unpublished ports. POST without
-  `apply` returns a preview (what changes / what's added / what's dropped / which
-  keys stay local / which mods come across); POST with `apply: true` backs the
-  current file up to `<name>.ini.bak-<stamp>` and writes. An import whose
-  `Mods=` names ids that no Workshop item provides shows up in the Mods page's
-  "Loaded without a Workshop item" list — that's the intended catch.
-- **Backups** bundle `Saves/Multiplayer/<name>` + `db/<name>.db` + `Server/<name>*`
-  + a `manifest.json`, so one restore rebuilds the world, the accounts and the
-  settings together.
-- **Firewall:** as with the other games, the ports must be open in BOTH the box's
-  `ufw` and the Hetzner Cloud Firewall — 16261/udp + 16262/udp (game) and
-  8766-8767/udp (Steam query, needed for the public server list).
+The bare minimum for shared code that has to know PZ exists:
+
+- Image is a **derived build** — `pz/Dockerfile` on top of
+  `danixu86/project-zomboid-dedicated-server`, because the upstream image's map
+  scanner is broken. Compose builds it as `yoshling/project-zomboid`.
+- Game files are baked into the image; only Workshop mods download at runtime.
+- One data dir, mounted into web as `/zomboid` (`PZ_SERVER_DIR`): the `.ini`, the
+  sandbox Lua, the save, the player db. Workshop content is a second, read-only
+  mount at `/zomboid-workshop`.
+- **Control is RCON on 27015**, unpublished — the web container reaches it as
+  `zomboid:27015`. `PZ_RCON_PASSWORD` must match the game's `RCONPASSWORD`.
+- **`stop_grace_period: 300s`**, and the driver stops with `-t 300`. The entrypoint
+  saves the world on SIGTERM and a 76-mod save overran 120s once, so Docker
+  SIGKILLed it mid-save.
+- The web app also runs a **Workshop update watcher** (`src/lib/zomboid-updates.ts`
+  on a 5-min timer from `src/instrumentation.ts`) that can restart the server by
+  itself when it is empty. If PZ restarts unexpectedly, look there first.
 
 ### TLS / the domain
 
@@ -636,62 +451,55 @@ not the Hetzner box). Full chain, all encrypted:
 ### Connecting to the game servers (NOT via Cloudflare)
 
 Game traffic can't go through Cloudflare (it only carries HTTP/HTTPS). Players
-connect **directly to the box IP `178.105.163.254`**:
+connect **directly to the box IP `89.58.50.155`**:
 - **Minecraft:** `mc.yoshling.xyz` (a **DNS-only / grey-cloud** A record → the box)
   or the IP, port 25565.
 - **7DTD:** the app shows both `7dtd.yoshling.xyz:26900` and the raw
-  `178.105.163.254:26900`. 7DTD's direct-connect box often only accepts a
+  `89.58.50.155:26900`. 7DTD's direct-connect box often only accepts a
   **literal IP**, so the IP is the reliable one. The `7dtd` A record is also
   DNS-only. (`connect` in `games.ts` is a `string[]` so a game can list several.)
 - **Project Zomboid:** `pz.yoshling.xyz:16261` or the raw
-  `178.105.163.254:16261`. **The `pz` A record still has to be created** as a
+  `89.58.50.155:16261`. **The `pz` A record still has to be created** as a
   DNS-only (grey-cloud) record → the box; until then, use the IP.
-- **Firewall is two layers** — the game ports must be open in BOTH the server's
-  `ufw` (25565/tcp, 26900/tcp, 26900-26902/udp, 16261-16262/udp, 8766-8767/udp)
-  AND the Hetzner Cloud Firewall in the console. Missing either = "connect hangs,
-  nothing in logs".
+- **Firewall is one layer now.** netcup has no cloud-firewall product, so `ufw` on
+  the box is the only gate: 25565/tcp, 26900/tcp, 26900-26902/udp, 16261-16262/udp,
+  8766-8767/udp. (On Hetzner this was two layers and missing either meant "connect
+  hangs, nothing in logs" — that trap is gone with the move.)
 - Server-browser listing: 7DTD `ServerVisibility=2` (public) in `sdtdserver.xml`;
   set a unique `ServerName` (via 7DTD Settings) to find it, or just direct-connect.
 
 ## Status
 
-- **Live** at `https://yoshling.xyz` (Cloudflare Full (strict), verified end-to-end).
-- **Minecraft:** running/healthy; all features (mods, console, files, backups,
-  settings, whitelist) working.
-- **7 Days to Die:** installed (~17 GB via SteamCMD), on the **`latest_experimental`**
-  branch (game **V3.1.0 b11**). Telnet control, file browser (Config/Saves), world
-  upload, and in-game join verified. Powered off by default (MC is the default
-  active world; `GameState.activeGame = minecraft`).
-- **Project Zomboid: deployed 2026-09-13.** Container `yoshling-pz` is **created
-  but not started** (7DTD held the box at deploy time), so the first Power on from
-  the UI is what boots it. Image pulled (10.4 GB; box went 47% → 55% disk). ufw
-  has 16261/udp, 16262/udp and 8766-8767/udp. `PZ_RCON_PASSWORD` +
-  `PZ_ADMIN_PASSWORD` were generated and appended to `/opt/yoshling/.env`.
-  Verified in production: every route 401s unauthenticated, all pages render, the
-  web container can `docker inspect yoshling-pz`, the `zomboid` network alias is
-  in place, `SELF_MANAGED_MODS=true`, `PASSWORD`/`PUBLIC`/`DISPLAYNAME` absent,
-  StopTimeout=120, and the stats collector is writing `stats-zomboid.json`.
-  Verified locally against real inputs: the .ini parser/writer round-trips a real
-  139-key `servertest.ini` (writes touch only the intended lines, all comments
-  survive), the Steam Workshop lookup + `Mod ID:` parse work on live items, and
-  add/edit/remove/import all produce the correct `Mods=` / `WorkshopItems=` lines.
-  **Still untested because it needs the game running:** RCON control, backups, and
-  a real Workshop download.
-- **Per-world access: deployed.** `User.games` + `ZomboidMod` applied to the prod
-  DB; all 5 existing accounts backfilled with all three worlds. Note they are
-  **all ADMIN** — a consequence of the old signup bug (every new account was
-  created ADMIN). Demote whoever shouldn't be on the Crew page; a non-ADMIN role
-  is what makes the per-world chips take effect.
-- **Not done, needs a dashboard I don't have:** the `pz.yoshling.xyz` DNS record
-  (DNS-only / grey-cloud → the box) and the **Hetzner Cloud Firewall** rules for
-  the PZ ports. Until both exist, players connect on `178.105.163.254:16261` and
-  only if the cloud firewall lets them.
-- At deploy time the active world was **7 Days to Die** (up 6 weeks), Minecraft
-  stopped — not what an earlier version of this file claimed.
+**Live** at `https://yoshling.xyz` on **netcup `89.58.50.155`** (Cloudflare Full
+(strict), verified end-to-end). Migrated off Hetzner 2026-09-13 — see MIGRATION.md.
+
+- **Minecraft:** all features working (mods, console, files, backups, settings,
+  whitelist). Not yet started on netcup since the migration.
+- **7 Days to Die:** on `latest_experimental` (game **V3.1.0 b11**). Telnet control,
+  file browser, world upload and in-game join all verified — on the *old* box. It
+  will re-download ~17 GB via SteamCMD on its first netcup start.
+- **Project Zomboid:** running, 89 mods, played on daily. Full status, what's
+  verified and what's outstanding: **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md#status)**.
+- **Per-world access:** deployed; `User.games` + `ZomboidMod` applied to the prod
+  DB and all 5 accounts backfilled with all three worlds. **They are all ADMIN**, a
+  leftover from the old signup bug — a non-ADMIN role is what makes the per-world
+  chips actually bite, so demote whoever shouldn't be an admin on the Crew page.
+- **MOD now has the same capabilities as ADMIN**, scoped to its granted worlds;
+  only `users.manage` is ADMIN-only. See "Roles & per-world access".
+
+Outstanding across the project:
+
+- The old Hetzner box (`~/.ssh/mc_yoshling`) is still running as a rollback. Delete
+  it once Minecraft and 7DTD have been started and joined on netcup.
+- **`pz.yoshling.xyz` DNS record** doesn't exist yet (needs the Cloudflare
+  dashboard); players use the raw IP.
+- **The netcup root password was pasted into a chat transcript and should be
+  rotated.**
 
 > Keep this file current. It's the project's living status doc — update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
-> session can tell where things stand.
+> session can tell where things stand. **Game-specific detail belongs in that
+> game's doc, not here** — see "Per-game deep docs" at the top.
 
 ## Conventions
 
