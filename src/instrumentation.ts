@@ -71,13 +71,13 @@ export async function register() {
         try {
           const { pollModUpdates } = await import("@/lib/zomboid-updates");
           const { action, stale } = await pollModUpdates();
-          if (action !== "none" && action !== "skipped") {
-            console.log(
-              `[pz-updates] ${action}: ${stale.map((s) => `${s.title} (${s.id})`).join(", ")}`
-            );
-          }
+          // Logged on every tick, including "none". A watcher that only speaks up
+          // when it acts is indistinguishable from one that silently died — which
+          // cost real time to diagnose the first time round.
+          const names = stale.map((s) => `${s.title} (${s.id})`).join(", ");
+          console.log(`[pz-updates] ${action}${names ? `: ${names}` : ""}`);
         } catch (e) {
-          console.error("[pz-updates]", e instanceof Error ? e.message : e);
+          console.error("[pz-updates] failed:", e);
         } finally {
           running = false;
         }
