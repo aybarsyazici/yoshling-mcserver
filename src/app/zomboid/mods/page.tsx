@@ -3,6 +3,7 @@
 import { SectionHeading } from "@/components/ui-bits";
 import { ZomboidMods } from "@/components/zomboid-mods";
 import { ZomboidMaps } from "@/components/zomboid-maps";
+import { ZomboidUpdateStatus } from "@/components/zomboid-update-status";
 import { GAMES } from "@/lib/games";
 
 export default function ZomboidModsPage() {
@@ -15,6 +16,8 @@ export default function ZomboidModsPage() {
         sub="Steam Workshop mods, written straight into the server config. Restart to apply."
         tint={tint}
       />
+      <ZomboidUpdateStatus tint={tint} />
+
       <ZomboidMods tint={tint} />
 
       <ZomboidMaps tint={tint} />

@@ -19,10 +19,17 @@ export async function GET() {
   ]);
 
   return NextResponse.json({
-    // null means the check itself failed (Steam unreachable, no manifest yet)
+    // null means this request's own check failed (Steam unreachable, no manifest)
     stale,
+    /** When the watcher last completed a check — null if it has never run. */
+    checkedAt: state.checkedAt || null,
+    /** Why that check failed, or "" if it was fine. */
+    lastError: state.lastError || "",
     announcedAt: state.announcedAt || null,
     appliedAt: state.appliedAt || null,
+    /** So the card can say how long until the next check without hardcoding it. */
+    pollMs: Number(process.env.PZ_UPDATE_POLL_MS || 5 * 60 * 1000),
+    watching: (process.env.PZ_UPDATE_WATCH ?? "true") !== "false",
   });
 }
 

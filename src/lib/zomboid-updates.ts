@@ -67,7 +67,7 @@ export interface StaleMod {
   published: number;
 }
 
-interface WatchState {
+export interface WatchState {
   /** Workshop ids known to be out of date, so we only announce on a change. */
   pendingIds: string[];
   /** When the pending update was last announced in game. */
@@ -76,9 +76,24 @@ interface WatchState {
   appliedAt: number;
   /** Titles of the pending mods, so the UI can name them. */
   pendingTitles: string[];
+  /**
+   * When a check last completed, successfully or not. Written on **every** tick
+   * so the UI can distinguish "nothing to update" from "the watcher stopped
+   * running" — which are otherwise identical from the outside.
+   */
+  checkedAt: number;
+  /** Why the last check failed, or "" if it succeeded. */
+  lastError: string;
 }
 
-const EMPTY_STATE: WatchState = { pendingIds: [], announcedAt: 0, appliedAt: 0, pendingTitles: [] };
+const EMPTY_STATE: WatchState = {
+  pendingIds: [],
+  announcedAt: 0,
+  appliedAt: 0,
+  pendingTitles: [],
+  checkedAt: 0,
+  lastError: "",
+};
 
 export async function readWatchState(): Promise<WatchState> {
   try {
@@ -281,69 +296,76 @@ function announcement(stale: StaleMod[]): string {
   return `${label} ${shown}${rest}: the server will restart to update once all players leave.`;
 }
 
+export type PollAction = "none" | "announced" | "applied" | "seeded" | "skipped";
+
 /**
  * One poll. Safe to call on a timer and safe to call concurrently with the UI —
  * the control lock is what serialises it, and a busy lock just skips this round.
+ *
+ * Records `checkedAt` on **every** call, success or failure, because "everything
+ * is up to date" and "the watcher stopped running" look identical otherwise.
  */
-export async function pollModUpdates(): Promise<
-  { action: "none" | "announced" | "applied" | "seeded" | "skipped"; stale: StaleMod[] }
-> {
+export async function pollModUpdates(): Promise<{ action: PollAction; stale: StaleMod[] }> {
   const state = await readWatchState();
+  try {
+    const { action, stale, next } = await runPoll(state);
+    await writeWatchState({ ...state, ...next, checkedAt: Date.now(), lastError: "" });
+    return { action, stale };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    await writeWatchState({ ...state, checkedAt: Date.now(), lastError: message });
+    throw e;
+  }
+}
+
+/** The decision itself. Returns the state changes it wants rather than writing. */
+async function runPoll(
+  state: WatchState
+): Promise<{ action: PollAction; stale: StaleMod[]; next: Partial<WatchState> }> {
   const stale = await findStaleMods();
 
   if (stale.length === 0) {
-    if (state.pendingIds.length > 0) {
-      await writeWatchState({ ...state, pendingIds: [], pendingTitles: [] });
-    }
-    return { action: "none", stale };
+    return { action: "none", stale, next: { pendingIds: [], pendingTitles: [] } };
   }
 
   const ids = stale.map((s) => s.id);
   const snap = await getGameStatus("zomboid");
 
   // Mid-boot: mods are being loaded right now, so leave it alone.
-  if (snap.status === "starting") return { action: "skipped", stale };
+  if (snap.status === "starting") return { action: "skipped", stale, next: {} };
 
   // Stopped anyway — bring the files up to date so the next start is clean and
   // the server never has to run its own crash-prone downloader.
   if (snap.status !== "online") {
     await seedMods(ids);
-    await writeWatchState({
-      ...state,
-      pendingIds: [],
-      pendingTitles: [],
-      appliedAt: Date.now(),
-    });
-    return { action: "seeded", stale };
+    return {
+      action: "seeded",
+      stale,
+      next: { pendingIds: [], pendingTitles: [], appliedAt: Date.now() },
+    };
   }
 
   if (snap.players.online > 0) {
+    const next: Partial<WatchState> = { pendingIds: ids, pendingTitles: stale.map((s) => s.title) };
     const changed = ids.join(",") !== state.pendingIds.join(",");
     const due = Date.now() - state.announcedAt > REANNOUNCE_MS;
     if (changed || due) {
       await pzConsole(`servermsg "${announcement(stale).replace(/"/g, "'")}"`).catch(() => {});
-      await writeWatchState({
-        ...state,
-        pendingIds: ids,
-        pendingTitles: stale.map((s) => s.title),
-        announcedAt: Date.now(),
-      });
+      next.announcedAt = Date.now();
     }
-    return { action: "announced", stale };
+    return { action: "announced", stale, next };
   }
 
   // Empty: apply it.
   try {
     await withGameStopped("zomboid", "restart", () => seedMods(ids));
   } catch (e) {
-    if (e instanceof ControlBusyError) return { action: "skipped", stale };
+    if (e instanceof ControlBusyError) return { action: "skipped", stale, next: {} };
     throw e;
   }
-  await writeWatchState({
-    pendingIds: [],
-    pendingTitles: [],
-    announcedAt: 0,
-    appliedAt: Date.now(),
-  });
-  return { action: "applied", stale };
+  return {
+    action: "applied",
+    stale,
+    next: { pendingIds: [], pendingTitles: [], announcedAt: 0, appliedAt: Date.now() },
+  };
 }
