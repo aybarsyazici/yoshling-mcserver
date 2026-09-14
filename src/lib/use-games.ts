@@ -9,12 +9,21 @@ export interface GameSnapshot {
   uptime?: string;
   players: { online: number; max: number; players: string[] };
   detail?: string;
+  /**
+   * Where a booting server has got to. Present only while `status` is "starting".
+   * Project Zomboid needs minutes with a big mod list, and "Working…" alone is
+   * indistinguishable from stuck — which is exactly how a working auto-update got
+   * reported as not running.
+   */
+  boot?: { stage: string; percent: number | null };
 }
 
 export interface ControlLock {
   game: GameId;
   action: "start" | "stop" | "restart";
   since: number;
+  /** What the operation is doing right now, e.g. "Downloading updated mods". */
+  stage?: string;
 }
 
 export interface GamesState {

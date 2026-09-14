@@ -54,6 +54,10 @@ export function GameControls({ game }: { game: GameId }) {
   // use it sees that up front instead of a "Forbidden" toast after pressing it.
   const canPower = isOnline ? can.stop : can.start;
 
+  // Only *this* world's operation should describe itself here — a hand-off that
+  // is stopping another world shouldn't caption this card.
+  const busyStage = serverBusy?.game === game ? serverBusy.stage : undefined;
+
   function onPower() {
     if (busy) return;
     if (isOnline) return void control("stop");
@@ -109,6 +113,45 @@ export function GameControls({ game }: { game: GameId }) {
         <div className="my-4 flex justify-center">
           <PowerCore state={coreState} size={120} />
         </div>
+
+        {/* What's actually happening. A big mod list takes minutes to load, and
+            without a stage + bar the UI reads as hung rather than working. The
+            control lock's stage wins when set, because it describes what WE are
+            doing (stopping / downloading); otherwise fall back to the server's
+            own boot progress. */}
+        {(busyStage || snap?.boot) && (
+          <div className="mb-4">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
+              <span className="truncate text-muted-foreground">
+                {busyStage ?? snap?.boot?.stage}
+              </span>
+              {!busyStage && snap?.boot?.percent != null && (
+                <span className="font-mono tabular-nums" style={{ color: meta.tint }}>
+                  {snap.boot.percent}%
+                </span>
+              )}
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10">
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: meta.tint }}
+                initial={false}
+                // No percentage to show (our own stage, or an unknown phase):
+                // an indeterminate sweep rather than a fake number.
+                animate={
+                  busyStage || snap?.boot?.percent == null
+                    ? { width: ["15%", "85%", "15%"], x: ["0%", "18%", "0%"] }
+                    : { width: `${snap.boot.percent}%`, x: "0%" }
+                }
+                transition={
+                  busyStage || snap?.boot?.percent == null
+                    ? { duration: 2.2, repeat: Infinity, ease: "easeInOut" }
+                    : { type: "spring", stiffness: 90, damping: 22 }
+                }
+              />
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-2 text-center">
           <Cell label="Players" value={isOnline && players ? `${players.online}/${players.max}` : "—"} tint={meta.tint} />

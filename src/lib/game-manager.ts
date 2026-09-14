@@ -5,7 +5,7 @@ import path from "path";
 import { GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { getPlayerList, sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
-import { getPzStatus, pzSave } from "@/lib/zomboid";
+import { getPzStatus, pzSave, readModState } from "@/lib/zomboid";
 import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
 
 const execAsync = promisify(exec);
@@ -168,6 +168,12 @@ export interface GameStatus {
   players: { online: number; max: number; players: string[] };
   /** Free-form extra info: MC version, or 7DTD in-game day */
   detail?: string;
+  /**
+   * Where a booting server has got to. Only set while `status` is "starting".
+   * Project Zomboid takes minutes to come up with a large mod list, and without
+   * this the UI can only say "Working…", which is indistinguishable from stuck.
+   */
+  boot?: { stage: string; percent: number | null };
 }
 
 interface GameDriver {
@@ -271,6 +277,56 @@ const sevenDtdDriver: GameDriver = {
 // mid-save. Keep this in step with `stop_grace_period` in docker-compose.yml.
 const PZ_STOP_TIMEOUT = 300;
 
+/**
+ * How far into its boot Project Zomboid is, read out of the container log.
+ *
+ * Mod loading dominates (89 mods ≈ minutes), and each one logs `> loading <id>`,
+ * so counting those against the length of `Mods=` gives a real percentage rather
+ * than a spinner. One `docker logs | awk` pass rather than streaming the whole
+ * log into node — it can be 100k+ lines.
+ */
+const cachedPzBoot = cachedProbe(3000, async (): Promise<{ stage: string; percent: number | null }> => {
+  const started = await containerStartedAt(RUNTIME.zomboid.container);
+  const since = started ? new Date(started).toISOString() : "10m";
+  let counts = { loading: 0, started: 0, rcon: 0, maps: 0, workshop: 0, jvm: 0 };
+  try {
+    const { stdout } = await execAsync(
+      `docker logs --since '${since}' ${RUNTIME.zomboid.container} 2>&1 | awk '` +
+        `/> loading /{l++} /SERVER STARTED/{s=1} /RCON: listening/{r=1} ` +
+        `/Found [0-9]+ map\\(s\\)|INFO: Added maps/{m=1} /Workshop: /{w=1} /using jvm/{j=1} ` +
+        `END{printf "%d %d %d %d %d %d", l+0, s+0, r+0, m+0, w+0, j+0}'`,
+      { maxBuffer: 1024 * 1024 }
+    );
+    const [l, st, r, m, w, j] = stdout.trim().split(/\s+/).map((n) => Number(n) || 0);
+    counts = { loading: l, started: st, rcon: r, maps: m, workshop: w, jvm: j };
+  } catch {
+    return { stage: "Starting up", percent: null };
+  }
+
+  // Total comes from Mods=, so the denominator is whatever is actually enabled.
+  let total = 0;
+  try {
+    total = (await readModState()).modIds.length;
+  } catch {}
+
+  if (counts.rcon) return { stage: "Ready", percent: 100 };
+  if (counts.started) return { stage: "Opening the server to players", percent: 97 };
+  if (counts.loading > 0) {
+    // Mods are ~15%→90% of the wait; the world still has to load afterwards.
+    const frac = total > 0 ? Math.min(1, counts.loading / total) : 0;
+    return {
+      stage: total > 0
+        ? `Loading mods (${Math.min(counts.loading, total)} of ${total})`
+        : `Loading mods (${counts.loading})`,
+      percent: total > 0 ? Math.round(15 + frac * 75) : null,
+    };
+  }
+  if (counts.jvm) return { stage: "Loading the game", percent: 12 };
+  if (counts.workshop) return { stage: "Checking Workshop mods", percent: 8 };
+  if (counts.maps) return { stage: "Scanning maps", percent: 5 };
+  return { stage: "Starting container", percent: 2 };
+});
+
 const zomboidDriver: GameDriver = {
   async status() {
     const { container } = RUNTIME.zomboid;
@@ -285,6 +341,8 @@ const zomboidDriver: GameDriver = {
       status: s.reachable ? "online" : "starting",
       uptime: startedAt ? fmtUptime(startedAt) : undefined,
       players: s.players,
+      // Only while booting: once RCON answers there's nothing left to report.
+      boot: s.reachable ? undefined : await cachedPzBoot().catch(() => undefined),
     };
   },
   async start() {
@@ -345,12 +403,31 @@ export type ControlAction = "start" | "stop" | "restart";
 export interface ControlLock {
   game: GameId;
   action: ControlAction;
+  /** When the operation began. Never moves — the UI shows elapsed time from it. */
   since: number;
+  /**
+   * Last proof-of-life from the holder, refreshed while it works. Expiry is
+   * judged on THIS, not `since`, so a slow operation keeps its lock while a
+   * crashed one still releases.
+   */
+  beat: number;
+  /** What the holder is doing right now, for the UI. */
+  stage?: string;
 }
 
-// Generous: a Project Zomboid stop waits for the world to finish saving (up to
-// PZ_STOP_TIMEOUT), and a hand-off does that *before* starting the next world.
-const LOCK_MAX_MS = 300_000;
+/**
+ * How long without a heartbeat before the lock is assumed abandoned.
+ *
+ * This used to be judged against `since`, which made it a cap on total operation
+ * length — and at 300s it was shorter than a single Project Zomboid graceful stop
+ * (`PZ_STOP_TIMEOUT` is 300 *seconds*). So a mod-update apply would lose its lock
+ * partway through, a second operation could start on top, and two SteamCMD runs
+ * would race on the same workshop volume; one then reported
+ * "SteamCMD updated 0 of 1 mods". Heartbeats fix that without needing a number
+ * larger than the slowest imaginable operation.
+ */
+const LOCK_STALE_MS = 90_000;
+const HEARTBEAT_MS = 20_000;
 let controlLock: ControlLock | null = null;
 
 export class ControlBusyError extends Error {
@@ -364,19 +441,31 @@ export class ControlBusyError extends Error {
 
 /** The in-flight control operation, or null. Auto-expires stale locks. */
 export function currentControlLock(): ControlLock | null {
-  if (controlLock && Date.now() - controlLock.since > LOCK_MAX_MS) {
+  if (controlLock && Date.now() - controlLock.beat > LOCK_STALE_MS) {
     controlLock = null;
   }
   return controlLock;
 }
 
+/** Describe what the in-flight operation is doing, for the UI. No-op if unlocked. */
+export function setControlStage(stage: string): void {
+  if (controlLock) controlLock.stage = stage;
+}
+
 async function withControlLock<T>(game: GameId, action: ControlAction, fn: () => Promise<T>): Promise<T> {
   const held = currentControlLock();
   if (held) throw new ControlBusyError(held);
-  controlLock = { game, action, since: Date.now() };
+  const now = Date.now();
+  controlLock = { game, action, since: now, beat: now };
+  // Keep proving we're alive for as long as the work takes. Without this the lock
+  // frees itself mid-operation and a second one starts on top of it.
+  const heart = setInterval(() => {
+    if (controlLock) controlLock.beat = Date.now();
+  }, HEARTBEAT_MS);
   try {
     return await fn();
   } finally {
+    clearInterval(heart);
     controlLock = null;
   }
 }
@@ -423,9 +512,16 @@ export async function withGameStopped(
 ): Promise<{ restarted: boolean }> {
   return withControlLock(game, action, async () => {
     const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
-    if (wasRunning) await DRIVERS[game].gracefulStop();
+    if (wasRunning) {
+      setControlStage("Saving and stopping the server");
+      await DRIVERS[game].gracefulStop();
+    }
+    setControlStage("Downloading updated mods");
     await whileStopped();
-    if (wasRunning) await DRIVERS[game].start();
+    if (wasRunning) {
+      setControlStage("Starting the server");
+      await DRIVERS[game].start();
+    }
     return { restarted: wasRunning };
   });
 }

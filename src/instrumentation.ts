@@ -65,7 +65,7 @@ export async function register() {
     // discover — we are only waiting for the last player to log off. Checking on
     // the slow cadence meant up to POLL_MS of dead air after the server emptied
     // before the restart even began, which reads as "why isn't it back yet".
-    const PENDING_MS = Number(process.env.PZ_UPDATE_PENDING_POLL_MS || 30 * 1000);
+    const PENDING_MS = Number(process.env.PZ_UPDATE_PENDING_POLL_MS || 15 * 1000);
     const WATCH = (process.env.PZ_UPDATE_WATCH ?? "true") !== "false";
 
     if (WATCH) {

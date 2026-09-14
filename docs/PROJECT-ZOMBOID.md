@@ -101,11 +101,26 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   RCON `servermsg` and waits; it applies one only when the server is empty. If PZ
   is already stopped it just seeds the files so the next start is clean.
   - **Two cadences.** Detection every 5 min (`PZ_UPDATE_POLL_MS`); while an update
-    is pending it drops to 30 s (`PZ_UPDATE_PENDING_POLL_MS`), because at that
+    is pending it drops to 15 s (`PZ_UPDATE_PENDING_POLL_MS`), because at that
     point nothing new can be discovered and it is only waiting for the last player
     to leave. On one cadence, logging off meant waiting out the remainder of a
     5-minute poll before the restart even began — which reads to players as the
     server being stuck rather than updating.
+  - **The apply is silent for ~6 minutes, and that got misread as broken.** A real
+    apply on 2026-09-14 ran 20:42:22 → 20:48:10: a graceful stop, a 137 MB
+    download, then a full boot. The watcher logs only *after* it finishes, so the
+    log went quiet and it looked like nothing was happening — the operator clicked
+    "Check now", which then collided with the apply already in flight (see the lock
+    bug below). Progress is now reported: `withGameStopped` publishes a stage
+    ("Saving and stopping the server" → "Downloading updated mods" → "Starting the
+    server") onto the control lock, and `/api/games/status` exposes it as
+    `busy.stage`.
+  - **Boot progress.** `GameStatus.boot` (`{stage, percent}`) is filled while
+    `status === "starting"`, from one `docker logs | awk` pass over the container
+    log. Mod loading dominates the wait, and every mod logs `> loading <id>`, so
+    the percentage is `loaded / len(Mods=)` mapped onto 15–90%. Note the count can
+    **exceed** `Mods=` (dependency mods load too — 89 loading lines against 87
+    entries), so it is clamped.
   `GET/POST /api/zomboid/updates` exposes and force-runs it.
   - **It compares Steam's manifest, not file mtimes.**
     `appworkshop_108600.acf` → `WorkshopItemsInstalled.<id>.timeupdated` is the

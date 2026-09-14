@@ -103,6 +103,14 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   throws `ControlBusyError` → HTTP 409 (prevents Restart-button spam / racing
   `docker` commands). `/api/games/status` exposes the in-flight lock as `busy`;
   `useGames` surfaces it so every control UI disables while an op runs.
+  - **The lock is kept alive by a heartbeat, and expiry is judged on that** — not
+    on when the operation started. It used to expire 300s after `since`, which is
+    *shorter than a single PZ graceful stop* (`PZ_STOP_TIMEOUT` is 300 seconds).
+    So a long operation lost its own lock partway through and a second one could
+    start on top: two SteamCMD runs raced on the same workshop volume and one
+    reported "updated 0 of 1 mods". Don't reintroduce a total-duration cap.
+  - `setControlStage()` lets a long operation describe itself; it surfaces as
+    `busy.stage` and is rendered as a progress line in `game-controls.tsx`.
 - `src/lib/rcon.ts` — the shared Source-RCON transport, keyed per target with one
   cached authenticated socket each. Minecraft (25575) and Project Zomboid (27015)
   both speak it; `sendCommand`/`getPlayerList` are the Minecraft wrappers.
