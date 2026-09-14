@@ -428,6 +428,38 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   a full re-seed.) Only nuke the manifest if an item still fails `validate`
   because its recorded version is wrong, and then re-seed everything deliberately.
 
+- **Automatic Workshop mod updates** (`src/lib/zomboid-updates.ts`, driven by a
+  5-min timer in `src/instrumentation.ts`; knobs `PZ_UPDATE_WATCH` /
+  `PZ_UPDATE_POLL_MS` on the web service). Policy, chosen deliberately: it
+  **never interrupts play** — if anyone is connected it announces the update over
+  RCON `servermsg` and waits; it applies one only when the server is empty. If PZ
+  is already stopped it just seeds the files so the next start is clean.
+  `GET/POST /api/zomboid/updates` exposes and force-runs it.
+  - **It compares Steam's manifest, not file mtimes.**
+    `appworkshop_108600.acf` → `WorkshopItemsInstalled.<id>.timeupdated` is the
+    version on disk; `GetPublishedFileDetails` → `time_updated` is the published
+    one. Exact, and one small file read plus **one batched HTTP request for all 75
+    mods** (not one per mod) — which is what makes 5-min polling free. Validated
+    against production: 75 manifest entries, 75 ini entries, 0 false positives.
+  - It holds the **control lock** via `withGameStopped()`, so it can't interleave
+    with a restart from the UI; a busy lock just skips that round.
+  - **There is no push alternative — this was checked, not assumed.** Steam has no
+    Workshop webhook. PICS changelists are a timer poll (`changelistUpdateInterval`
+    → `ClientPICSChangesSinceRequest`) and carry **only appIDs and packageIDs**, so
+    they would report a Project Zomboid *game* patch and never a mod update. PZ has
+    no server option for it and no Lua event that fires on an upstream change
+    (`OnModsModified` is the local list). And the version check is **client-side**
+    (`gameStates/ConnectToServerState`), so the server logs nothing when a join is
+    refused — there is no failed-join event to trigger on either. Don't re-litigate
+    this without new evidence.
+  - Measured 2026-09-14: **~9 mod updates/week** across the 75-mod list, 3 in one
+    day. That is why a nightly scheduled restart (what most community servers do)
+    is not sufficient here.
+- **`checkModsNeedUpdate` is PZ's own check, over RCON**, and it is authoritative:
+  it went `Mods need update` → (fix) → `Mods updated` for us. **But its reply says
+  the answer is written "in the log file and in the chat"**, so do NOT poll it on a
+  timer — it would likely spam players. Use it for confirmation around a restart;
+  use the Steam manifest comparison for detection.
 - **When a mod updates on Steam, the server keeps serving the old version until it
   restarts, and clients that auto-updated cannot join.** No mismatch line appears
   in the server log — the join just fails, so it looks like the server is broken.

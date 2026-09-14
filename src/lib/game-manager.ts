@@ -407,6 +407,37 @@ export async function powerOff(game: GameId): Promise<void> {
   return withControlLock(game, "stop", () => DRIVERS[game].gracefulStop());
 }
 
+/**
+ * Save + stop `game`, run `whileStopped`, then start it again — all while
+ * holding the control lock, so a restart from the UI can't interleave.
+ *
+ * Exists for the Workshop mod updater: replacing mod files under a running
+ * server means overwriting files the JVM has open and partly mmap'd, so the
+ * download has to happen with the world down. A world that was already stopped
+ * stays stopped, and `restarted` says which it was.
+ */
+export async function withGameStopped(
+  game: GameId,
+  action: ControlAction,
+  whileStopped: () => Promise<void>
+): Promise<{ restarted: boolean }> {
+  return withControlLock(game, action, async () => {
+    const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
+    if (wasRunning) await DRIVERS[game].gracefulStop();
+    await whileStopped();
+    if (wasRunning) await DRIVERS[game].start();
+    return { restarted: wasRunning };
+  });
+}
+
+/** The image the game's container was created from, for one-off helper runs. */
+export async function containerImage(game: GameId): Promise<string> {
+  const { stdout } = await execAsync(
+    `docker inspect ${RUNTIME[game].container} --format '{{.Config.Image}}'`
+  );
+  return stdout.trim();
+}
+
 export async function restartGame(game: GameId): Promise<void> {
   return withControlLock(game, "restart", () => DRIVERS[game].restart());
 }

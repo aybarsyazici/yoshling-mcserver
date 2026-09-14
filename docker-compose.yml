@@ -131,6 +131,12 @@ services:
       PZ_RCON_HOST: "zomboid"
       PZ_RCON_PORT: "27015"
       PZ_RCON_PASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
+      # Watch Steam for Workshop mod updates. A republished mod locks out anyone
+      # who logs off, so this checks every 5 min, announces in game while people
+      # are playing, and applies the update only once the server is empty.
+      # Set to "false" to turn the watcher off entirely.
+      PZ_UPDATE_WATCH: "true"
+      PZ_UPDATE_POLL_MS: "300000"
       # Large world uploads bypass Cloudflare's 100MB cap via this direct host.
       NEXT_PUBLIC_DIRECT_UPLOAD_HOST: "${DIRECT_UPLOAD_HOST:-}"
       NEXT_PUBLIC_DIRECT_UPLOAD_ORIGIN: "${DIRECT_UPLOAD_HOST:-}"

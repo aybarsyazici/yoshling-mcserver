@@ -50,5 +50,41 @@ export async function register() {
     // Collect stats every 5 seconds in background
     setInterval(collectStats, 5000);
     collectStats();
+
+    // ── Project Zomboid Workshop mod updates ────────────────────────────────
+    //
+    // A mod republished on Steam locks out anyone who logs off, because the
+    // version check is client-side and the server keeps serving the old copy.
+    // See lib/zomboid-updates.ts for why this polls rather than subscribes.
+    //
+    // Imported lazily inside the tick, not up here: register() runs before the
+    // app is fully booted, and the watcher pulls in the game manager and the
+    // Prisma client.
+    const POLL_MS = Number(process.env.PZ_UPDATE_POLL_MS || 5 * 60 * 1000);
+    const WATCH = (process.env.PZ_UPDATE_WATCH ?? "true") !== "false";
+
+    if (WATCH) {
+      let running = false;
+      const tick = async () => {
+        if (running) return; // a slow SteamCMD run must not overlap the next tick
+        running = true;
+        try {
+          const { pollModUpdates } = await import("@/lib/zomboid-updates");
+          const { action, stale } = await pollModUpdates();
+          if (action !== "none" && action !== "skipped") {
+            console.log(
+              `[pz-updates] ${action}: ${stale.map((s) => `${s.title} (${s.id})`).join(", ")}`
+            );
+          }
+        } catch (e) {
+          console.error("[pz-updates]", e instanceof Error ? e.message : e);
+        } finally {
+          running = false;
+        }
+      };
+      setInterval(tick, POLL_MS);
+      // Delay the first run so it doesn't race the app's own startup.
+      setTimeout(tick, 60_000);
+    }
   }
 }
