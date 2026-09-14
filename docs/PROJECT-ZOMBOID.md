@@ -100,6 +100,12 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   **never interrupts play** — if anyone is connected it announces the update over
   RCON `servermsg` and waits; it applies one only when the server is empty. If PZ
   is already stopped it just seeds the files so the next start is clean.
+  - **Two cadences.** Detection every 5 min (`PZ_UPDATE_POLL_MS`); while an update
+    is pending it drops to 30 s (`PZ_UPDATE_PENDING_POLL_MS`), because at that
+    point nothing new can be discovered and it is only waiting for the last player
+    to leave. On one cadence, logging off meant waiting out the remainder of a
+    5-minute poll before the restart even began — which reads to players as the
+    server being stuck rather than updating.
   `GET/POST /api/zomboid/updates` exposes and force-runs it.
   - **It compares Steam's manifest, not file mtimes.**
     `appworkshop_108600.acf` → `WorkshopItemsInstalled.<id>.timeupdated` is the

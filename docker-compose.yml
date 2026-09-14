@@ -137,6 +137,11 @@ services:
       # Set to "false" to turn the watcher off entirely.
       PZ_UPDATE_WATCH: "true"
       PZ_UPDATE_POLL_MS: "300000"
+      # Once an update is pending there is nothing left to discover, so the
+      # watcher switches to this faster cadence purely to notice the server
+      # emptying. Without it players had to log off and then wait out the full
+      # 5-minute poll before the restart even started.
+      PZ_UPDATE_PENDING_POLL_MS: "30000"
       # Large world uploads bypass Cloudflare's 100MB cap via this direct host.
       NEXT_PUBLIC_DIRECT_UPLOAD_HOST: "${DIRECT_UPLOAD_HOST:-}"
       NEXT_PUBLIC_DIRECT_UPLOAD_ORIGIN: "${DIRECT_UPLOAD_HOST:-}"
