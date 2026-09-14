@@ -60,6 +60,16 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
   // Only the worlds this user may open; comes from the session, so it's right on
   // the first paint rather than after the first status poll.
   const worlds = GAME_LIST.filter((g) => access.includes(g.id));
+  /**
+   * Which world the viewer is actually *in*, from the URL — null on the shared
+   * pages and on /home.
+   *
+   * Deliberately not the `game` prop: that prop also picks the accent, and the
+   * shared pages (Crew / Whitelist / Activity) pass a world purely to get one.
+   * Reading it as "you are in that world" lit up Minecraft's chip on every shared
+   * page, as though the viewer had switched worlds by opening Activity.
+   */
+  const currentGame = GAME_LIST.find((g) => pathname.startsWith(g.base))?.id ?? null;
 
   return (
     <>
@@ -123,7 +133,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
           <div className={cn("flex gap-1", collapsed ? "flex-col" : "flex-row")}>
             {worlds.map((g) => {
               const on = games?.[g.id]?.status === "online";
-              const isCurrent = g.id === game;
+              const isCurrent = g.id === currentGame;
               return (
                 <Link
                   key={g.id}
@@ -159,6 +169,9 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
 
         {/* Nav */}
         <nav className="relative flex-1 space-y-0.5 overflow-y-auto p-2">
+          {/* Named, to match the "Shared" group below. Without it these links read
+              as generic on a shared page, when they all go to one world. */}
+          {!collapsed && <p className="eyebrow px-3 pb-1 pt-1 text-muted-foreground">{meta.name}</p>}
           {nav.map((item) => {
             const isActive = pathname === item.href || (item.href !== meta.base && pathname.startsWith(item.href));
             return (
