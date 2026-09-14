@@ -1,4 +1,5 @@
 import { exec } from "child_process";
+import { existsSync } from "fs";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
@@ -92,30 +93,77 @@ async function writeWatchState(state: WatchState): Promise<void> {
 }
 
 /**
- * `timeupdated` per installed item, out of Steam's manifest.
+ * The body of a named Valve-KeyValues block, found by matching braces.
  *
- * The file is Valve KeyValues. Only the `WorkshopItemsInstalled` block matters
- * and its per-item blocks contain no nested braces, so it's matched directly
- * rather than pulling in a KV parser.
+ * Bounding the block matters: `appworkshop_<appid>.acf` contains **two** sections
+ * keyed by workshop id — `WorkshopItemsInstalled` (what is on disk) and
+ * `WorkshopItemDetails` (what Steam knows about it, including
+ * `latest_timeupdated`). Both carry a `timeupdated`. Reading from the first
+ * section to end-of-file lets the second section's values win, which silently
+ * makes installed == published for every mod and the staleness check a no-op that
+ * always answers "nothing to do". That is exactly the bug this replaced.
  */
+function kvSection(text: string, name: string): string | null {
+  const key = `"${name}"`;
+  const at = text.indexOf(key);
+  if (at < 0) return null;
+  const open = text.indexOf("{", at + key.length);
+  if (open < 0) return null;
+
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) return text.slice(open + 1, i);
+  }
+  return null;
+}
+
+/** `timeupdated` per installed item — the version actually on disk. */
 export async function installedVersions(): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   let text: string;
   try {
     text = await readFile(MANIFEST, "utf-8");
   } catch {
-    return out; // no manifest yet: nothing has been downloaded
+    return out; // nothing downloaded yet
   }
 
-  const start = text.indexOf('"WorkshopItemsInstalled"');
-  if (start < 0) return out;
-  const section = text.slice(start);
+  const section = kvSection(text, "WorkshopItemsInstalled");
+  if (!section) return out;
 
+  // Per-item blocks hold only scalars, so no nesting to worry about here.
   const itemRe = /"(\d{6,})"\s*\{([^}]*)\}/g;
   let m: RegExpExecArray | null;
   while ((m = itemRe.exec(section)) !== null) {
     const updated = /"timeupdated"\s*"(\d+)"/.exec(m[2]);
     if (updated) out.set(m[1], Number(updated[1]));
+  }
+  return out;
+}
+
+/**
+ * `latest_timeupdated` per item from `WorkshopItemDetails` — Steam's own record
+ * of the newest published version, maintained by the running server's Steam
+ * client. Used only to cross-check the Steam API answer, because it goes stale
+ * while the server is stopped and nothing refreshes it.
+ */
+export async function latestKnownVersions(): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  let text: string;
+  try {
+    text = await readFile(MANIFEST, "utf-8");
+  } catch {
+    return out;
+  }
+
+  const section = kvSection(text, "WorkshopItemDetails");
+  if (!section) return out;
+
+  const itemRe = /"(\d{6,})"\s*\{([^}]*)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = itemRe.exec(section)) !== null) {
+    const latest = /"latest_timeupdated"\s*"(\d+)"/.exec(m[2]);
+    if (latest) out.set(m[1], Number(latest[1]));
   }
   return out;
 }
@@ -158,17 +206,32 @@ export async function findStaleMods(): Promise<StaleMod[]> {
   const ids = Array.from(new Set(workshopIds.filter((id) => /^\d{6,}$/.test(id))));
   if (ids.length === 0) return [];
 
-  const [installed, published] = await Promise.all([installedVersions(), publishedVersions(ids)]);
+  const [installed, published, localLatest] = await Promise.all([
+    installedVersions(),
+    publishedVersions(ids),
+    latestKnownVersions(),
+  ]);
+
+  // A manifest that exists but yields nothing is a parse failure, not an empty
+  // server. Say so instead of reporting "nothing to update" forever.
+  if (installed.size === 0 && existsSync(MANIFEST)) {
+    throw new Error(`Parsed 0 installed items from ${MANIFEST} — manifest format changed?`);
+  }
 
   const stale: StaleMod[] = [];
   for (const id of ids) {
-    const pub = published.get(id);
     const inst = installed.get(id);
-    // No manifest entry means it was never downloaded — that's a job for the
-    // seeding path on next start, not an "update", so it isn't reported here.
-    if (!pub || inst === undefined) continue;
-    if (pub.updated > inst) {
-      stale.push({ id, title: pub.title || id, installed: inst, published: pub.updated });
+    // No manifest entry means it was never downloaded. That's the seeding path's
+    // job on next start, not an "update", so it isn't reported here.
+    if (inst === undefined) continue;
+
+    const pub = published.get(id);
+    // Trust whichever source reports the newer version: the API is authoritative
+    // but can hiccup, and the local record is exact but goes stale while the
+    // server is stopped.
+    const newest = Math.max(pub?.updated ?? 0, localLatest.get(id) ?? 0);
+    if (newest > inst) {
+      stale.push({ id, title: pub?.title || id, installed: inst, published: newest });
     }
   }
   return stale.sort((a, b) => b.published - a.published);
