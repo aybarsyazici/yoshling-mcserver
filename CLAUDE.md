@@ -438,9 +438,26 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   - **It compares Steam's manifest, not file mtimes.**
     `appworkshop_108600.acf` → `WorkshopItemsInstalled.<id>.timeupdated` is the
     version on disk; `GetPublishedFileDetails` → `time_updated` is the published
-    one. Exact, and one small file read plus **one batched HTTP request for all 75
-    mods** (not one per mod) — which is what makes 5-min polling free. Validated
-    against production: 75 manifest entries, 75 ini entries, 0 false positives.
+    one, cross-checked against `WorkshopItemDetails.<id>.latest_timeupdated` with
+    the newer of the two winning. Exact, and one small file read plus **one batched
+    HTTP request for all 75 mods** (not one per mod) — which is what makes 5-min
+    polling free.
+  - **TRAP: that .acf has TWO sections keyed by workshop id** —
+    `WorkshopItemsInstalled` (on disk) and `WorkshopItemDetails` (what Steam knows,
+    incl. `latest_timeupdated`) — and **both carry a `timeupdated`**. The first
+    version of this read from `"WorkshopItemsInstalled"` to end-of-file, so the
+    second section's values overwrote the first, `installed` came out equal to
+    `published` for every mod, and the check could never fire. Parse it with
+    brace-matched bounds (`kvSection()`), never a slice-to-EOF.
+    Worth remembering *how* that got through: the first validation run reported
+    "0 stale" and I read that as a pass, when the server genuinely had an
+    out-of-date mod — the bug agreeing with itself. **Validate a detector by
+    planting a fault it must find**, not by observing it find nothing. Rolling one
+    mod's `timeupdated` back by a day in the manifest is the cheap way to do it;
+    it self-heals, because applying the update re-downloads that mod.
+  - Verified in production this way: planted stale mod → detected as
+    `Better Push (3715137752)`, one player online → **announced and did not
+    restart**, `StartedAt` unchanged, state file written.
   - It holds the **control lock** via `withGameStopped()`, so it can't interleave
     with a restart from the UI; a busy lock just skips that round.
   - **There is no push alternative — this was checked, not assumed.** Steam has no
