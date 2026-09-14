@@ -6,19 +6,47 @@ box, three worlds: only one game runs at a time (16 GB RAM), and powering one on
 gracefully saves + stops whichever other one is running. Access is per world —
 a user only sees the servers an admin has granted them.
 
-## Per-game deep docs — load on demand
+## Documentation rules — READ THIS, THEN KEEP IT TRUE
 
-This file is the **shared** architecture. Anything specific to one game lives in
-its own doc, so an agent working on one game doesn't carry the others' history:
+**These docs are the only thing that survives a lost conversation.** A previous
+chat that built the Minecraft side was deleted and the work had to be
+reconstructed from scratch. Treat the files below as the project's memory.
+
+Two rules, both non-optional:
+
+1. **Keep `CLAUDE.md` current.** It is a *living status doc*, not a one-time
+   writeup. After any meaningful change — a feature, a deploy, an infra or config
+   change, a gotcha you paid for — reflect it here **before** you finish the task.
+   If you discover that something written here is wrong, fix it rather than working
+   around it.
+2. **Put depth in `docs/<TOPIC>.md`, not in this file**, and add a pointer to the
+   table below. This file is the **shared** architecture; anything long or specific
+   to one game belongs in its own doc so an agent working on a different game
+   doesn't carry it. **Keep those docs updated with the same discipline** — a stale
+   deep doc is worse than no doc, because it gets trusted.
+
+Why rule 2 exists: this file reached 723 lines, 231 of them (32%) Project Zomboid
+Workshop-manifest archaeology that every Minecraft and 7DTD session paid for. Worse,
+splitting it revealed how much had rotted unnoticed — the intro still said
+"Hetzner" and "8 GB" long after the netcup migration, a database migration was
+headed "Pending" 200 lines above a Status section saying it was applied, and 8
+references pointed at the decommissioned box. **Long files stop being read, and
+then they stop being true.** Keep this one short enough to re-read.
+
+### Per-game deep docs — load on demand
 
 | Working on | Read first |
 |------------|-----------|
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
 | 7 Days to Die | the "7 Days to Die specifics" section below (not yet split out) |
 | Minecraft | this file; MC has no separate doc |
+| Moving hosts | [`MIGRATION.md`](MIGRATION.md) |
 
 **Do not guess PZ behaviour from this file's summary.** Several of its traps we got
-wrong twice and documented wrong once; the corrected versions are only in that doc.
+wrong twice and documented wrong once; the corrected versions are only in that doc,
+which also keeps a **Corrections** section — worth imitating, because a wrong
+explanation that was plausible enough to write down twice is worth recording as
+wrong rather than quietly deleting.
 
 ## Stack
 
@@ -496,10 +524,11 @@ Outstanding across the project:
 - **The netcup root password was pasted into a chat transcript and should be
   rotated.**
 
-> Keep this file current. It's the project's living status doc — update it after
+> **Keep this file current** — see "Documentation rules" at the top. Update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
-> session can tell where things stand. **Game-specific detail belongs in that
-> game's doc, not here** — see "Per-game deep docs" at the top.
+> session can tell where things stand, and put game-specific depth in that game's
+> `docs/` file rather than here. Both are part of finishing a task, not optional
+> extras.
 
 ## Conventions
 

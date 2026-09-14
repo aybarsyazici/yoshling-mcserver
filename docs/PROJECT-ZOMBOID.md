@@ -8,6 +8,12 @@ CLAUDE.md so that an agent working on Minecraft or 7 Days to Die doesn't carry
 230 lines of Workshop-manifest archaeology it will never need. CLAUDE.md holds the
 shared architecture; this file holds the depth.
 
+**And keep it current.** Same rule as CLAUDE.md — see "Documentation rules" there.
+When you learn something about PZ, or find something below that turned out to be
+wrong, update this file before you finish. A stale deep doc is worse than none,
+because it gets trusted: every entry in [Corrections](#corrections) was believed
+and acted on first.
+
 Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
 `src/lib/zomboid.ts`, `src/lib/zomboid-maps.ts`, `src/lib/zomboid-updates.ts`.
 
