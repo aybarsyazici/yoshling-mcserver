@@ -188,7 +188,18 @@ export function GameControls({ game }: { game: GameId }) {
         </Button>
 
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
-          {!canPower && !can.restart ? (
+          {serverBusy ? (
+            <span>
+              <strong className="text-foreground">{GAMES[serverBusy.game].name}</strong> is{" "}
+              {serverBusy.action === "start"
+                ? "starting up"
+                : serverBusy.action === "stop"
+                ? "shutting down"
+                : "restarting"}
+              {serverBusy.stage ? ` — ${serverBusy.stage.toLowerCase()}` : ""}. Controls unlock when
+              it finishes.
+            </span>
+          ) : !canPower && !can.restart ? (
             "You can view this server but not power it. Ask an admin for Mod access."
           ) : blocking.length > 0 ? (
             <span>

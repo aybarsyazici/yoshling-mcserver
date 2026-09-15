@@ -112,6 +112,14 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     reported "updated 0 of 1 mods". Don't reintroduce a total-duration cap.
   - `setControlStage()` lets a long operation describe itself; it surfaces as
     `busy.stage` and is rendered as a progress line in `game-controls.tsx`.
+  - **`OperationBanner` (mounted in `dash-shell.tsx`) shows that stage on EVERY
+    page**, plus elapsed time, and toasts on the start/end transitions. It is a
+    banner and not only a toast on purpose: a mod-update apply takes ~6 minutes and
+    a toast is gone in seconds, so anyone who looked a little late saw silence — the
+    original bug wearing a hat. Measured 2026-09-15: an apply ran 18:30:25 →
+    18:36:23 with the power buttons correctly locked and **nothing anywhere saying
+    why**, which reads as the feature having done nothing. Disabled controls now
+    state their reason too. If you add another long operation, give it a stage.
   - **`restartGame()` is stop-then-start, not `driver.restart()`** — deliberately.
     Every driver's `restart()` is one opaque "save, then `docker restart`" call, so
     it could not say which half it was in, and it set no stage at all. For PZ the

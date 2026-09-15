@@ -118,6 +118,13 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
     timeout**, so `publishedVersions()` carries an explicit
     `AbortSignal.timeout(15_000)`. RCON and the SteamCMD `execAsync` already had
     bounds; the Steam call did not, and it is the one that hung.
+  - **`applyingSince` / `applyingTitles` are written BEFORE the stop begins**, and
+    cleared on every exit path including failure. Without them the state machine
+    went pending → [silence] → applied, so the mods card still read "restarts once
+    everyone has logged off" while the server was already being restarted. The
+    watcher also logs when an apply *starts*, not only when it finishes — the
+    `running` guard correctly suppresses other ticks meanwhile, so that line is the
+    only signal that exists. `OperationBanner` covers the same window globally.
   - **The apply is silent for ~6 minutes, and that got misread as broken.** A real
     apply on 2026-09-14 ran 20:42:22 → 20:48:10: a graceful stop, a 137 MB
     download, then a full boot. The watcher logs only *after* it finishes, so the
