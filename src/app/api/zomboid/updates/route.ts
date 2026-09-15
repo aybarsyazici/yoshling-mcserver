@@ -25,6 +25,9 @@ export async function GET() {
     checkedAt: state.checkedAt || null,
     /** Why that check failed, or "" if it was fine. */
     lastError: state.lastError || "",
+    /** Non-null while a restart-and-update is actually in progress. */
+    applyingSince: state.applyingSince || null,
+    applyingTitles: state.applyingTitles || [],
     announcedAt: state.announcedAt || null,
     appliedAt: state.appliedAt || null,
     /** So the card can say how long until the next check without hardcoding it. */

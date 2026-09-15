@@ -84,6 +84,19 @@ export interface WatchState {
   checkedAt: number;
   /** Why the last check failed, or "" if it succeeded. */
   lastError: string;
+  /**
+   * When the current apply started, or 0 if none is running.
+   *
+   * Written **before** the stop/download/start begins, not after, because that
+   * whole sequence takes ~6 minutes and nothing else reveals it: the tick logs
+   * only on completion, and the `running` guard correctly suppresses further
+   * ticks meanwhile. Without this the UI kept saying "waiting for everyone to log
+   * off" while the server was already being restarted, which reads as the feature
+   * having done nothing at all.
+   */
+  applyingSince: number;
+  /** Titles being applied right now, so the UI can name them mid-flight. */
+  applyingTitles: string[];
 }
 
 const EMPTY_STATE: WatchState = {
@@ -93,6 +106,8 @@ const EMPTY_STATE: WatchState = {
   pendingTitles: [],
   checkedAt: 0,
   lastError: "",
+  applyingSince: 0,
+  applyingTitles: [],
 };
 
 export async function readWatchState(): Promise<WatchState> {
@@ -361,16 +376,43 @@ async function runPoll(
     return { action: "announced", stale, next };
   }
 
-  // Empty: apply it.
+  // Empty: apply it. Publish that we have started BEFORE the long part, so the
+  // dashboard can say "updating now" instead of "waiting for players to leave".
+  const titles = stale.map((s) => s.title);
+  await writeWatchState({
+    ...state,
+    pendingIds: ids,
+    pendingTitles: titles,
+    applyingSince: Date.now(),
+    applyingTitles: titles,
+    checkedAt: Date.now(),
+    lastError: "",
+  });
+
+  // Logged here as well as on completion: the apply takes ~6 minutes during which
+  // the `running` guard suppresses every other tick, so without this the log goes
+  // silent at exactly the moment someone starts wondering what is happening.
+  console.log(`[pz-updates] applying (server restart): ${titles.join(", ")}`);
+
   try {
     await withGameStopped("zomboid", "restart", () => seedMods(ids));
   } catch (e) {
+    // Clear the in-flight marker on any exit path, or the UI shows a restart
+    // that is no longer happening.
+    await writeWatchState({ ...state, applyingSince: 0, applyingTitles: [] });
     if (e instanceof ControlBusyError) return { action: "skipped", stale, next: {} };
     throw e;
   }
   return {
     action: "applied",
     stale,
-    next: { pendingIds: [], pendingTitles: [], announcedAt: 0, appliedAt: Date.now() },
+    next: {
+      pendingIds: [],
+      pendingTitles: [],
+      announcedAt: 0,
+      appliedAt: Date.now(),
+      applyingSince: 0,
+      applyingTitles: [],
+    },
   };
 }

@@ -15,6 +15,8 @@ interface UpdateStatus {
   stale: StaleMod[] | null;
   checkedAt: number | null;
   lastError: string;
+  applyingSince: number | null;
+  applyingTitles: string[];
   announcedAt: number | null;
   appliedAt: number | null;
   pollMs: number;
@@ -52,6 +54,15 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
     return () => clearInterval(id);
   }, [load]);
 
+  // While a restart is in flight the state changes on the order of seconds, so a
+  // 30s refresh leaves a stale screen during exactly the window someone is
+  // watching it.
+  useEffect(() => {
+    if (!status?.applyingSince) return;
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, [status?.applyingSince, load]);
+
   async function checkNow() {
     setChecking(true);
     try {
@@ -79,8 +90,11 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
   if (!status) return <div className="skeleton h-24 rounded-2xl" />;
 
   const stale = status.stale;
-  const pending = stale && stale.length > 0;
-  const failed = stale === null || status.lastError !== "";
+  // An apply in progress outranks everything else: the server is being restarted
+  // right now, which is the one thing someone looking at this card needs told.
+  const applying = status.applyingSince;
+  const pending = !applying && stale && stale.length > 0;
+  const failed = !applying && (stale === null || status.lastError !== "");
 
   return (
     <div
@@ -92,13 +106,16 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
           <span
             className="grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg"
             style={{
-              background: pending || failed
-                ? "color-mix(in oklab, var(--chart-5) 14%, transparent)"
-                : `color-mix(in oklab, ${tint} 14%, transparent)`,
+              background:
+                pending || failed
+                  ? "color-mix(in oklab, var(--chart-5) 14%, transparent)"
+                  : `color-mix(in oklab, ${tint} 14%, transparent)`,
               color: pending || failed ? "var(--chart-5)" : tint,
             }}
           >
-            {pending || failed ? (
+            {applying ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : pending || failed ? (
               <AlertTriangle className="h-4 w-4" />
             ) : (
               <CheckCircle2 className="h-4 w-4" />
@@ -106,14 +123,22 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
           </span>
           <div className="min-w-0">
             <p className="font-display text-base font-semibold">
-              {failed
+              {applying
+                ? "Updating now — restarting the server"
+                : failed
                 ? "Couldn't check for updates"
                 : pending
                 ? `${stale!.length} mod update${stale!.length === 1 ? "" : "s"} pending`
                 : "All mods up to date"}
             </p>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              {failed ? (
+              {applying ? (
+                <>
+                  Saving and stopping, downloading{" "}
+                  {status.applyingTitles.length === 1 ? "the mod" : "the mods"}, then starting back
+                  up. Usually about 5 minutes. Started {relative(status.applyingSince)}.
+                </>
+              ) : failed ? (
                 status.lastError || "The last check didn't complete."
               ) : pending ? (
                 <>
@@ -127,11 +152,21 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
           </div>
         </div>
 
-        <Button variant="outline" size="sm" disabled={checking} onClick={checkNow}>
+        <Button variant="outline" size="sm" disabled={checking || !!applying} onClick={checkNow}>
           <RefreshCw className={checking ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
           {checking ? "Checking…" : "Check now"}
         </Button>
       </div>
+
+      {applying && status.applyingTitles.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {status.applyingTitles.map((t) => (
+            <span key={t} className="rounded-md bg-muted px-2 py-0.5 font-mono text-[11px]">
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
 
       {pending && (
         <div className="mt-3 flex flex-wrap gap-1.5">
