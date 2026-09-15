@@ -534,8 +534,26 @@ export async function containerImage(game: GameId): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * Restart, as stop-then-start rather than `driver.restart()`.
+ *
+ * Every driver's `restart()` is "save, then `docker restart`" — one opaque call,
+ * so it could not report which half it was in. For Project Zomboid the stop half
+ * alone is up to `PZ_STOP_TIMEOUT` (300s), and with no stage set the UI showed a
+ * spinning "Restarting…" and nothing else for minutes, which reads as hung.
+ * Splitting it is behaviourally identical (`gracefulStop` = save + `docker stop
+ * -t N`, `start` = `docker start`) and lets each phase name itself.
+ *
+ * `start()` returns as soon as the container is up, so the lock releases early
+ * and the UI falls through to the richer per-boot progress (`snap.boot`).
+ */
 export async function restartGame(game: GameId): Promise<void> {
-  return withControlLock(game, "restart", () => DRIVERS[game].restart());
+  return withControlLock(game, "restart", async () => {
+    setControlStage("Saving and stopping the server");
+    await DRIVERS[game].gracefulStop();
+    setControlStage("Starting the server");
+    await DRIVERS[game].start();
+  });
 }
 
 // ── server memory ────────────────────────────────────────────────────────────

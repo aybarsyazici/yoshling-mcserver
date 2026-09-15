@@ -201,6 +201,11 @@ export async function publishedVersions(
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
       cache: "no-store",
+      // Node's fetch has no default timeout. Without this a hung Steam request
+      // hangs the whole poll, and on 2026-09-15 that stalled the watcher for
+      // 6 minutes starting five seconds before the last player logged off — so
+      // the update everyone was waiting for never fired.
+      signal: AbortSignal.timeout(15_000),
     }
   );
   if (!res.ok) throw new Error(`Steam returned ${res.status}`);

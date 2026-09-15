@@ -70,13 +70,24 @@ export async function register() {
 
     if (WATCH) {
       let running = false;
+      let lastPoll = 0;
+      // "announced" = waiting for players to leave, "skipped" = mid-boot or
+      // another op holds the control lock. Either way the answer can change
+      // without anything new being published, so check again soon.
+      let soon = false;
+
       const tick = async () => {
-        if (running) return; // a slow SteamCMD run must not overlap the next tick
+        // An overrunning tick is SKIPPED, never fatal. This used to re-arm itself
+        // from a `finally` block, which meant a single hung call killed the
+        // watcher permanently: on 2026-09-15 a poll hung five seconds before the
+        // last player logged off and nothing ran for six minutes, so the update
+        // everyone had logged off for never happened. A plain interval keeps
+        // firing regardless, and this guard just declines to overlap.
+        if (running) return;
+        const now = Date.now();
+        if (!soon && now - lastPoll < POLL_MS) return; // full check not due yet
+
         running = true;
-        // Re-check soon when the answer can change without anything new being
-        // published: "announced" = waiting for players to leave, "skipped" = the
-        // world is mid-boot or another op holds the control lock.
-        let soon = false;
         try {
           const { pollModUpdates } = await import("@/lib/zomboid-updates");
           const { action, stale } = await pollModUpdates();
@@ -89,12 +100,12 @@ export async function register() {
         } catch (e) {
           console.error("[pz-updates] failed:", e);
         } finally {
+          lastPoll = Date.now();
           running = false;
-          // Self-scheduling rather than setInterval, so the delay can depend on
-          // what the last tick found.
-          setTimeout(tick, soon ? PENDING_MS : POLL_MS);
         }
       };
+
+      setInterval(tick, PENDING_MS);
       // Delay the first run so it doesn't race the app's own startup.
       setTimeout(tick, 60_000);
     }
