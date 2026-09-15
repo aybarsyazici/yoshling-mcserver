@@ -290,6 +290,23 @@ game has been played on netcup. Deploy dir: `/opt/yoshling` (a git checkout trac
 **Caddy** is the origin reverse proxy (`/etc/caddy/Caddyfile`) forwarding to
 `localhost:3000`.
 
+### Tooling — prefer these over hand-rolling
+
+`scripts/` holds the four things that were repeatedly done by hand and repeatedly
+got wrong. Each one encodes a trap that prose warnings did not prevent, so reach
+for the script rather than writing the snippet again.
+
+| Script | Use it for | The trap it removes |
+|--------|-----------|---------------------|
+| `scripts/pz-rcon.sh <cmd>…` | any RCON command against PZ | A naive client reads the **auth** reply as the first command's answer, so every response is shifted by one. That made `players` report 0 while someone was connected, and the wrong reading got reported as fact. Also handles PZ's RCON port not being published — it runs on the compose network and reads the password from the box's `.env`. |
+| `scripts/deploy.sh [--service web\|zomboid] [--verify STR]` | shipping code | Verifies the change is in the **built image**, not just at git HEAD — a correct checkout can sit in front of a stale container and `git rev-parse` looks identical either way. Also refuses to run while a SteamCMD seed is in flight, because two seeds race on the same volume and the loser silently updates nothing. |
+| `scripts/pz-stale-mods.py` | "why can nobody join?" | `appworkshop_108600.acf` has **two** id-keyed sections and both carry a `timeupdated`; slicing to EOF makes installed == published and the check silently always answers "nothing to do". |
+| `scripts/pz-jar.py {find,grep,strings,enum}` | turning a mystery number or command name into a fact | There is no `javap` and no `strings` in the game image. `enum` is how `AntiCheatHit=2` becomes "Kick" (`Ban=1 Kick=2 Log=3 Disabled=4`) instead of a guess. |
+
+Run the two Python ones over stdin so nothing needs installing on the box:
+`ssh BOX 'python3 -' < scripts/pz-stale-mods.py`. `scripts/rcon.py` is the plain
+client the wrapper ships; it also works against Minecraft on 25575.
+
 ### Deploying code (the box has NO GitHub SSH key)
 
 `git fetch origin` fails on the box. Ship a **git bundle** instead:

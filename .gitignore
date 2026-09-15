@@ -54,3 +54,7 @@ next-env.d.ts
 /the-rizzler.jpg
 /the-stare.jpg
 /british-miku.webp
+
+# python bytecode from scripts/
+__pycache__/
+*.pyc
