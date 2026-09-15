@@ -38,6 +38,7 @@ then they stop being true.** Keep this one short enough to re-read.
 | Working on | Read first |
 |------------|-----------|
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
+| A broken/misbehaving PZ **mod** | [`docs/PZ-MOD-BACKLOG.md`](docs/PZ-MOD-BACKLOG.md) — open defect list; check its harmless list before investigating |
 | 7 Days to Die | the "7 Days to Die specifics" section below (not yet split out) |
 | Minecraft | this file; MC has no separate doc |
 | Moving hosts | [`MIGRATION.md`](MIGRATION.md) |
