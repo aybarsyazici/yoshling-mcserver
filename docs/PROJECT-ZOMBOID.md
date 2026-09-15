@@ -95,17 +95,29 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   because its recorded version is wrong, and then re-seed everything deliberately.
 
 - **Automatic Workshop mod updates** (`src/lib/zomboid-updates.ts`, driven by a
-  5-min timer in `src/instrumentation.ts`; knobs `PZ_UPDATE_WATCH` /
+  15s interval in `src/instrumentation.ts`; knobs `PZ_UPDATE_WATCH` /
   `PZ_UPDATE_POLL_MS` on the web service). Policy, chosen deliberately: it
   **never interrupts play** — if anyone is connected it announces the update over
   RCON `servermsg` and waits; it applies one only when the server is empty. If PZ
   is already stopped it just seeds the files so the next start is clean.
-  - **Two cadences.** Detection every 5 min (`PZ_UPDATE_POLL_MS`); while an update
-    is pending it drops to 15 s (`PZ_UPDATE_PENDING_POLL_MS`), because at that
-    point nothing new can be discovered and it is only waiting for the last player
-    to leave. On one cadence, logging off meant waiting out the remainder of a
-    5-minute poll before the restart even began — which reads to players as the
-    server being stuck rather than updating.
+  - **Two cadences, one timer.** A fixed `setInterval` at 15 s
+    (`PZ_UPDATE_PENDING_POLL_MS`) always fires; a `running` guard declines to
+    overlap, and a due-time check skips the expensive Steam call unless an update
+    is already pending or `PZ_UPDATE_POLL_MS` (5 min) has elapsed. So detection
+    costs one batched request every 5 min, but once something *is* pending it
+    notices the server emptying within 15 s. On a single 5-min cadence, logging off
+    meant waiting out the rest of a poll before the restart even began, which reads
+    to players as the server being stuck rather than updating.
+  - **Never re-arm the loop from a `finally` block.** It was briefly
+    self-scheduling (`setTimeout` at the end of each tick) to get the adaptive
+    cadence, and that made a single hung call **permanently fatal**: if the body
+    never settles, `finally` never runs, no timer is armed, and the watcher is dead
+    with no error and no log line. That is not theoretical — see
+    [Corrections](#corrections) #6. A plain interval keeps firing regardless.
+  - **Every outbound call must be timeboxed.** Node's `fetch` has **no default
+    timeout**, so `publishedVersions()` carries an explicit
+    `AbortSignal.timeout(15_000)`. RCON and the SteamCMD `execAsync` already had
+    bounds; the Steam call did not, and it is the one that hung.
   - **The apply is silent for ~6 minutes, and that got misread as broken.** A real
     apply on 2026-09-14 ran 20:42:22 → 20:48:10: a graceful stop, a 137 MB
     download, then a full boot. The watcher logs only *after* it finishes, so the
@@ -519,3 +531,21 @@ plausible enough to write down twice.
    parsing bug agreeing with itself. Validate a detector by planting a fault it
    must find. Rolling one mod's `timeupdated` back a day in the manifest is the
    cheap way; it self-heals, since applying the update re-downloads that mod.
+6. **The watcher died silently for six minutes, and the fix that caused it was one
+   day old.** 2026-09-15: the last player disconnected at 14:03:54; the watcher's
+   last tick was 14:03:49 — five seconds earlier — and then nothing at all until
+   14:10:01. It had not mis-read the player count; it had stopped running.
+   Yesterday's adaptive-cadence change re-armed the timer from a `finally` block, so
+   one call that never settles kills the loop permanently, with no error and no log
+   line. The un-timeboxed Steam `fetch` was the thing that hung.
+   Three lessons worth keeping:
+   - **A "responsiveness" refactor can quietly remove a safety property.**
+     `setInterval` was immune to hangs; self-scheduling isn't. Nothing in the diff
+     looked like it touched reliability.
+   - **Diagnose from the tick log's *gaps*, not its contents.** Every line said
+     `announced`, which looks like healthy disagreement about the player count. The
+     signal was the 6m12s with no lines at all.
+   - **Don't trust a hand-rolled RCON probe.** Mine printed responses off by one
+     (the auth reply is read as the first command's answer), and I briefly concluded
+     from it that a player was still connected — then said so. Send the command
+     twice and read the second reply, or use the app's own client.

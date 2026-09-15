@@ -111,6 +111,15 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     reported "updated 0 of 1 mods". Don't reintroduce a total-duration cap.
   - `setControlStage()` lets a long operation describe itself; it surfaces as
     `busy.stage` and is rendered as a progress line in `game-controls.tsx`.
+  - **`restartGame()` is stop-then-start, not `driver.restart()`** — deliberately.
+    Every driver's `restart()` is one opaque "save, then `docker restart`" call, so
+    it could not say which half it was in, and it set no stage at all. For PZ the
+    stop half alone is up to 300s, so a manual Restart showed a spinning
+    "Restarting…" with no stage and no bar for minutes, which is indistinguishable
+    from hung — and got reported as exactly that. Splitting into `gracefulStop()` +
+    `start()` is behaviourally identical and lets each phase name itself; `start()`
+    then returns quickly, so the lock releases and the per-boot progress
+    (`snap.boot`) takes over. Don't collapse it back into one call.
 - `src/lib/rcon.ts` — the shared Source-RCON transport, keyed per target with one
   cached authenticated socket each. Minecraft (25575) and Project Zomboid (27015)
   both speak it; `sendCommand`/`getPlayerList` are the Minecraft wrappers.
@@ -449,9 +458,10 @@ The bare minimum for shared code that has to know PZ exists:
 - **`stop_grace_period: 300s`**, and the driver stops with `-t 300`. The entrypoint
   saves the world on SIGTERM and a 76-mod save overran 120s once, so Docker
   SIGKILLed it mid-save.
-- The web app also runs a **Workshop update watcher** (`src/lib/zomboid-updates.ts`
-  on a 5-min timer from `src/instrumentation.ts`) that can restart the server by
-  itself when it is empty. If PZ restarts unexpectedly, look there first.
+- The web app also runs a **Workshop update watcher** (`src/lib/zomboid-updates.ts`,
+  a 15s interval in `src/instrumentation.ts` that does a full check at most every
+  5 min) which can restart the server by itself when it is empty. If PZ restarts
+  unexpectedly, look there first.
 
 ### TLS / the domain
 
