@@ -45,8 +45,11 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-LOCAL_SHA=$(git rev-parse --short HEAD)
-echo "==> shipping $LOCAL_SHA ($SERVICE)"
+# Full SHA for the comparison: `--short` picks the shortest *unambiguous* prefix,
+# which depends on how many objects a repo has, so it came out 7 chars locally and
+# 8 on the box and the equality check failed on two identical commits.
+LOCAL_SHA=$(git rev-parse HEAD)
+echo "==> shipping ${LOCAL_SHA:0:7} ($SERVICE)"
 
 git bundle create /tmp/yoshling-deploy.bundle main --quiet 2>/dev/null \
   || git bundle create /tmp/yoshling-deploy.bundle main
@@ -76,12 +79,12 @@ git checkout -f -q -B main FETCH_HEAD
 # A plain reset leaves files that were deleted upstream sitting on disk.
 git clean -fdq -e .env -e '*.db'
 
-BOX_SHA=$(git rev-parse --short HEAD)
+BOX_SHA=$(git rev-parse HEAD)
 if [ "$BOX_SHA" != "$EXPECT_SHA" ]; then
-  echo "deploy: box is at $BOX_SHA but expected $EXPECT_SHA" >&2
+  echo "deploy: box is at ${BOX_SHA:0:7} but expected ${EXPECT_SHA:0:7}" >&2
   exit 1
 fi
-echo "==> box checkout $BOX_SHA"
+echo "==> box checkout ${BOX_SHA:0:7}"
 
 # Back up the DB before anything that might touch the schema. Cheap insurance.
 mkdir -p /root/yoshling-deploy-backup
