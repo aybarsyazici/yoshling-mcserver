@@ -27,6 +27,7 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
 - [Settings, backups, firewall](#settings-backups-firewall)
 - [Sandbox options](#sandbox-options)
 - [Anti-cheat](#anti-cheat)
+- [When the server hangs](#when-the-server-hangs) — up but unjoinable, and how to prove it
 - [Known mod defects](#known-mod-defects) — moved to [`PZ-MOD-BACKLOG.md`](PZ-MOD-BACKLOG.md)
 - [Status](#status)
 - [Corrections](#corrections) — things this file once got wrong
@@ -366,6 +367,76 @@ had no `lua` until 2026-09-14, which silently made this page useless).
   prints its usage text — that is not an error, it's the wrong command.
 - `changeoption <Key> <value>` — set a server option at runtime.
 - `checkModsNeedUpdate` — see [Workshop updates](#workshop-updates).
+
+## When the server hangs
+
+**The server can be "running" and completely unjoinable, and the dashboard will
+tell you it is powered down.** This happened 2026-09-22 and cost an evening, so the
+symptoms and the proof are worth keeping.
+
+What it looks like:
+
+- Players get "we crashed and now we can't rejoin — the server thinks we're still
+  in". The PZ log fills with `Steam client <id> is initiating a connection.`
+  repeated, with **no** following `Connected new client`.
+- The dashboard shows the world as **powered down**, and pressing **Power on**
+  toasts success and does nothing (see the KNOWN BUG note in CLAUDE.md: the probe
+  fails → renders as stopped → offers Power on → `docker start` on an
+  already-running container is a no-op). There is no route to recovery from the UI.
+- RCON **authenticates but `players` returns an empty body.** That is the tell:
+  the RCON thread is healthy, but the answer needs the game loop, which is not
+  running. `scripts/pz-rcon.sh players` printing `(no output)` means hung, not idle
+  — an idle server answers `Players connected (0):`.
+
+### Proving it rather than guessing
+
+Two cheap checks, in order:
+
+1. **Is the game loop advancing?** Every in-game log line carries a frame counter
+   (`f:29843`). Sample it twice ~25s apart; if it is identical while CPU is pinned,
+   the loop is wedged. Caveat: an **idle** server with nobody connected emits no
+   frame-stamped lines at all, so a frozen-looking counter on an empty server is
+   meaningless — cross-check with CPU (a wedge burns ~100% of one core; healthy
+   idle was 5.9%).
+2. **Get a JVM thread dump.** `pgrep`/`jstack` do not exist in the image, so do it
+   from the host: `kill -3 $(ps -eo pid,comm | grep ProjectZomboid | awk '{print $1}')`.
+   SIGQUIT makes HotSpot dump all threads to stdout and **keeps running**, so it is
+   safe on a live server. Read it back out of `docker logs`. `top -H -p <pid>`
+   names the thread actually burning CPU.
+
+### The one we found
+
+Thread `UdpEngine`, RUNNABLE, spinning with no deadlock reported:
+
+```
+zombie.iso.IsoGridSquare.removeGlassAttachments(IsoGridSquare.java:8345)
+zombie.iso.IsoGridSquare.RemoveTileObject(IsoGridSquare.java:6159)
+zombie.iso.IsoObjectUtils.getAllMultiTileObjects(IsoObjectUtils.java:153)
+zombie.iso.IsoObjectUtils.safelyRemoveTileObjectFromSquare(IsoObjectUtils.java:60)
+```
+
+An infinite loop in **vanilla** tile-removal code, triggered by removing a
+multi-tile object with glass attachments (a window). The reason it locks everyone
+out is that `UdpEngine` is also the thread that accepts connections — so one bad
+tile removal takes the whole server's networking with it. Dump kept at
+`/root/pz-threaddump-20260922-212623.txt`. If it recurs, compare stacks before
+assuming a mod: this one is `zombie.iso.*`, not mod Lua.
+
+### Recovery
+
+A graceful stop **cannot work** — the save runs on the wedged loop, so
+`docker stop -t 300` just waits out the full five minutes and then SIGKILLs. Use a
+short timeout (60s was enough to confirm it wouldn't save) and accept losing
+progress since the last autosave. There is no better option once the loop is gone.
+
+### Separately: the graceful stop has hung twice on the way down
+
+PZ has exited **137** (SIGKILL after the grace period) on 2026-09-22 and again on
+2026-09-26 during a hand-off to 7DTD. Both times the explicit `pzSave()` completed
+first — the last lines written were `Saving finish` / `Saving took …ms` — so **no
+data was lost**, but the shutdown itself did not finish inside 300s. When you see
+exit 137, check for those save lines before assuming the worst; and expect a
+hand-off away from PZ to take up to five minutes.
 
 ## Known mod defects
 

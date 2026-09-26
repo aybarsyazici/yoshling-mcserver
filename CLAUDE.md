@@ -120,6 +120,15 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     18:36:23 with the power buttons correctly locked and **nothing anywhere saying
     why**, which reads as the feature having done nothing. Disabled controls now
     state their reason too. If you add another long operation, give it a stage.
+  - **KNOWN BUG, not yet fixed: "container running but unreachable" is reported as
+    powered down, and Power on is then a silent no-op.** The status probe asks the
+    game (RCON/telnet); if the container is up but the game cannot answer, the probe
+    fails and the UI renders it as stopped. It therefore offers **Power on**, which
+    runs `docker start` on an already-running container — a no-op that toasts
+    success and changes nothing, leaving no route to recovery from the dashboard.
+    Seen 2026-09-22 when PZ's game loop wedged (see docs/PROJECT-ZOMBOID.md). The
+    fix is to treat running-but-unreachable as its own state, say so, and offer
+    **Restart** instead of Power on.
   - **`restartGame()` is stop-then-start, not `driver.restart()`** — deliberately.
     Every driver's `restart()` is one opaque "save, then `docker restart`" call, so
     it could not say which half it was in, and it set no stage at all. For PZ the
@@ -387,6 +396,28 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 - First boot runs a one-time **SteamCMD install (~17 GB, ~10-20 min)**. The
   `sevendtd` service is `restart: "no"` so it never auto-starts on reboot — the
   web UI powers it on deliberately (and stops MC first).
+- **A FRESH 7DTD INSTALL WIPES `sdtdserver.xml` BACK TO DEFAULTS — and a host
+  migration counts as fresh.** Hit on 2026-09-26, the first time 7DTD started on
+  netcup: SteamCMD re-installed 17.7 GB and regenerated the config, so
+  `GameWorld` became `Navezgane`, `GameName` became `MyGame`, `ServerName` became
+  "My Game Host", `Region` reverted to `NorthAmericaEast`, `SandboxCode` became a
+  default, and `TelnetPassword` was blank. **The server booted a brand-new empty
+  world and the dashboard went blind**, minutes before people tried to join.
+  - **Recovery source: the app's own `SevenDaysConfig` DB row survives**, because
+    it lives in `web-data`, not in the game volume. It held the real
+    `serverName` / `password` / `maxPlayers` / `gameDifficulty` / `dayLength` /
+    `sandboxCode`. Read it with the libSQL snippet in "Applying DB migrations".
+  - **Which save is live is decided by two XML values**, and getting them wrong
+    silently starts yet another empty world rather than erroring:
+    `GameWorld=Reveo Valley` + `GameName=Fresh2`. Identify the right one from disk
+    rather than guessing — count `<player ` entries in each
+    `Saves/<world>/<name>/players.xml` (Fresh2 had 2, and its world loads at
+    416 MiB / 59,651 chunks versus 193 MiB for the empty Navezgane one).
+  - `GameDifficulty` is **not** a property in the current XML — don't try to set it.
+  - Junk left behind from that incident: `Saves/Navezgane/MyGame` (18 MB, no
+    players). Safe to delete.
+  - After any fresh install, restore the XML and restart **before** anyone joins;
+    doing it afterwards costs them a kick.
 - **7DTD telnet password gotcha:** the app controls 7DTD over telnet (8081), but
   7DTD only binds telnet to the network interface (reachable from the web
   container) if a `TelnetPassword` is set in
@@ -413,9 +444,12 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
   appear and is best found by searching its exact `ServerName`.
 - **Game version / Steam branch:** set by the `VERSION` env on the `sevendtd`
   service — `stable` (Default Public) or `latest_experimental`. **Currently
-  `latest_experimental` (game V3.1.0).** Switching branches needs a one-time
-  update run: recreate the container with `START_MODE=3` (update+start) so the
-  ~17GB files re-download, then it goes back to `START_MODE=1` normal start.
+  `latest_experimental`, installed build V 3.3.0 (b14)** as of 2026-09-26 — the
+  fresh netcup install pulled whatever was current, up from V3.1.0 b11 on the old
+  box. Anyone whose client is older will hang at "Starting game" and must let Steam
+  update first. Switching branches needs a one-time update run: recreate the
+  container with `START_MODE=3` (update+start) so the ~17GB files re-download, then
+  it goes back to `START_MODE=1` normal start.
   IMPORTANT: recreate with **`docker compose up -d sevendtd`** (NOT `docker
   compose run`, which omits the `sevendtd` network alias and breaks the web
   app's telnet-by-name). Branch switches can break existing saves — back up
@@ -547,9 +581,13 @@ connect **directly to the box IP `89.58.50.155`**:
 
 - **Minecraft:** all features working (mods, console, files, backups, settings,
   whitelist). Not yet started on netcup since the migration.
-- **7 Days to Die:** on `latest_experimental` (game **V3.1.0 b11**). Telnet control,
-  file browser, world upload and in-game join all verified — on the *old* box. It
-  will re-download ~17 GB via SteamCMD on its first netcup start.
+- **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
+  `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
+  `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
+  `SevenDaysConfig` DB row and the save on disk (`Reveo Valley` / `Fresh2`). Telnet
+  control verified working again (the app's status probe runs every ~10s). **An
+  in-game join on netcup has still not been observed** — the server reported
+  `Total of 0 in the game` when it was handed back.
 - **Project Zomboid:** running, 89 mods, played on daily. Full status, what's
   verified and what's outstanding: **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md#status)**.
 - **Per-world access:** deployed; `User.games` + `ZomboidMod` applied to the prod
