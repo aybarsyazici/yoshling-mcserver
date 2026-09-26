@@ -439,6 +439,10 @@ function WorldCard({
   const meta = GAMES[game];
   const status = snapshot?.status ?? "offline";
   const isOnline = status === "online";
+  // The container being up is a different fact from the game answering. Offering
+  // "Power on" for a running-but-unresponsive server runs `docker start` on
+  // something already started — a no-op that looks like the dashboard ignoring you.
+  const containerUp = snapshot?.containerRunning ?? isOnline;
   const isBusyThis = busy && pending === game;
   const players = snapshot?.players;
 
@@ -519,7 +523,7 @@ function WorldCard({
         {/* Actions */}
         <div className="relative mt-6 flex items-center gap-2">
           <button
-            onClick={() => onPower(game, isOnline)}
+            onClick={() => onPower(game, containerUp)}
             disabled={busy}
             className="group/pw relative inline-flex h-11 flex-1 items-center justify-center gap-2 overflow-hidden rounded-xl font-medium transition-all disabled:opacity-60"
             style={{
@@ -529,7 +533,7 @@ function WorldCard({
             }}
           >
             <PowerGlyph className="h-4 w-4" />
-            {isBusyThis ? "Working…" : isOnline ? "Power off" : "Power on"}
+            {isBusyThis ? "Working…" : containerUp ? "Power off" : "Power on"}
           </button>
           <Link
             href={meta.base}

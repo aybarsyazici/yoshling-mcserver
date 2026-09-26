@@ -15,7 +15,16 @@ export interface GameSnapshot {
    * indistinguishable from stuck — which is exactly how a working auto-update got
    * reported as not running.
    */
-  boot?: { stage: string; percent: number | null };
+  boot?: { stage: string; percent: number | null; detail?: string };
+  /**
+   * Whether the container is up, regardless of whether the game answers. The UI
+   * needs both facts separately: "not running" and "running but not responding"
+   * call for different buttons, and treating them the same left no way to recover
+   * a wedged server from the dashboard.
+   */
+  containerRunning?: boolean;
+  /** Container start time in ms, for "it has been like this for N minutes". */
+  startedAtMs?: number;
 }
 
 export interface ControlLock {

@@ -2,8 +2,8 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { readFile } from "fs/promises";
 import path from "path";
-import { GAME_LIST, otherGames, type GameId } from "@/lib/games";
-import { getPlayerList, sendCommand as rconSend } from "@/lib/rcon";
+import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
+import { sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
 import { getPzStatus, pzSave, readModState } from "@/lib/zomboid";
 import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
@@ -170,10 +170,27 @@ export interface GameStatus {
   detail?: string;
   /**
    * Where a booting server has got to. Only set while `status` is "starting".
-   * Project Zomboid takes minutes to come up with a large mod list, and without
-   * this the UI can only say "Working…", which is indistinguishable from stuck.
+   * Every game takes minutes to come up — PZ with a large mod list, 7DTD when
+   * SteamCMD is fetching 17 GB — and without this the UI can only say "Working…",
+   * which is indistinguishable from stuck.
+   *
+   * `detail` is the most recent concrete thing that happened (the mod currently
+   * loading, the file being downloaded). It answers "is it moving?" in a way a
+   * percentage cannot when the percentage sits still for a minute.
    */
-  boot?: { stage: string; percent: number | null };
+  boot?: { stage: string; percent: number | null; detail?: string };
+  /**
+   * Whether the CONTAINER is up, independent of whether the game answers.
+   *
+   * These are different facts and conflating them cost two evenings: a wedged
+   * game means the probe fails, the UI renders it as stopped, and it then offers
+   * "Power on" — which runs `docker start` on an already-running container, a
+   * silent no-op. Knowing the container is up is what lets the UI offer the action
+   * that can actually recover it (Restart) and refuse the one that cannot.
+   */
+  containerRunning: boolean;
+  /** Container start time in ms, so the UI can say how long it has been like this. */
+  startedAtMs?: number;
 }
 
 interface GameDriver {
@@ -189,10 +206,92 @@ function offlineStatus(game: GameId): GameStatus {
     game,
     status: "offline",
     players: { online: 0, max: DEFAULT_MAX_PLAYERS[game], players: [] },
+    containerRunning: false,
   };
 }
 
+/**
+ * Count log markers for a booting container in one `docker logs | awk` pass.
+ *
+ * One subprocess per probe rather than one per pattern, because the status
+ * endpoint is polled by every open tab. Returns an empty object if the container
+ * has no logs yet, so callers fall back to a generic stage instead of throwing.
+ */
+async function bootMarkers(
+  container: string,
+  awkProgram: string
+): Promise<Record<string, number>> {
+  const started = await containerStartedAt(container);
+  const since = started ? new Date(started).toISOString() : "15m";
+  const { stdout } = await execAsync(
+    `docker logs --since '${since}' ${container} 2>&1 | awk '${awkProgram}'`,
+    { maxBuffer: 4 * 1024 * 1024 }
+  );
+  const out: Record<string, number> = {};
+  for (const pair of stdout.trim().split(/\s+/)) {
+    const [k, v] = pair.split("=");
+    if (k) out[k] = Number(v) || 0;
+  }
+  return out;
+}
+
+/** Last line matching `grep -E pattern`, trimmed — the "what just happened" line. */
+async function lastLogLine(container: string, pattern: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execAsync(
+      `docker logs --tail 4000 ${container} 2>&1 | grep -E ${JSON.stringify(pattern)} | tail -1`,
+      { maxBuffer: 4 * 1024 * 1024 }
+    );
+    const line = stdout.trim();
+    return line ? line.slice(0, 160) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Minecraft driver ────────────────────────────────────────────────────────
+
+/**
+ * How far Minecraft has got. Marker flags come from one `awk` pass; the line that
+ * carries a number is fetched separately and parsed here, because extracting a
+ * capture group inside awk needs gawk's `match(s, re, arr)` and Debian ships mawk.
+ */
+const cachedMcBoot = cachedProbe(
+  3000,
+  async (): Promise<{ stage: string; percent: number | null; detail?: string }> => {
+    const c = RUNTIME.minecraft.container;
+    let m: Record<string, number>;
+    try {
+      m = await bootMarkers(
+        c,
+        "/Starting minecraft server/{a=1} /Preparing level/{b=1} " +
+          "/Preparing spawn area/{c=1} /Done \\(/{d=1} " +
+          'END{printf "start=%d level=%d spawn=%d done=%d", a+0, b+0, c+0, d+0}'
+      );
+    } catch {
+      return { stage: "Starting up", percent: null };
+    }
+
+    const detail = await lastLogLine(
+      c,
+      "Done \\(|Preparing spawn area|Preparing level|Starting minecraft server"
+    );
+
+    if (m.done) return { stage: "Ready", percent: 100, detail };
+    if (m.spawn) {
+      // "Preparing spawn area: 62%" — the only phase that reports its own progress.
+      const pct = detail ? Number(/(\d+)%/.exec(detail)?.[1] ?? NaN) : NaN;
+      return {
+        stage: Number.isFinite(pct) ? `Generating spawn area (${pct}%)` : "Generating spawn area",
+        percent: Number.isFinite(pct) ? Math.round(50 + (pct / 100) * 45) : 50,
+        detail,
+      };
+    }
+    if (m.level) return { stage: "Preparing the world", percent: 45, detail };
+    if (m.start) return { stage: "Starting the server", percent: 20, detail };
+    return { stage: "Starting container", percent: 5, detail };
+  }
+);
 
 const minecraftDriver: GameDriver = {
   async status() {
@@ -200,15 +299,33 @@ const minecraftDriver: GameDriver = {
     const state = await containerState(container);
     if (state !== "running") return offlineStatus("minecraft");
     const startedAt = await containerStartedAt(container);
-    let players = { online: 0, max: 20, players: [] as string[] };
+
+    // This used to report "online" the moment the container was up, which is a lie
+    // while the world is still generating — and it meant Minecraft could never show
+    // boot progress at all. `list` throwing is what distinguishes booting from up.
+    let reachable = false;
+    let players = { online: 0, max: DEFAULT_MAX_PLAYERS.minecraft, players: [] as string[] };
     try {
-      players = await getPlayerList();
+      const res = await rconSend("list");
+      reachable = true;
+      const m = /There are (\d+) of a max of (\d+) players online:(.*)/.exec(res);
+      if (m) {
+        players = {
+          online: Number(m[1]),
+          max: Number(m[2]),
+          players: m[3].split(",").map((x) => x.trim()).filter(Boolean),
+        };
+      }
     } catch {}
+
     return {
       game: "minecraft",
-      status: "online",
+      status: reachable ? "online" : "starting",
       uptime: startedAt ? fmtUptime(startedAt) : undefined,
+      startedAtMs: startedAt ? new Date(startedAt).getTime() : undefined,
+      containerRunning: true,
       players,
+      boot: reachable ? undefined : await cachedMcBoot().catch(() => undefined),
     };
   },
   async start() {
@@ -232,6 +349,61 @@ const minecraftDriver: GameDriver = {
 
 // ── 7 Days to Die driver ────────────────────────────────────────────────────
 
+/**
+ * How far 7DTD has got. Worth real detail because a first install downloads
+ * ~17 GB through SteamCMD before the game even starts — that phase reports its own
+ * byte progress, and without surfacing it the server looks hung for 20 minutes.
+ */
+const cachedSdtdBoot = cachedProbe(
+  3000,
+  async (): Promise<{ stage: string; percent: number | null; detail?: string }> => {
+    const c = RUNTIME["7dtd"].container;
+    let m: Record<string, number>;
+    try {
+      m = await bootMarkers(
+        c,
+        "/Update state .*downloading/{dl=1} /Update state .*verifying|Validating/{vf=1} " +
+          // No `$` anchor: it failed to match in practice against the real log. Matching
+          // "StartGame done" too is harmless, because `done` is checked first below.
+          "/INF StartGame/{sg=1} /Loading players.xml/{pl=1} " +
+          "/Calculating world hashes/{wh=1} /chunk groups/{ch=1} /StartGame done/{dn=1} " +
+          'END{printf "dl=%d vf=%d sg=%d pl=%d wh=%d ch=%d done=%d", dl+0, vf+0, sg+0, pl+0, wh+0, ch+0, dn+0}'
+      );
+    } catch {
+      return { stage: "Starting up", percent: null };
+    }
+
+    const detail = await lastLogLine(
+      c,
+      "StartGame done|chunk groups|Calculating world hashes|Loading players.xml|INF StartGame|Update state|Validating"
+    );
+
+    if (m.done) return { stage: "Opening the server to players", percent: 97, detail };
+    if (m.ch) return { stage: "Indexing world chunks", percent: 88, detail };
+    if (m.wh) return { stage: "Checking the world", percent: 80, detail };
+    if (m.pl) return { stage: "Loading players", percent: 72, detail };
+    if (m.sg) return { stage: "Starting the game", percent: 65, detail };
+    if (m.vf) return { stage: "Verifying game files", percent: 58, detail };
+    if (m.dl) {
+      // "Update state (0x61) downloading, progress: 39.24 (6945342749 / 17701152170)"
+      const pct = detail ? Number(/progress:\s*([0-9.]+)/.exec(detail)?.[1] ?? NaN) : NaN;
+      const gb = detail ? /\((\d+) \/ (\d+)\)/.exec(detail) : null;
+      const size = gb
+        ? ` — ${(Number(gb[1]) / 1e9).toFixed(1)} of ${(Number(gb[2]) / 1e9).toFixed(1)} GB`
+        : "";
+      return {
+        stage: Number.isFinite(pct)
+          ? `Downloading game files (${pct.toFixed(0)}%)${size}`
+          : "Downloading game files",
+        // The download is the bulk of a first boot, so it owns 5-55%.
+        percent: Number.isFinite(pct) ? Math.round(5 + (pct / 100) * 50) : null,
+        detail,
+      };
+    }
+    return { stage: "Starting container", percent: 3, detail };
+  }
+);
+
 const sevenDtdDriver: GameDriver = {
   async status() {
     const { container } = RUNTIME["7dtd"];
@@ -246,8 +418,11 @@ const sevenDtdDriver: GameDriver = {
       game: "7dtd",
       status: s.reachable ? "online" : "starting",
       uptime: startedAt ? fmtUptime(startedAt) : undefined,
+      startedAtMs: startedAt ? new Date(startedAt).getTime() : undefined,
+      containerRunning: true,
       players: s.players,
       detail: s.time ?? undefined,
+      boot: s.reachable ? undefined : await cachedSdtdBoot().catch(() => undefined),
     };
   },
   async start() {
@@ -285,7 +460,9 @@ const PZ_STOP_TIMEOUT = 300;
  * than a spinner. One `docker logs | awk` pass rather than streaming the whole
  * log into node — it can be 100k+ lines.
  */
-const cachedPzBoot = cachedProbe(3000, async (): Promise<{ stage: string; percent: number | null }> => {
+const cachedPzBoot = cachedProbe(
+  3000,
+  async (): Promise<{ stage: string; percent: number | null; detail?: string }> => {
   const started = await containerStartedAt(RUNTIME.zomboid.container);
   const since = started ? new Date(started).toISOString() : "10m";
   let counts = { loading: 0, started: 0, rcon: 0, maps: 0, workshop: 0, jvm: 0 };
@@ -309,8 +486,15 @@ const cachedPzBoot = cachedProbe(3000, async (): Promise<{ stage: string; percen
     total = (await readModState()).modIds.length;
   } catch {}
 
-  if (counts.rcon) return { stage: "Ready", percent: 100 };
-  if (counts.started) return { stage: "Opening the server to players", percent: 97 };
+  // PZ has the most to say while booting: an 89-mod load can sit on one percentage
+  // for a minute, so naming the mod currently loading is what shows it is moving.
+  const detail = await lastLogLine(
+    RUNTIME.zomboid.container,
+    "> loading |Workshop: |SERVER STARTED|RCON: listening"
+  );
+
+  if (counts.rcon) return { stage: "Ready", percent: 100, detail };
+  if (counts.started) return { stage: "Opening the server to players", percent: 97, detail };
   if (counts.loading > 0) {
     // Mods are ~15%→90% of the wait; the world still has to load afterwards.
     const frac = total > 0 ? Math.min(1, counts.loading / total) : 0;
@@ -319,12 +503,13 @@ const cachedPzBoot = cachedProbe(3000, async (): Promise<{ stage: string; percen
         ? `Loading mods (${Math.min(counts.loading, total)} of ${total})`
         : `Loading mods (${counts.loading})`,
       percent: total > 0 ? Math.round(15 + frac * 75) : null,
+      detail,
     };
   }
-  if (counts.jvm) return { stage: "Loading the game", percent: 12 };
-  if (counts.workshop) return { stage: "Checking Workshop mods", percent: 8 };
-  if (counts.maps) return { stage: "Scanning maps", percent: 5 };
-  return { stage: "Starting container", percent: 2 };
+  if (counts.jvm) return { stage: "Loading the game", percent: 12, detail };
+  if (counts.workshop) return { stage: "Checking Workshop mods", percent: 8, detail };
+  if (counts.maps) return { stage: "Scanning maps", percent: 5, detail };
+  return { stage: "Starting container", percent: 2, detail };
 });
 
 const zomboidDriver: GameDriver = {
@@ -340,6 +525,8 @@ const zomboidDriver: GameDriver = {
       game: "zomboid",
       status: s.reachable ? "online" : "starting",
       uptime: startedAt ? fmtUptime(startedAt) : undefined,
+      startedAtMs: startedAt ? new Date(startedAt).getTime() : undefined,
+      containerRunning: true,
       players: s.players,
       // Only while booting: once RCON answers there's nothing left to report.
       boot: s.reachable ? undefined : await cachedPzBoot().catch(() => undefined),
@@ -478,6 +665,17 @@ async function withControlLock<T>(game: GameId, action: ControlAction, fn: () =>
 export async function powerOn(game: GameId): Promise<HandoffStep[]> {
   return withControlLock(game, "start", async () => {
     const steps: HandoffStep[] = [];
+
+    // Refuse rather than silently succeed. `docker start` on a running container is
+    // a no-op, so a wedged server used to report "powering on" and then do nothing
+    // at all — which reads as the dashboard being broken. Say what is true and name
+    // the action that would help.
+    if ((await containerState(RUNTIME[game].container)) === "running") {
+      throw new Error(
+        `${GAMES[game].name} is already running — it just isn't responding yet. ` +
+          `Use Restart if it stays that way.`
+      );
+    }
 
     for (const other of otherGames(game)) {
       if ((await containerState(RUNTIME[other].container)) !== "running") continue;

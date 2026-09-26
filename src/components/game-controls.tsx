@@ -50,9 +50,25 @@ export function GameControls({ game }: { game: GameId }) {
 
   const coreState: CoreState = busy && !isOnline ? { kind: "booting", game } : isOnline ? { kind: "holding", game } : { kind: "idle" };
 
-  // Whether the power button would actually be allowed, so a viewer who can't
-  // use it sees that up front instead of a "Forbidden" toast after pressing it.
-  const canPower = isOnline ? can.stop : can.start;
+  /**
+   * The container is up but the game is not answering.
+   *
+   * This is its own state, not "stopped". Treating it as stopped is what left a
+   * wedged server unrecoverable from the dashboard: the UI offered **Power on**,
+   * which runs `docker start` on an already-running container — a silent no-op —
+   * while Restart was disabled because Restart required `isOnline`. Both the useful
+   * action and the honest label were missing at once.
+   */
+  const containerUp = snap?.containerRunning ?? isOnline;
+  const unreachable = containerUp && !isOnline;
+  // A normal boot also sits here, so only call it stuck once it has taken clearly
+  // longer than a boot ever does. Below that, it is just starting.
+  const startedFor = snap?.startedAtMs ? Date.now() - snap.startedAtMs : 0;
+  const looksStuck = unreachable && startedFor > 12 * 60 * 1000;
+
+  // Power on cannot help when the container is already up, so offer stop instead —
+  // and Restart, below, becomes the recommended way out.
+  const canPower = containerUp ? can.stop : can.start;
 
   // Only *this* world's operation should describe itself here — a hand-off that
   // is stopping another world shouldn't caption this card.
@@ -60,7 +76,9 @@ export function GameControls({ game }: { game: GameId }) {
 
   function onPower() {
     if (busy) return;
-    if (isOnline) return void control("stop");
+    // `containerUp`, not `isOnline`: a wedged server is still running, so the only
+    // meaningful power action is to stop it.
+    if (containerUp) return void control("stop");
     if (blocking.length > 0) setConfirm(true);
     else void control("start");
   }
@@ -104,7 +122,15 @@ export function GameControls({ game }: { game: GameId }) {
           <div>
             <p className="eyebrow text-muted-foreground">Status</p>
             <p className="mt-1 font-display text-2xl font-bold">
-              {isOnline ? "Running" : busy ? "Working…" : "Stopped"}
+              {isOnline
+                ? "Running"
+                : busy
+                ? "Working…"
+                : looksStuck
+                ? "Not responding"
+                : unreachable
+                ? "Starting…"
+                : "Stopped"}
             </p>
           </div>
           <StatusPill status={busy && !isOnline ? "starting" : status} tint={meta.tint} />
@@ -180,9 +206,9 @@ export function GameControls({ game }: { game: GameId }) {
           }}
         >
           <PowerGlyph className="h-5 w-5" />
-          {busy ? busyLabel(busyAction) : isOnline ? "Power off" : "Power on"}
+          {busy ? busyLabel(busyAction) : containerUp ? "Power off" : "Power on"}
         </button>
-        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !isOnline || !can.restart} onClick={() => control("restart")}>
+        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !containerUp || !can.restart} onClick={() => control("restart")}>
           <RotateCw className={cn("h-4 w-4", busyAction === "restart" && "animate-spin")} />
           {busyAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
@@ -198,6 +224,19 @@ export function GameControls({ game }: { game: GameId }) {
                 : "restarting"}
               {serverBusy.stage ? ` — ${serverBusy.stage.toLowerCase()}` : ""}. Controls unlock when
               it finishes.
+            </span>
+          ) : looksStuck ? (
+            <span>
+              The container is up but the game has not answered for{" "}
+              {Math.round(startedFor / 60000)} minutes. It is most likely wedged —{" "}
+              <strong className="text-foreground">Restart</strong> is the way out. Powering off and
+              on again does the same thing more slowly.
+            </span>
+          ) : unreachable ? (
+            <span>
+              Running but still loading, so it can&apos;t answer yet. Watch the bar at the top of the
+              page for progress; <strong className="text-foreground">Restart</strong> is available if
+              it stops moving.
             </span>
           ) : !canPower && !can.restart ? (
             "You can view this server but not power it. Ask an admin for Mod access."
