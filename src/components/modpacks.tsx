@@ -50,6 +50,21 @@ interface ExportMod {
   version: string | null;
 }
 
+// Typed rather than `any` so the dialog below can't read through a field the
+// export endpoint didn't send. See handleExport for why that mattered.
+interface ExportPayload {
+  modpack: { name: string; description: string; mcVersion: string; loader: string };
+  mods: ExportMod[];
+}
+
+interface InstallReport {
+  packName: string;
+  installed: number;
+  total: number;
+  errors: string[];
+  warnings: string[];
+}
+
 export function Modpacks() {
   const [modpacks, setModpacks] = useState<Modpack[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,9 +75,10 @@ export function Modpacks() {
   const [newLoader, setNewLoader] = useState("");
   const [creating, setCreating] = useState(false);
   const [mcVersions, setMcVersions] = useState<string[]>([]);
-  const [exportData, setExportData] = useState<{ modpack: any; mods: ExportMod[] } | null>(null);
+  const [exportData, setExportData] = useState<ExportPayload | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
   const [installing, setInstalling] = useState<string | null>(null);
+  const [installReport, setInstallReport] = useState<InstallReport | null>(null);
   const [showInstallConfirm, setShowInstallConfirm] = useState<string | null>(null);
   const [editingPack, setEditingPack] = useState<Modpack | null>(null);
   const [removeWarning, setRemoveWarning] = useState<{ mod: ModpackMod; dependents: string[] } | null>(null);
@@ -206,6 +222,15 @@ export function Modpacks() {
     try {
       const res = await fetch(`/api/modpacks/${modpackId}/export`);
       const data = await res.json();
+      // The endpoint answers {error} on 401/403/404 (a pack deleted in another
+      // tab is enough), and storing that opened the dialog on a payload with no
+      // `modpack` — reading .name off undefined throws during render, and with no
+      // error.tsx anywhere that takes the whole app to a blank page instead of
+      // failing just this dialog.
+      if (!res.ok || !data?.modpack || !Array.isArray(data.mods)) {
+        toast.error(data?.error || "Failed to generate export");
+        return;
+      }
       setExportData(data);
     } catch {
       toast.error("Failed to generate export");
@@ -217,6 +242,7 @@ export function Modpacks() {
   async function handleInstallToServer(modpackId: string) {
     setShowInstallConfirm(null);
     setInstalling(modpackId);
+    const packName = modpacks.find((p) => p.id === modpackId)?.name ?? "Modpack";
     try {
       const res = await fetch("/api/mods/install-modpack", {
         method: "POST",
@@ -224,15 +250,40 @@ export function Modpacks() {
         body: JSON.stringify({ modpackId }),
       });
       const data = await res.json();
-      if (res.ok) {
-        toast.success(
-          `Installed ${data.installed}/${data.total} mods. Restart the server to apply.`
-        );
-        if (data.errors?.length > 0) {
-          toast.warning(`Some mods failed: ${data.errors.join(", ")}`);
-        }
-      } else {
+
+      // The route answers non-2xx when it couldn't install every mod, so the counts
+      // have to be read on both paths. Trusting res.ok alone is what reported
+      // "Installed 0/166 mods" in a green toast for every pack whose rows carry no
+      // download source.
+      if (typeof data.installed !== "number" || typeof data.total !== "number") {
         toast.error(data.error || "Failed to install modpack");
+        return;
+      }
+
+      const failures: string[] = data.errors ?? [];
+      const warnings: string[] = data.warnings ?? [];
+      const missing = data.total - data.installed;
+
+      // 166 failures concatenated into one toast is unreadable and gone in seconds,
+      // so the list lives in a dialog you can scroll and the toast only counts.
+      if (missing > 0 || failures.length > 0 || warnings.length > 0) {
+        setInstallReport({
+          packName,
+          installed: data.installed,
+          total: data.total,
+          errors: failures,
+          warnings,
+        });
+      }
+
+      if (data.installed === 0 && data.total > 0) {
+        toast.error(`No mods installed (0 of ${data.total}). The server has no mods now.`);
+      } else if (missing > 0) {
+        toast.warning(`Installed ${data.installed} of ${data.total} mods — ${missing} failed.`);
+      } else {
+        toast.success(
+          `Installed ${data.installed} mod${data.installed === 1 ? "" : "s"}. Restart the server to apply.`
+        );
       }
     } catch {
       toast.error("Failed to install modpack");
@@ -450,6 +501,54 @@ export function Modpacks() {
             >
               Yes, replace all mods
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!installReport} onOpenChange={() => setInstallReport(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className={installReport?.installed === 0 ? "text-destructive" : undefined}>
+              Installed {installReport?.installed} of {installReport?.total} mods
+            </DialogTitle>
+            <DialogDescription>
+              {installReport?.packName}
+              {installReport && installReport.installed > 0
+                ? " — restart the server to apply."
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            {installReport?.warnings.map((w, i) => (
+              <div key={i} className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-3">
+                <p className="text-xs text-chart-5">{w}</p>
+              </div>
+            ))}
+
+            {installReport && installReport.errors.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm font-medium">
+                  {installReport.errors.length} mod
+                  {installReport.errors.length === 1 ? "" : "s"} failed
+                </p>
+                <div className="max-h-[45vh] overflow-y-auto rounded-lg border border-border/50">
+                  {installReport.errors.map((err, i) => (
+                    <p
+                      key={i}
+                      className="px-3 py-1.5 text-xs font-mono border-b border-border/40 last:border-0 break-words"
+                    >
+                      {err}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => setInstallReport(null)}>
+                Close
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
