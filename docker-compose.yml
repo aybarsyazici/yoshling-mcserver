@@ -27,10 +27,10 @@ services:
     # Docker's default is 10s, which is not enough to save a 217 MB world; PZ only
     # got a grace period after a save was SIGKILLed halfway.
     stop_grace_period: 120s
-    # The heap is 4G; the ceiling is the containment nothing had. Without a limit one
-    # world's JVM can push the others (and the dashboard) into swap, which is how the
-    # box ended up 2 GB into swap with two worlds co-resident.
-    mem_limit: 5g
+    # The heap is 4G and a booted, empty server measured 1.93 GiB. 6g leaves the JVM
+    # its non-heap overhead plus page cache without the cgroup living at its ceiling
+    # the way Project Zomboid's first limit did.
+    mem_limit: 6g
     logging:
       driver: "json-file"
       options: { max-size: "20m", max-file: "3" }
@@ -72,8 +72,10 @@ services:
     # sends `saveworld` over telnet first, but the shutdown itself still needs room.
     stop_grace_period: 120s
     # 7DTD is a Unity native server with no heap setting, so this ceiling is the only
-    # thing bounding it at all.
-    mem_limit: 8g
+    # thing bounding it at all -- which also means there is no configured value to
+    # size it against. 10g is generous for a 6144-size world and still leaves the box
+    # room, and since only one world runs at a time it does not have to share.
+    mem_limit: 10g
     logging:
       driver: "json-file"
       options: { max-size: "20m", max-file: "3" }
@@ -133,9 +135,19 @@ services:
     # Same as 7DTD: never auto-start, the web UI powers it on deliberately so the
     # box never tries to run two worlds at once.
     restart: "no"
-    # MAX_MEMORY is 12288m, so 13g leaves the JVM its non-heap overhead and still
-    # stops one world from pushing the dashboard into swap.
-    mem_limit: 13g
+    # 14g for a 12288m heap. 13g was too tight and measurement showed why: with the
+    # server booted and empty, `anon` (unreclaimable) was only 1.1 GiB while `file`
+    # (page cache from reading mods and map cells) was 11.6 GiB -- so the cgroup sat
+    # at 98% of its limit and had already reclaimed 601 times. Cache pressure is
+    # harmless, but -Xmx12288m means the heap may grow to 12 GiB of *anon*, and at
+    # that point a 13g ceiling is an OOM kill mid-session. A JVM with a 12 GiB heap
+    # needs roughly 1-2 GiB more for metaspace, code cache, thread stacks and the
+    # native model/audio libraries.
+    #
+    # 14g is also the practical maximum: 15.6 GiB box, minus ~1 GiB for the
+    # dashboard and the OS. If Project Zomboid ever needs more than this, the heap
+    # has to come down rather than the ceiling going up.
+    mem_limit: 14g
     # PZ is the reason this exists: its container log reached 123 MB of the box's
     # 122 MB total, growing ~7.8 MB/day, and the only way to reset it was recreating
     # the container. It also made the boot probe's `docker logs --since` cost 2.7s
