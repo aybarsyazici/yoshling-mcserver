@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
+import { cn } from "@/lib/utils";
+import { useGames } from "@/lib/use-games";
 import { Button } from "@/components/ui/button";
 import { Archive, RotateCcw, Trash2, Plus, AlertTriangle } from "lucide-react";
 
@@ -41,6 +43,14 @@ export function GameBackups({ game }: { game: GameId }) {
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
 
+  // A restore is a power operation now — it saves + stops the server, swaps the
+  // files and starts it back up, all under the control lock. So it has to know
+  // whether the server is up (to say what will happen) and whether some other
+  // operation already holds the lock (the request would come back 409).
+  const { games, busy, refresh } = useGames();
+  const running = games?.[game]?.containerRunning ?? false;
+  const locked = busy !== null;
+
   async function fetchBackups() {
     try {
       const res = await fetch(endpoint);
@@ -77,7 +87,10 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function restore(name: string) {
-    if (!confirm(`Restore "${name}"? This replaces the current ${noun}. Stop the server first.`)) return;
+    const consequence = running
+      ? `${meta.name} will be saved and stopped, the ${noun} replaced, then started again.`
+      : `This replaces the current ${noun}. The server stays powered down.`;
+    if (!confirm(`Restore "${name}"?\n\n${consequence}`)) return;
     setRestoring(name);
     try {
       const res = await fetch(endpoint, {
@@ -85,13 +98,18 @@ export function GameBackups({ game }: { game: GameId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "restore", backupName: name }),
       });
-      if (res.ok) toast.success(`${noun[0].toUpperCase() + noun.slice(1)} restored. Power on to play.`);
-      else {
-        const d = await res.json();
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(
+          `${noun[0].toUpperCase() + noun.slice(1)} restored. ` +
+            (d.restarted ? "The server is starting again." : "Power on to play.")
+        );
+      } else {
         toast.error(d.error || "Restore failed");
       }
     } finally {
       setRestoring(null);
+      refresh();
     }
   }
 
@@ -105,6 +123,11 @@ export function GameBackups({ game }: { game: GameId }) {
     if (res.ok) {
       setBackups((prev) => prev.filter((b) => b.name !== name));
       toast.success("Backup deleted");
+    } else {
+      // Say so. A failed delete used to leave the row in place and no message at
+      // all, which reads as the button not working.
+      const d = await res.json().catch(() => ({}));
+      toast.error(d.error || "Delete failed");
     }
   }
 
@@ -122,9 +145,20 @@ export function GameBackups({ game }: { game: GameId }) {
       <div className="flex items-start gap-2 rounded-xl bg-chart-5/10 p-3 ring-1 ring-chart-5/30">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-chart-5" />
         <p className="text-xs text-muted-foreground">
-          Restoring replaces the live {noun} and everything else in the backup. Power the server down first to avoid corruption.
+          Restoring replaces the live {noun} and everything else in the backup, and there is no undo.
+          {running
+            ? ` ${meta.name} is running, so a restore saves and stops it first, then starts it again — a running server would otherwise write its own copy back over the restored files.`
+            : " The server is down, so it will stay down afterwards."}
         </p>
       </div>
+
+      {locked && (
+        <p className="text-xs text-muted-foreground">
+          <strong className="text-foreground">{GAMES[busy.game].name}</strong> is{" "}
+          {busy.action === "start" ? "starting up" : busy.action === "stop" ? "shutting down" : "busy"}
+          {busy.stage ? ` — ${busy.stage.toLowerCase()}` : ""}. Restore unlocks when it finishes.
+        </p>
+      )}
 
       {loading ? (
         <div className="space-y-3">
@@ -167,8 +201,15 @@ export function GameBackups({ game }: { game: GameId }) {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => restore(b.name)} disabled={restoring === b.name}>
-                    <RotateCcw className="h-3.5 w-3.5" /> {restoring === b.name ? "Restoring…" : "Restore"}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="disabled:cursor-not-allowed"
+                    onClick={() => restore(b.name)}
+                    disabled={restoring !== null || locked}
+                  >
+                    <RotateCcw className={cn("h-3.5 w-3.5", restoring === b.name && "animate-spin")} />{" "}
+                    {restoring === b.name ? "Restoring…" : "Restore"}
                   </Button>
                   <Button size="sm" variant="destructive" onClick={() => del(b.name)}>
                     <Trash2 className="h-3.5 w-3.5" />
