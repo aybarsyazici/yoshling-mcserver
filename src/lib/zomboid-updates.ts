@@ -58,6 +58,26 @@ const MANIFEST = path.join(PZ_WORKSHOP_DIR, `appworkshop_${PZ_APP_ID}.acf`);
 /** Re-announce a still-pending update this often, so latecomers see it too. */
 const REANNOUNCE_MS = 30 * 60 * 1000;
 
+/**
+ * When this process started.
+ *
+ * An apply is orchestrated entirely in memory here — the stop, the SteamCMD run
+ * and the start are awaited inside `runPoll` — so it cannot outlive the process
+ * that started it. An `applyingSince` older than this process is therefore a
+ * leftover from a crash, a redeploy or a box reboot, never a running apply.
+ */
+const PROCESS_STARTED_AT = Date.now() - Math.round(process.uptime() * 1000);
+
+/**
+ * Longest an apply can still legitimately be in flight. The graceful stop is
+ * capped at `PZ_STOP_TIMEOUT` (300s) and `seedMods` at SteamCMD's own 45-minute
+ * exec timeout, after which it rejects and the marker is cleared — so ~51
+ * minutes is the ceiling and an hour is safely past it. This only catches the
+ * one case the process check cannot: a clearing write that was lost (all writes
+ * here are best-effort) inside a process that never restarted.
+ */
+const APPLY_MAX_MS = 60 * 60 * 1000;
+
 export interface StaleMod {
   id: string;
   title: string;
@@ -93,6 +113,9 @@ export interface WatchState {
    * ticks meanwhile. Without this the UI kept saying "waiting for everyone to log
    * off" while the server was already being restarted, which reads as the feature
    * having done nothing at all.
+   *
+   * Because it is written first, it can outlive the apply. `readWatchState`
+   * reconciles that — never trust the raw file.
    */
   applyingSince: number;
   /** Titles being applied right now, so the UI can name them mid-flight. */
@@ -110,12 +133,51 @@ const EMPTY_STATE: WatchState = {
   applyingTitles: [],
 };
 
+let warnedStaleApply = false;
+
+/**
+ * The state as it should be believed — not quite what is on disk.
+ *
+ * `applyingSince` is written *before* the ~6 minute stop/download/start, so a
+ * crash, a redeploy or a box reboot in that window leaves it set with nothing to
+ * clear it: the `none` and `seeded` paths return a `next` that doesn't mention
+ * it, and `{ ...state, ...next }` re-persists whatever was there. The card then
+ * read "Updating now — restarting the server… Started 3 days ago" for good, with
+ * `Check now` — its only control, and the one thing that could have moved the
+ * state on — disabled precisely because an apply looked in-flight.
+ *
+ * Reconciling on read rather than on each `runPoll` return path means every
+ * reader (this poll and the API the card polls) gets the same answer, the next
+ * write persists the cleared value, and a genuinely in-flight apply is still
+ * preserved for a concurrent poll — which explicitly zeroing those paths would
+ * have wiped.
+ */
 export async function readWatchState(): Promise<WatchState> {
+  let state: WatchState;
   try {
-    return { ...EMPTY_STATE, ...JSON.parse(await readFile(STATE_FILE, "utf-8")) };
+    state = { ...EMPTY_STATE, ...JSON.parse(await readFile(STATE_FILE, "utf-8")) };
   } catch {
     return { ...EMPTY_STATE };
   }
+  if (!state.applyingSince) return state;
+
+  const predates = state.applyingSince < PROCESS_STARTED_AT;
+  const tooOld = Date.now() - state.applyingSince > APPLY_MAX_MS;
+  if (!predates && !tooOld) return state;
+
+  // Say so once: it means an apply was interrupted, so the mods on disk may be
+  // half updated. The next poll re-finds them stale and redoes the whole thing,
+  // but silently pretending nothing happened is how this went unnoticed before.
+  if (!warnedStaleApply) {
+    warnedStaleApply = true;
+    console.warn(
+      `[pz-updates] discarding apply marker from ${new Date(state.applyingSince).toISOString()}: ` +
+        (predates
+          ? "it predates this process, and an apply cannot outlive the process running it"
+          : `it is older than the longest possible apply (${APPLY_MAX_MS / 60000}m)`)
+    );
+  }
+  return { ...state, applyingSince: 0, applyingTitles: [] };
 }
 
 async function writeWatchState(state: WatchState): Promise<void> {
@@ -273,6 +335,20 @@ export async function findStaleMods(): Promise<StaleMod[]> {
 }
 
 /**
+ * Marks the throwaway SteamCMD container so it can be told apart from the live
+ * game container.
+ *
+ * It has to be a label: the seed deliberately runs the *same image* as
+ * `yoshling-pz` (see `containerImage` below), it is unnamed because `--rm` plus a
+ * fixed name collides with any leftover, and `--rm` itself isn't visible in
+ * `docker ps`. `scripts/deploy.sh` refuses to deploy while a seed is in flight —
+ * two SteamCMD runs race on the workshop volume and the loser updates nothing —
+ * and it used to look for the image name, which meant it never fired once.
+ * **If you rename this, rename it there too.**
+ */
+const SEED_LABEL = "yoshling.role=pz-seed";
+
+/**
  * Download the given items with SteamCMD, in a throwaway container sharing the
  * workshop volume.
  *
@@ -297,7 +373,8 @@ export async function seedMods(ids: string[]): Promise<void> {
     `+force_install_dir /home/steam/pz-dedicated +login anonymous ${items} +quit`;
 
   const { stdout } = await execAsync(
-    `docker run --rm -v ${volume}:/home/steam/pz-dedicated/steamapps/workshop ` +
+    `docker run --rm --label ${SEED_LABEL} ` +
+      `-v ${volume}:/home/steam/pz-dedicated/steamapps/workshop ` +
       `--entrypoint sh ${image} -c ${JSON.stringify(inner)}`,
     { maxBuffer: 32 * 1024 * 1024, timeout: 45 * 60 * 1000 }
   );
