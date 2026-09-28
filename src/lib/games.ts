@@ -42,6 +42,16 @@ export interface GameMeta {
   hasMods: boolean;
 }
 
+/**
+ * The box players connect to, in one place.
+ *
+ * It was written out per game before, and when the server moved to netcup two of
+ * the three were left pointing at the decommissioned Hetzner box — so the landing
+ * cards and both overview heroes spent two weeks telling people to connect to an
+ * address that answers ICMP and refuses every game port.
+ */
+const HOST_IP = "89.58.50.155";
+
 export const GAMES: Record<GameId, GameMeta> = {
   minecraft: {
     id: "minecraft",
@@ -73,7 +83,7 @@ export const GAMES: Record<GameId, GameMeta> = {
     tintDeep: "var(--sd-deep)",
     // Show both: the hostname, and the raw IP (7DTD's direct-connect box only
     // reliably accepts a literal IP, so the IP is the sure thing).
-    connect: ["7dtd.yoshling.xyz:26900", "178.105.163.254:26900"],
+    connect: ["7dtd.yoshling.xyz:26900", `${HOST_IP}:26900`],
     ramGb: 5,
     detailLabel: "In-game day",
     api: {
@@ -96,7 +106,7 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--pz)",
     tintSoft: "var(--pz-soft)",
     tintDeep: "var(--pz-deep)",
-    connect: ["pz.yoshling.xyz:16261", "178.105.163.254:16261"],
+    connect: ["pz.yoshling.xyz:16261", `${HOST_IP}:16261`],
     ramGb: 4,
     detailLabel: "Uptime",
     api: {

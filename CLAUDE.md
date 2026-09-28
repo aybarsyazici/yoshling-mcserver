@@ -37,6 +37,7 @@ then they stop being true.** Keep this one short enough to re-read.
 
 | Working on | Read first |
 |------------|-----------|
+| **Any pre-existing bug, or "is this feature actually correct?"** | **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)** — 185 reviewed findings across every route. Check it before assuming a defect is new, and check its §5 before trusting any finding |
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
 | A broken/misbehaving PZ **mod** | [`docs/PZ-MOD-BACKLOG.md`](docs/PZ-MOD-BACKLOG.md) — open defect list; check its harmless list before investigating |
 | 7 Days to Die | the "7 Days to Die specifics" section below (not yet split out) |
@@ -98,8 +99,13 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   every *other* world, so nothing assumes there are exactly two.
 - `src/lib/game-manager.ts` — server-side driver per game. `powerOn(game)`
   performs the graceful hand-off: it saves + stops *every other* game that is
-  running, then starts the requested one. Active game is persisted in the
-  `GameState` table so a reboot only revives the intended world. A module-level
+  running, then starts the requested one. **`powerOn` is the only path that
+  evicts** — `/api/settings`, `/api/7dtd/update` and `install-modpack` all start a
+  container without it, and nothing anywhere *detects* two running worlds and says
+  so. Active game is written to the `GameState` table, but **nothing revives
+  anything from it**: what comes back after a reboot is decided entirely by each
+  service's compose `restart:` policy. (The column is write-mostly; it was
+  documented here as the reboot mechanism for months and never was.) A module-level
   **control lock** serializes all start/stop/restart ops — a concurrent request
   throws `ControlBusyError` → HTTP 409 (prevents Restart-button spam / racing
   `docker` commands). `/api/games/status` exposes the in-flight lock as `busy`;
@@ -120,15 +126,19 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     18:36:23 with the power buttons correctly locked and **nothing anywhere saying
     why**, which reads as the feature having done nothing. Disabled controls now
     state their reason too. If you add another long operation, give it a stage.
-  - **KNOWN BUG, not yet fixed: "container running but unreachable" is reported as
-    powered down, and Power on is then a silent no-op.** The status probe asks the
-    game (RCON/telnet); if the container is up but the game cannot answer, the probe
-    fails and the UI renders it as stopped. It therefore offers **Power on**, which
-    runs `docker start` on an already-running container — a no-op that toasts
-    success and changes nothing, leaving no route to recovery from the dashboard.
-    Seen 2026-09-22 when PZ's game loop wedged (see docs/PROJECT-ZOMBOID.md). The
-    fix is to treat running-but-unreachable as its own state, say so, and offer
-    **Restart** instead of Power on.
+  - **"Container running but unreachable" is its own state — FIXED 2026-09-27
+    (`a7d76b8`), don't collapse it back into "stopped".** The status probe asks the
+    game (RCON/telnet), so a container that is up but not answering used to render
+    as powered down. The UI then offered **Power on**, which runs `docker start` on
+    an already-running container — a no-op that toasted success and changed nothing,
+    leaving no route to recovery from the dashboard. Seen 2026-09-22 when PZ's game
+    loop wedged (see docs/PROJECT-ZOMBOID.md). `GameStatus` now carries
+    `containerRunning` and `startedAtMs` separately from `status`, and
+    `game-controls.tsx` derives three states from them: *Stopped*, *Starting…*
+    (unreachable but young), and *Not responding* (unreachable for >12 min, which
+    names Restart as the way out). **Restart is gated on `containerRunning`, not on
+    `isOnline`** — that inversion is the whole fix, because the useful action and
+    the honest label were both missing at the same time.
   - **`restartGame()` is stop-then-start, not `driver.restart()`** — deliberately.
     Every driver's `restart()` is one opaque "save, then `docker restart`" call, so
     it could not say which half it was in, and it set no stage at all. For PZ the
@@ -209,10 +219,21 @@ see rather than assume. Verified on the box: `MAX_MEMORY=4096m` in compose →
 
 Per-game support lives in `RUNTIME[game].memory`: Minecraft uses `MEMORY` (`4G`
 form), Project Zomboid uses `MAX_MEMORY` (`4096m` form), and **7 Days to Die has
-none** — it's a Unity native server with no JVM, so the card says so instead of
-offering a control that does nothing. Cap is `MAX_GAME_GB` (6), leaving room for
-the OS and the dashboard on the 8 GB box. `/api/settings` no longer touches
-memory at all; it only patches `TYPE`/`VERSION`.
+none** — it's a Unity native server with no JVM, so the card explains that instead
+of offering a control that does nothing. (It is not actually *mounted* on the 7DTD
+settings page, so that explanation currently never renders — a real gap, not a
+deliberate omission.)
+
+**There is no `MAX_GAME_GB` constant**, and this said "6" and "the 8 GB box" long
+after the move to netcup. The cap is derived at request time:
+`maxGameGb()` = `/proc/meminfo` MemTotal − `HOST_RESERVE_GB` (2.5) ≈ **13 GB** on
+the 16 GB box. Two things follow. That ceiling **assumes the world is alone on the
+box** — it does not subtract whatever else is running, and nothing sets a container
+`mem_limit`, so over-commit is possible and unbounded. And PZ's `RUNTIME` entry
+patches only `MAX_MEMORY`, not `MIN_MEMORY`, so choosing a heap below the compose
+`MIN_MEMORY` writes `-Xmx` under a larger `-Xms` and the JVM refuses to start.
+
+`/api/settings` no longer touches memory at all; it only patches `TYPE`/`VERSION`.
 
 ### Roles & per-world access
 
@@ -301,8 +322,14 @@ an ESM-only dep, so on Node 20.12 every `prisma` command dies with
 Host: **netcup `89.58.50.155`**, 8 vCPU / 16 GB RAM / 314 GB disk, Debian 13,
 8 GB swap. SSH as `root` with `~/.ssh/mc_yoshling_netcup`. Migrated off Hetzner
 2026-09-13 (€12.61 vs €40/mo for 16 GB); see MIGRATION.md. The old Hetzner box
-(`89.58.50.155`, key `~/.ssh/mc_yoshling`) is kept as a rollback until each
-game has been played on netcup. Deploy dir: `/opt/yoshling` (a git checkout tracking
+(**`178.105.163.254`** — this file had it as `89.58.50.155`, a copy of netcup's own
+IP, which makes the two indistinguishable in exactly the commands where it matters;
+key `~/.ssh/mc_yoshling`) is kept as a rollback until each game has been played on
+netcup. **The two keys are not interchangeable** — verified 2026-09-28,
+the **Hetzner** key against the netcup box gets
+`Permission denied (publickey,password)`. Every command in this file targets netcup,
+so it must use `~/.ssh/mc_yoshling_netcup`; snippets here that said `mc_yoshling`
+simply did not work. Deploy dir: `/opt/yoshling` (a git checkout tracking
 `main`). Public domain `https://yoshling.xyz` is proxied through **Cloudflare**;
 **Caddy** is the origin reverse proxy (`/etc/caddy/Caddyfile`) forwarding to
 `localhost:3000`.
@@ -330,8 +357,8 @@ client the wrapper ships; it also works against Minecraft on 25575.
 
 ```bash
 git bundle create /tmp/y.bundle main
-scp -i ~/.ssh/mc_yoshling /tmp/y.bundle root@89.58.50.155:/root/
-ssh -i ~/.ssh/mc_yoshling root@89.58.50.155 '
+scp -i ~/.ssh/mc_yoshling_netcup /tmp/y.bundle root@89.58.50.155:/root/
+ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 '
   cd /opt/yoshling
   git fetch /root/y.bundle main
   git checkout -f -B main FETCH_HEAD
@@ -564,13 +591,24 @@ connect **directly to the box IP `89.58.50.155`**:
   `89.58.50.155:26900`. 7DTD's direct-connect box often only accepts a
   **literal IP**, so the IP is the reliable one. The `7dtd` A record is also
   DNS-only. (`connect` in `games.ts` is a `string[]` so a game can list several.)
-- **Project Zomboid:** `pz.yoshling.xyz:16261` or the raw
-  `89.58.50.155:16261`. **The `pz` A record still has to be created** as a
-  DNS-only (grey-cloud) record → the box; until then, use the IP.
-- **Firewall is one layer now.** netcup has no cloud-firewall product, so `ufw` on
-  the box is the only gate: 25565/tcp, 26900/tcp, 26900-26902/udp, 16261-16262/udp,
-  8766-8767/udp. (On Hetzner this was two layers and missing either meant "connect
-  hangs, nothing in logs" — that trap is gone with the move.)
+- **Project Zomboid:** `pz.yoshling.xyz:16261` or the raw `89.58.50.155:16261`.
+  The `pz` A record **does exist** (DNS-only / grey-cloud → the box), as do `mc`
+  and `7dtd`; this file claimed for weeks that it still had to be created.
+- **`ufw` is NOT the only gate, and it does not cover published container ports.**
+  netcup has no cloud-firewall product, so ufw is the only *host* gate
+  (25565/tcp, 26900/tcp, 26900-26902/udp, 16261-16262/udp, 8766-8767/udp) — but
+  Docker publishes ports with a DNAT rule, and the `FORWARD` chain reaches Docker's
+  own chains **before** any ufw chain, so that traffic never passes through `INPUT`
+  at all. `DOCKER-USER` is the only place a rule can intercept it, and on this box
+  `iptables -S DOCKER-USER` is empty. Measured 2026-09-28 from outside:
+  `curl http://89.58.50.155:3000/login` → **200, cleartext, bypassing Cloudflare
+  and Caddy entirely**, and 7DTD's telnet on 8081 accepted a connection from a
+  public IP (it logged `INF Telnet connection from: …`). So **every `ports:` entry
+  in `docker-compose.yml` is world-reachable regardless of ufw** — publish to
+  `127.0.0.1:` when only the host needs it, and put DROP rules in `DOCKER-USER`,
+  not in ufw. (On Hetzner this was two layers and missing either meant "connect
+  hangs, nothing in logs"; the move removed the cloud layer, which is what made
+  this gap consequential.)
 - Server-browser listing: 7DTD `ServerVisibility=2` (public) in `sdtdserver.xml`;
   set a unique `ServerName` (via 7DTD Settings) to find it, or just direct-connect.
 
@@ -579,8 +617,15 @@ connect **directly to the box IP `89.58.50.155`**:
 **Live** at `https://yoshling.xyz` on **netcup `89.58.50.155`** (Cloudflare Full
 (strict), verified end-to-end). Migrated off Hetzner 2026-09-13 — see MIGRATION.md.
 
-- **Minecraft:** all features working (mods, console, files, backups, settings,
-  whitelist). Not yet started on netcup since the migration.
+- **Minecraft: has never started on netcup, and its first start will probably
+  crash-loop — reconcile it before pressing Power on.** `ServerConfig.mcVersion` says
+  **26.1.2**; compose and the container say `VERSION=1.21.4`; `/data` holds a 26.1.2
+  Fabric launcher plus three jars declaring a 26.1.2 dependency. Fabric aborts on
+  those before opening `level.dat`, so it's a boot failure rather than world
+  corruption — and under `restart: unless-stopped` it repeats while the probe shows a
+  permanent "Starting…". Make compose and the DB agree and check the jars match
+  first. (`yoshling-mc` sits in `created`, never started, which is why this went
+  unnoticed.) The MC layer is also the oldest and least-audited code here.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
@@ -597,12 +642,45 @@ connect **directly to the box IP `89.58.50.155`**:
 - **MOD now has the same capabilities as ADMIN**, scoped to its granted worlds;
   only `users.manage` is ADMIN-only. See "Roles & per-world access".
 
+### Full audit, 2026-09-28
+
+A 22-agent audit covered every feature and route: **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)**.
+185 findings, each adversarially reviewed. Read its §5 (refuted/downgraded) before
+acting on anything in it — **9 of 13 criticals were downgraded by their own
+verifier**, several findings are simply wrong, and two prescribe fixes that don't
+work. The corrections it produced are already applied throughout this file.
+
+Two conclusions outrank the individual findings. **The recently-rewritten core is
+good — don't spend time there**; the control lock, reachability states, staged
+`restartGame`, scoped `patchServiceEnv` and `gameGate` all held up, and several
+findings blaming them were refuted by forensics. And **the recurring defect class is
+"reports success after doing nothing or the wrong thing"**, not crashes — so when you
+add anything here, make the success path *prove* it succeeded, the way the memory
+card's configured-vs-live comparison does.
+
 Outstanding across the project:
 
-- The old Hetzner box (`~/.ssh/mc_yoshling`) is still running as a rollback. Delete
-  it once Minecraft and 7DTD have been started and joined on netcup.
-- **`pz.yoshling.xyz` DNS record** doesn't exist yet (needs the Cloudflare
-  dashboard); players use the raw IP.
+- **Ports 3000 (dashboard) and 8081 (7DTD telnet) are reachable from the public
+  internet** — `DOCKER-USER` is empty and published ports bypass ufw entirely. See
+  the firewall note under "Connecting to the game servers". Fixable without
+  touching a container.
+- **`/api/server/backups` passes `backupName` to `/bin/sh` unquoted** (command
+  injection as root, and the restore deletes the world before validating the
+  archive). Being fixed; until then don't expose the MC backups page to anyone new.
+- **Nothing detects or refuses two worlds running at once**, and no container sets
+  `mem_limit`. `powerOn` evicts; three other start paths don't.
+- **Backups are stale and manual-only**: newest MC 2026-05-30, 7DTD 2026-07-23
+  (predating both the migration and the config wipe), PZ 2026-09-18 despite daily
+  play. There is no scheduling, retention, pruning or download.
+- **Open decision blocking ~8 fixes: is `docker-compose.yml` app-owned or
+  git-owned?** The UI writes it (memory, MC version, `START_MODE`) and
+  `deploy.sh`'s `git checkout -f` reverts whatever it wrote. One commit (`f0cf692`)
+  already works around this by hand. Until it's settled, don't add another writer.
+- **There is no test suite and no `error.tsx`.** Every fix is verified by hand
+  against a live server, and any render throw white-screens the whole app.
+- The old Hetzner box (`178.105.163.254`, key `~/.ssh/mc_yoshling`) is still running
+  as a rollback. Delete it once Minecraft and 7DTD have been started and joined on
+  netcup.
 - **The netcup root password was pasted into a chat transcript and should be
   rotated.**
 
