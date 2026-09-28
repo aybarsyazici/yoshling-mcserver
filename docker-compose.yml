@@ -200,6 +200,15 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - minecraft
+    # Run tini as PID 1 so orphaned children get reaped.
+    #
+    # Without it `next-server` is PID 1, and PID 1 in a container inherits orphans
+    # but only reaps them if it calls wait(). Next does not, so every `timeout 3
+    # docker stats` the two stats routes fire left a zombie behind: 2,134 of them had
+    # accumulated in the container by 2026-09-28, on a path polled every few seconds
+    # by every open tab. The endpoint is the busiest in the app, so this ends in PID
+    # exhaustion rather than plateauing.
+    init: true
     # Deliberately `unless-stopped`, unlike all three games: the dashboard is how a
     # world gets powered back on, so it has to come back after a host reboot even
     # though nothing else does.
