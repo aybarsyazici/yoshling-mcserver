@@ -66,10 +66,28 @@ ssh -i "$KEY" "$BOX" "bash -s -- $REMOTE_ARGS" <<'REMOTE'
 set -euo pipefail
 SERVICE="$1"; VERIFY="$2"; EXPECT_SHA="$3"
 
-# A seed in flight means SteamCMD is writing the workshop volume. Starting a
-# second one races it, and the loser silently updates nothing.
-if docker ps --format '{{.Image}}' | grep -q 'project-zomboid-dedicated-server'; then
-  echo "deploy: a SteamCMD mod seed is running — wait for it to finish" >&2
+# A seed in flight means SteamCMD is writing the workshop volume. Deploying now
+# recreates web, which orphans that run and lets the fresh process start a second
+# one on top of it; two SteamCMD runs race and the loser silently updates nothing.
+#
+# This cannot key on the image. `seedMods` runs the seed with the *same* image as
+# the live game container (yoshling/project-zomboid:latest, copied off
+# yoshling-pz), so the old check for 'project-zomboid-dedicated-server' matched
+# nothing and never fired once — while matching the real image name would refuse
+# every deploy for as long as Project Zomboid is up.
+#
+# Two things do tell them apart, and either is enough to refuse:
+#   * the label seedMods sets on the seed (SEED_LABEL in lib/zomboid-updates.ts);
+#   * the container command — the game container runs /server/scripts/entry.sh,
+#     the seed runs steamcmd.sh. Needs --no-trunc; docker ps truncates commands.
+# The second is kept as a backstop because bash cannot import the label from the
+# app, so a rename there would otherwise quietly restore the never-fires bug.
+SEEDS=$(docker ps --no-trunc \
+          --format '{{.Names}} {{.Label "yoshling.role"}} {{.Command}}' \
+        | grep -E 'pz-seed|steamcmd' || true)
+if [ -n "$SEEDS" ]; then
+  echo "deploy: a SteamCMD mod seed is running — wait for it to finish:" >&2
+  echo "$SEEDS" | sed 's/^/        /' >&2
   exit 1
 fi
 
