@@ -21,6 +21,17 @@ const XML_KEYS: Record<string, string> = {
   sandboxCode: "SandboxCode",
 };
 
+// Field labels as the Settings page shows them, so a message about a setting
+// that didn't land can name it the way the person reading it saw it.
+const LABELS: Record<string, string> = {
+  serverName: "Server name",
+  password: "Password",
+  maxPlayers: "Max players",
+  gameDifficulty: "Difficulty",
+  dayLength: "Day length",
+  sandboxCode: "Sandbox code",
+};
+
 const DEFAULTS = {
   serverName: "Yoshling 7DTD",
   password: "",
@@ -75,6 +86,13 @@ export async function PUT(request: NextRequest) {
 
   // Best-effort sync to the XML on disk (may not exist until first install).
   let xmlWarning: string | undefined;
+  // Keys whose property this server's config doesn't have. We store them in the
+  // DB regardless (that row is the only thing that survives a fresh install), so
+  // without reporting them the page toasts "Settings saved" for a value that
+  // changed nothing in-game. As of V3.3 b14 the live sdtdserver.xml has 69
+  // properties and neither GameDifficulty nor DayNightLength is among them —
+  // both moved into the sandbox preset, i.e. into SandboxCode.
+  const skipped: string[] = [];
   try {
     let xml = await readFile(XML_PATH, "utf-8");
     for (const [key, xmlName] of Object.entries(XML_KEYS)) {
@@ -85,12 +103,22 @@ export async function PUT(request: NextRequest) {
       );
       if (re.test(xml)) {
         xml = xml.replace(re, `$1${escapeXml(value)}$2`);
+      } else {
+        skipped.push(xmlName);
       }
     }
     await writeFile(XML_PATH, xml, "utf-8");
-  } catch {
+    if (skipped.length > 0) {
+      const named = skipped.map((x) => `${labelFor(x)} (${x})`).join(" or ");
+      xmlWarning =
+        `Saved, but the server config has no ${named} property, so ${skipped.length > 1 ? "those settings" : "that setting"} ` +
+        `had no effect in-game. Current 7DTD versions fold them into the sandbox preset — set them in Sandbox code instead.`;
+    }
+  } catch (e) {
     xmlWarning =
-      "Saved. The server config file isn't present yet — settings will apply once 7DTD finishes its first install.";
+      (e as NodeJS.ErrnoException).code === "ENOENT"
+        ? "Saved. The server config file isn't present yet — settings will apply once 7DTD finishes its first install."
+        : `Saved here, but writing the server config failed, so nothing changed on the server: ${(e as Error).message}`;
   }
 
   try {
@@ -103,7 +131,14 @@ export async function PUT(request: NextRequest) {
     });
   } catch {}
 
-  return NextResponse.json({ success: true, warning: xmlWarning });
+  // `skipped` is the honest part of "success": these keys reached the DB but not
+  // the server. The page can drop the controls for them once it reads this.
+  return NextResponse.json({ success: true, warning: xmlWarning, skipped });
+}
+
+function labelFor(xmlName: string): string {
+  const key = Object.keys(XML_KEYS).find((k) => XML_KEYS[k] === xmlName);
+  return (key && LABELS[key]) || xmlName;
 }
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {

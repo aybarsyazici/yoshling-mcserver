@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { mkdir, writeFile, rm, readdir } from "fs/promises";
+import { mkdir, writeFile, rm, readdir, readFile, stat } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
 import { verifyUploadToken } from "@/lib/upload-token";
@@ -42,6 +42,39 @@ const SAVE_MARKERS = ["main.ttw", "players.xml"];
 
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9 _.-]/g, "").replace(/\.+/g, ".").trim().slice(0, 60);
+}
+
+/**
+ * A world we must not replace or delete, with the reason to show. Both the
+ * uploader and DELETE go through this so the two can't drift: installing a world
+ * `rm -rf`s any existing one of the same name first, which is every bit as
+ * destructive as a delete (the live map, Reveo Valley, is 417 MB).
+ * Returns null when the world is fair game.
+ */
+async function protectedWorldReason(name: string): Promise<string | null> {
+  // 1) the world the server is configured to load (sdtdserver.xml GameWorld).
+  try {
+    const xml = await readFile(
+      path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml"),
+      "utf-8"
+    );
+    const cur = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i)?.[1];
+    if (cur && cur === name) {
+      return `"${name}" is the server's current world. Switch Game World to something else first.`;
+    }
+  } catch {}
+
+  // 2) a backup bundles this map, so swapping it out would leave that backup's
+  //    saves paired with different terrain.
+  try {
+    const { worldsUsedByBackups } = await import("@/app/api/7dtd/backups/route");
+    const used = await worldsUsedByBackups();
+    if (used.has(name)) {
+      return `"${name}" is included in one or more backups. Delete those backups first.`;
+    }
+  } catch {}
+
+  return null;
 }
 
 // Stock worlds ship inside the server files (Navezgane, Pregen*, …).
@@ -139,12 +172,33 @@ export async function POST(request: NextRequest) {
 
     let installedAs: string;
     let kind: "world" | "save";
+    let replacedExisting = false;
 
     if (looksWorld) {
       kind = "world";
       // World name = the folder name that held the markers, or the zip name.
       const worldName = safeName(path.basename(rootDir) === path.basename(workDir) ? file.name.replace(/\.zip$/i, "") : path.basename(rootDir));
       const dest = path.join(WORLDS_DIR, worldName);
+      // safeName keeps only [A-Za-z0-9 _.-], so a name with no ASCII
+      // alphanumerics ("世界地図") collapses to "" and "..zip" collapses to "." —
+      // and path.join then makes `dest` GeneratedWorlds *itself*, which the next
+      // two lines rm -rf and overwrite. That is every custom map on the box,
+      // including the live one. Require a real name, and re-check the path we
+      // are about to delete really is a child of GeneratedWorlds.
+      if (!/[a-zA-Z0-9]/.test(worldName) || path.dirname(dest) !== WORLDS_DIR) {
+        return json(
+          {
+            error: `Couldn't work out a world name from "${file.name}". Rename the zip (or the folder inside it) using plain letters and numbers, then upload again.`,
+          },
+          400
+        );
+      }
+      // Installing over an existing world deletes it, so refuse the same worlds
+      // DELETE refuses rather than silently taking out a map in use.
+      const blocked = await protectedWorldReason(worldName);
+      if (blocked) return json({ error: blocked }, 409);
+
+      replacedExisting = await stat(dest).then(() => true).catch(() => false);
       await mkdir(WORLDS_DIR, { recursive: true });
       await rm(dest, { recursive: true, force: true });
       await execAsync(`mv ${JSON.stringify(rootDir)} ${JSON.stringify(dest)}`);
@@ -173,9 +227,10 @@ export async function POST(request: NextRequest) {
       success: true,
       kind,
       name: installedAs,
+      replacedExisting,
       hint:
         kind === "world"
-          ? `World "${installedAs}" installed. In Settings → set Game World to "${installedAs}" and start a new game on it.`
+          ? `World "${installedAs}" installed${replacedExisting ? ", replacing the copy that was already on the box" : ""}. In Settings → set Game World to "${installedAs}" and start a new game on it.`
           : `Save "${installedAs}" installed under Saves. Set Game World / Game Name to match it, then start the server.`,
     });
   } catch (e) {
@@ -203,37 +258,15 @@ export async function DELETE(request: NextRequest) {
   const target = path.join(WORLDS_DIR, name);
   // Must be an existing custom world (only GeneratedWorlds is deletable).
   try {
-    const st = await import("fs/promises").then((m) => m.stat(target));
+    const st = await stat(target);
     if (!st.isDirectory()) throw new Error();
   } catch {
     return NextResponse.json({ error: "That custom world doesn't exist (stock worlds can't be deleted)." }, { status: 404 });
   }
 
-  // Guard 1: currently active world (from sdtdserver.xml GameWorld).
-  try {
-    const xml = await import("fs/promises").then((m) =>
-      m.readFile(path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml"), "utf-8")
-    );
-    const cur = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i)?.[1];
-    if (cur && cur === name) {
-      return NextResponse.json(
-        { error: `"${name}" is the server's current world. Switch Game World to something else first.` },
-        { status: 409 }
-      );
-    }
-  } catch {}
-
-  // Guard 2: any backup depends on this world.
-  try {
-    const { worldsUsedByBackups } = await import("@/app/api/7dtd/backups/route");
-    const used = await worldsUsedByBackups();
-    if (used.has(name)) {
-      return NextResponse.json(
-        { error: `"${name}" is included in one or more backups. Delete those backups first to remove it.` },
-        { status: 409 }
-      );
-    }
-  } catch {}
+  // Never the active world, never one a backup depends on.
+  const blocked = await protectedWorldReason(name);
+  if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
 
   try {
     await rm(target, { recursive: true, force: true });
