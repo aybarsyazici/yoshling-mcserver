@@ -55,22 +55,55 @@ export async function POST() {
     if (!xml) return NextResponse.json({ error: "Config not found" }, { status: 400 });
 
     const world = getProp(xml, "GameWorld");
+    // Step 3 rm -rf's Saves/<world>, so GameWorld has to be one plain directory
+    // name: empty collapses that path to Saves/ itself and would delete *every*
+    // world's save, and ".." would climb out of it. All settings will write
+    // either value into the XML without complaint, so check it here.
+    if (!world || world === "." || world === ".." || /[/\\]/.test(world)) {
+      return NextResponse.json(
+        {
+          error: `sdtdserver.xml has no usable GameWorld (currently "${world}"), so there's nothing safe to reset. Set Game World in All settings first.`,
+        },
+        { status: 400 }
+      );
+    }
     const oldName = getProp(xml, "GameName");
     const newName = bumpName(oldName);
 
     // 1) Back up the current save first (safety), if it exists.
     const savePath = path.join(SAVES_DIR, "Saves", world);
-    const backupDir = "/app/data/backups-7dtd";
+    // Deliberately NOT the backups dir: this tar has no manifest.json and its
+    // members are rooted at "<world>/", but the backups page lists every
+    // *.tar.gz in that folder as a restorable row — and restoring this one wipes
+    // Saves/ and then finds no Saves/ inside the tar to put back, losing every
+    // save. Keep it out of that listing; it's a recovery artefact, not a backup.
+    const backupDir = "/app/data/backups-7dtd/presreset";
     await execAsync(`mkdir -p ${backupDir}`);
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    try {
-      await readdir(savePath);
-      await execAsync(
-        `tar -czf ${JSON.stringify(path.join(backupDir, `presreset-${world}-${stamp}.tar.gz`))} -C ${JSON.stringify(path.join(SAVES_DIR, "Saves"))} ${JSON.stringify(world)}`,
-        { timeout: 120000 }
-      );
-    } catch {
-      // no existing save to back up — fine
+    // Probe and archive separately. They used to share one catch commented "no
+    // existing save to back up — fine", so a *failed* tar was indistinguishable
+    // from "there was nothing to save": the wipe below went ahead anyway and the
+    // response still claimed a backup had been made. The server is still running
+    // at this point, so tar can fail for real reasons — GNU tar exits 1 on "file
+    // changed as we read it" when an autosave lands mid-archive.
+    const hadSave = await readdir(savePath).then(() => true).catch(() => false);
+    if (hadSave) {
+      const archive = path.join(backupDir, `presreset-${world}-${stamp}.tar.gz`);
+      try {
+        await execAsync(
+          `tar -czf ${JSON.stringify(archive)} -C ${JSON.stringify(path.join(SAVES_DIR, "Saves"))} ${JSON.stringify(world)}`,
+          { timeout: 120000 }
+        );
+      } catch (e) {
+        // Drop the partial archive so nothing later mistakes it for a backup.
+        await rm(archive, { force: true }).catch(() => {});
+        return NextResponse.json(
+          {
+            error: `The safety backup failed, so the reset was cancelled and the save is untouched: ${(e as Error).message.trim()}. The server may have been mid-autosave — try again in a moment.`,
+          },
+          { status: 500 }
+        );
+      }
     }
 
     // 2) Stop the server (graceful), keeping the world map in GeneratedWorlds.
@@ -103,7 +136,9 @@ export async function POST() {
       success: true,
       world,
       newGameName: newName,
-      message: `World "${world}" reset to a fresh save (${newName}). The map was kept; a backup of the old save was saved. The server is restarting.`,
+      message: `World "${world}" reset to a fresh save (${newName}). The map was kept${
+        hadSave ? "; the old save was backed up first" : " (there was no existing save to back up)"
+      }. The server is restarting.`,
     });
   } catch (e) {
     if (e instanceof ControlBusyError) return NextResponse.json({ error: e.message, busy: e.lock }, { status: 409 });
