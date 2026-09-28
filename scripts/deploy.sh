@@ -93,6 +93,28 @@ fi
 
 cd /opt/yoshling
 git fetch -q /root/y.bundle main
+
+# docker-compose.yml is GIT-OWNED, and the `checkout -f` below proves it by
+# discarding anything the app wrote. The app *does* write it: /api/games/memory
+# (heap) and /api/settings (Minecraft version/loader) both patch a service block,
+# so a setting applied through the dashboard silently reverts on the next deploy.
+# That has already cost one commit working around it by hand (f0cf692, "Commit the
+# 12 GB PZ heap so a deploy stops reverting it").
+#
+# Until those features write to git instead, the least this can do is refuse to
+# revert silently. Say exactly what is about to be lost and let the operator decide.
+if ! git diff --quiet FETCH_HEAD -- docker-compose.yml; then
+  echo "deploy: docker-compose.yml on the box differs from the commit being shipped." >&2
+  echo "        Something changed it here -- most likely the memory or Minecraft" >&2
+  echo "        version control in the dashboard. Deploying DISCARDS these:" >&2
+  git --no-pager diff FETCH_HEAD -- docker-compose.yml | sed 's/^/        /' >&2
+  if [ "${FORCE_COMPOSE:-0}" != "1" ]; then
+    echo "        Commit them, or re-run with FORCE_COMPOSE=1 to discard them." >&2
+    exit 1
+  fi
+  echo "        FORCE_COMPOSE=1 set -- discarding." >&2
+fi
+
 git checkout -f -q -B main FETCH_HEAD
 # A plain reset leaves files that were deleted upstream sitting on disk.
 git clean -fdq -e .env -e '*.db'

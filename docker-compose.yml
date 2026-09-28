@@ -7,14 +7,33 @@ services:
     environment:
       EULA: "TRUE"
       TYPE: "FABRIC"
-      VERSION: "1.21.4"
+      # 26.1.2, not 1.21.4. These disagreed for weeks: ServerConfig.mcVersion said
+      # 26.1.2, the mc-data volume holds fabric-server-mc.26.1.2-loader.0.19.3 next
+      # to the 217 MB world, and only this file said 1.21.4. Fabric Loader aborts on
+      # 26.1.2-dependent jars before it opens level.dat, so the symptom was never
+      # world corruption -- it was a boot failure the status probe rendered as a
+      # permanent "Starting...".
+      VERSION: "26.1.2"
       MEMORY: "4G"
       RCON_PASSWORD: "${RCON_PASSWORD}"
       ENABLE_RCON: "true"
       RCON_PORT: 25575
     volumes:
       - mc-data:/data
-    restart: unless-stopped
+    # "no", like the other two worlds. `unless-stopped` turned a failed boot into an
+    # unbounded crash loop, and on a host reboot it would start Minecraft regardless
+    # of which world was meant to be running -- and only one fits on the box.
+    restart: "no"
+    # Docker's default is 10s, which is not enough to save a 217 MB world; PZ only
+    # got a grace period after a save was SIGKILLed halfway.
+    stop_grace_period: 120s
+    # The heap is 4G; the ceiling is the containment nothing had. Without a limit one
+    # world's JVM can push the others (and the dashboard) into swap, which is how the
+    # box ended up 2 GB into swap with two worlds co-resident.
+    mem_limit: 5g
+    logging:
+      driver: "json-file"
+      options: { max-size: "20m", max-file: "3" }
     tty: true
     stdin_open: true
 
@@ -49,6 +68,15 @@ services:
     # box never tries to run both worlds at once. Once started it stays up until
     # explicitly stopped (and a manual `docker stop` survives reboots).
     restart: "no"
+    # Docker's default 10s is optimistic for a 416 MiB / 59k-chunk world. The driver
+    # sends `saveworld` over telnet first, but the shutdown itself still needs room.
+    stop_grace_period: 120s
+    # 7DTD is a Unity native server with no heap setting, so this ceiling is the only
+    # thing bounding it at all.
+    mem_limit: 8g
+    logging:
+      driver: "json-file"
+      options: { max-size: "20m", max-file: "3" }
     tty: true
     stdin_open: true
 
@@ -105,6 +133,17 @@ services:
     # Same as 7DTD: never auto-start, the web UI powers it on deliberately so the
     # box never tries to run two worlds at once.
     restart: "no"
+    # MAX_MEMORY is 12288m, so 13g leaves the JVM its non-heap overhead and still
+    # stops one world from pushing the dashboard into swap.
+    mem_limit: 13g
+    # PZ is the reason this exists: its container log reached 123 MB of the box's
+    # 122 MB total, growing ~7.8 MB/day, and the only way to reset it was recreating
+    # the container. It also made the boot probe's `docker logs --since` cost 2.7s
+    # while the status endpoint is polled every few seconds -- slowest exactly during
+    # a boot, which is when it is watched.
+    logging:
+      driver: "json-file"
+      options: { max-size: "20m", max-file: "3" }
     tty: true
     stdin_open: true
 
@@ -161,7 +200,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - minecraft
+    # Deliberately `unless-stopped`, unlike all three games: the dashboard is how a
+    # world gets powered back on, so it has to come back after a host reboot even
+    # though nothing else does.
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options: { max-size: "20m", max-file: "3" }
 
 volumes:
   mc-data:
