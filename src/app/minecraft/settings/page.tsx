@@ -125,8 +125,20 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(properties),
       });
-      if (res.ok) toast.success("server.properties saved. Restart server to apply.");
-      else toast.error("Failed to save");
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to save");
+        return;
+      }
+      // The API only updates keys the file already has, and says which it didn't
+      // recognise. Surfacing that is the difference between "saved" and "saved,
+      // except the setting you came here for".
+      if (Array.isArray(data.ignored) && data.ignored.length > 0) {
+        toast.warning(`Not in server.properties, so not written: ${data.ignored.join(", ")}`);
+      }
+      toast.success("server.properties saved. Restart server to apply.");
+    } catch {
+      toast.error("Failed to save");
     } finally {
       setPropsSaving(false);
     }
@@ -140,8 +152,13 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(ops),
       });
+      // The route validates every entry and names the one it rejected, so show
+      // its message — "Failed to save" alone leaves no way to tell what was wrong.
+      const data = await res.json();
       if (res.ok) toast.success("ops.json saved. Restart server to apply.");
-      else toast.error("Failed to save");
+      else toast.error(data.error || "Failed to save");
+    } catch {
+      toast.error("Failed to save");
     } finally {
       setOpsSaving(false);
     }
@@ -155,8 +172,11 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(whitelist),
       });
+      const data = await res.json();
       if (res.ok) toast.success("whitelist.json saved. Restart server to apply.");
-      else toast.error("Failed to save");
+      else toast.error(data.error || "Failed to save");
+    } catch {
+      toast.error("Failed to save");
     } finally {
       setWlSaving(false);
     }
@@ -228,6 +248,12 @@ export default function SettingsPage() {
             </p>
           ) : (
             <>
+              {/* Say why the list is short, so a missing key doesn't read as a bug. */}
+              <p className="text-xs text-muted-foreground">
+                RCON, the server port and the level name aren&apos;t listed: the deployment owns
+                them, and changing them here would cut the dashboard off from the server or leave
+                backups pointing at a folder the server no longer writes.
+              </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {Object.entries(properties).map(([key, value]) => {
                   const type = inferType(key, value);
