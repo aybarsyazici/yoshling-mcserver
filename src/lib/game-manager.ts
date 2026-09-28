@@ -249,6 +249,32 @@ async function lastLogLine(container: string, pattern: string): Promise<string |
   }
 }
 
+/** Widest tail the console pane may ask for, and the default when it asks for nonsense. */
+const MAX_LOG_LINES = 1000;
+const DEFAULT_LOG_LINES = 200;
+
+/**
+ * Tail a game container's log for the console pane.
+ *
+ * `lines` comes off a query string, so it is clamped and NaN-guarded here rather
+ * than trusted: `parseInt("abc")` is NaN, `docker logs --tail NaN` dumps the
+ * ENTIRE log — 123 MB for Project Zomboid, measured 2026-09-28 — which overran
+ * exec's buffer, whereupon the console route handed the buffer error back as if
+ * the server had printed it. One place for the clamp and the buffer so the three
+ * console routes cannot drift apart again (only PZ's had a `maxBuffer`).
+ * 1000 lines of PZ log measures ~167 KB, so 4 MB leaves a wide margin.
+ */
+export async function tailContainerLog(game: GameId, lines: number): Promise<string> {
+  const tail = Number.isFinite(lines)
+    ? Math.min(Math.max(Math.trunc(lines), 1), MAX_LOG_LINES)
+    : DEFAULT_LOG_LINES;
+  const { stdout } = await execAsync(
+    `docker logs --tail ${tail} ${RUNTIME[game].container} 2>&1`,
+    { maxBuffer: 4 * 1024 * 1024 }
+  );
+  return stdout;
+}
+
 // ── Minecraft driver ────────────────────────────────────────────────────────
 
 /**
@@ -702,6 +728,12 @@ export async function powerOff(game: GameId): Promise<void> {
  * server means overwriting files the JVM has open and partly mmap'd, so the
  * download has to happen with the world down. A world that was already stopped
  * stays stopped, and `restarted` says which it was.
+ *
+ * The restart is in a `finally` because `seedMods` throws on a partial SteamCMD
+ * download ("updated 0 of 1 mods"). Without it the start was simply skipped and
+ * Project Zomboid stayed down for good — `restart: "no"` means nothing revives
+ * it — so a failed mod update took the server offline until someone noticed. The
+ * error still propagates; the world is just not collateral damage.
  */
 export async function withGameStopped(
   game: GameId,
@@ -714,11 +746,14 @@ export async function withGameStopped(
       setControlStage("Saving and stopping the server");
       await DRIVERS[game].gracefulStop();
     }
-    setControlStage("Downloading updated mods");
-    await whileStopped();
-    if (wasRunning) {
-      setControlStage("Starting the server");
-      await DRIVERS[game].start();
+    try {
+      setControlStage("Downloading updated mods");
+      await whileStopped();
+    } finally {
+      if (wasRunning) {
+        setControlStage("Starting the server");
+        await DRIVERS[game].start();
+      }
     }
     return { restarted: wasRunning };
   });

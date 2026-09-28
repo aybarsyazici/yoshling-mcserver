@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
-import { exec } from "child_process";
-import { promisify } from "util";
-import { RUNTIME } from "@/lib/game-manager";
-
-const execAsync = promisify(exec);
+import { tailContainerLog } from "@/lib/game-manager";
 
 export async function GET(request: NextRequest) {
   const gate = await gameGate("zomboid");
@@ -13,14 +9,12 @@ export async function GET(request: NextRequest) {
   const lines = parseInt(new URL(request.url).searchParams.get("lines") || "200");
 
   try {
-    const { stdout } = await execAsync(
-      `docker logs --tail ${lines} ${RUNTIME.zomboid.container} 2>&1`,
-      { maxBuffer: 4 * 1024 * 1024 }
-    );
-    return NextResponse.json({ logs: stdout });
+    return NextResponse.json({ logs: await tailContainerLog("zomboid", lines) });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Failed to get logs";
-    return NextResponse.json({ logs: msg });
+    // Not 200 with the message as `logs`: docker's own error text then rendered in
+    // the console pane, in the game's accent colour, as if the server had said it.
+    const msg = e instanceof Error ? e.message : "unknown error";
+    return NextResponse.json({ error: `Failed to read the log: ${msg}` }, { status: 500 });
   }
 }
 
