@@ -119,8 +119,14 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
     timeout**, so `publishedVersions()` carries an explicit
     `AbortSignal.timeout(15_000)`. RCON and the SteamCMD `execAsync` already had
     bounds; the Steam call did not, and it is the one that hung.
-  - **`applyingSince` / `applyingTitles` are written BEFORE the stop begins**, and
-    cleared on every exit path including failure. Without them the state machine
+  - **`applyingSince` / `applyingTitles` are written BEFORE the stop begins.** This
+    said they were "cleared on every exit path including failure" and that was wrong:
+    the `none` and `seeded` paths omitted `applyingSince` from `next`, and
+    `{...state, ...next}` re-persisted whatever was there — so after any crash
+    mid-apply the card read "Updating now… Started 3 days ago" **permanently**, with
+    `disabled={checking || !!applying}` on the one control that could have cleared it.
+    Fixed 2026-09-28; `readWatchState` also discards a marker that predates the current
+    process, since an apply cannot survive a restart. Without them the state machine
     went pending → [silence] → applied, so the mods card still read "restarts once
     everyone has logged off" while the server was already being restarted. The
     watcher also logs when an apply *starts*, not only when it finishes — the
@@ -528,3 +534,48 @@ plausible enough to write down twice.
      (the auth reply is read as the first command's answer), and I briefly concluded
      from it that a player was still connected — then said so. Send the command
      twice and read the second reply, or use the app's own client.
+
+### `stop_grace_period: 300s` is not protecting a slow save (found 2026-09-28)
+
+**What we believed:** the entrypoint saves the world on SIGTERM, and a 76-mod save
+overran 120s once, so Docker SIGKILLed it mid-save — hence 300s.
+
+**What is actually true:** the save is fast and the process never exits. Measured
+twice, stopping with `docker stop -t 300` after an RCON `save`:
+
+```
+LOG  : General   f:0 st:...> Saving finish
+LOG  : General   f:0 st:...> Saving took 433.556991 ms
+...
+real  5m1.012s        ExitCode=137   OOMKilled=false
+```
+
+Minecraft, for contrast, stops in **0.719s with exit 0**. So PZ saves promptly and then
+sits until the timeout expires and Docker kills it. Two consequences:
+
+- **Every PZ stop costs the full five minutes and ends in SIGKILL.** That is most of
+  why a manual Restart reads as hung, and raising the timeout from 120s to 300s made
+  every stop slower without making a single one cleaner.
+- **The old explanation was measuring the wrong thing.** A save that takes 433 ms was
+  never the reason for the SIGKILL at 120s; the failure to exit was, and it would have
+  SIGKILLed at any timeout.
+
+**Not fixed, deliberately.** Lowering the timeout on the strength of the 433 ms alone
+would be repeating the original mistake in the other direction — the save completing is
+not the same as the process being safe to kill. The next step is finding out *why* it
+does not exit (the entrypoint's `wait`, or the JVM not being signalled), not tuning the
+number.
+
+### The update watcher could restart the server forever (fixed 2026-09-28)
+
+`withGameStopped` gained a `try/finally` so a failed mod download no longer leaves the
+world stopped. Correct on its own, and combined with an unbounded retry it was a
+restart flap: `seedMods` throws for **permanent** reasons as readily as transient ones —
+a Workshop item that was hidden or deleted can never download — so one dead mod would
+produce graceful stop → seed → fail → boot 89 mods → repeat, every poll interval,
+forever, on the world people play daily.
+
+Fixed with `applyFailedAt` and a one-hour cooldown. A `ControlBusyError` does **not**
+start the cooldown, because nothing was attempted; a success clears it. The mod list is
+unchanged after a failure, so nothing about an immediate retry would differ — which is
+why it is a flat cooldown rather than a backoff.

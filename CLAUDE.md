@@ -40,7 +40,7 @@ then they stop being true.** Keep this one short enough to re-read.
 | **Any pre-existing bug, or "is this feature actually correct?"** | **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)** — 185 reviewed findings across every route. Check it before assuming a defect is new, and check its §5 before trusting any finding |
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
 | A broken/misbehaving PZ **mod** | [`docs/PZ-MOD-BACKLOG.md`](docs/PZ-MOD-BACKLOG.md) — open defect list; check its harmless list before investigating |
-| 7 Days to Die | the "7 Days to Die specifics" section below (not yet split out) |
+| **7 Days to Die** — telnet, the config wipe, builds, worlds, resets | **[`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md)** |
 | Minecraft | this file; MC has no separate doc |
 | Moving hosts | [`MIGRATION.md`](MIGRATION.md) |
 
@@ -139,6 +139,17 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     names Restart as the way out). **Restart is gated on `containerRunning`, not on
     `isOnline`** — that inversion is the whole fix, because the useful action and
     the honest label were both missing at the same time.
+  - **`withGameStopped(game, action, fn, {stage, restartOnFailure})`** is the wrapper
+    for "stop the world, do something to its files, start it again". It captures
+    `wasRunning` **before** stopping and gates both halves on it, so it can never
+    start a world that was already stopped — several audit findings claimed otherwise
+    and were refuted; preserve that property. `restartOnFailure` matters and the two
+    callers want opposite things: a **mod update** passes `true`, because `seedMods`
+    throws on a partial download and leaving the world down for one unfetchable mod is
+    worse than booting the previous version (`restart: "no"` means nothing revives
+    it). A **backup restore** passes `false`, because a half-replaced save booted is
+    worse than a stopped one — the game rewrites the mess on its first autosave and
+    takes the archive's contents with it. Getting this backwards is silent.
   - **`restartGame()` is stop-then-start, not `driver.restart()`** — deliberately.
     Every driver's `restart()` is one opaque "save, then `docker restart`" call, so
     it could not say which half it was in, and it set no stage at all. For PZ the
@@ -228,12 +239,25 @@ deliberate omission.)
 after the move to netcup. The cap is derived at request time:
 `maxGameGb()` = `/proc/meminfo` MemTotal − `HOST_RESERVE_GB` (2.5) ≈ **13 GB** on
 the 16 GB box. Two things follow. That ceiling **assumes the world is alone on the
-box** — it does not subtract whatever else is running, and nothing sets a container
-`mem_limit`, so over-commit is possible and unbounded. And PZ's `RUNTIME` entry
+box** — it does not subtract whatever else is running. And PZ's `RUNTIME` entry
 patches only `MAX_MEMORY`, not `MIN_MEMORY`, so choosing a heap below the compose
 `MIN_MEMORY` writes `-Xmx` under a larger `-Xms` and the JVM refuses to start.
 
-`/api/settings` no longer touches memory at all; it only patches `TYPE`/`VERSION`.
+**Every container now has a `mem_limit`** (MC 6g, 7DTD 10g, PZ 14g) — previously none
+did, and it was the only thing that would have contained the over-commit that put this
+box 2 GB into swap. **Size one against `-Xmx` plus 1–2 GB of non-heap, and judge it
+from `memory.stat`, not `docker stats`** — the latter's `MemUsage` includes page cache,
+so a healthy PZ reads as 98% of its limit. Worked example, including why PZ's first
+limit was wrong: [`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
+
+`/api/settings` no longer touches memory at all; it only patches `TYPE`/`VERSION` —
+and it does that through **`applyServiceEnv`** in `game-manager`, which is now the one
+sanctioned way to change a service's env: it patches the scoped compose block, saves +
+stops if the world was running, runs `create --force-recreate` (never `up`, so a
+stopped world stays stopped rather than being booted into co-residency), starts it
+again only if it was running, and holds the control lock throughout. `setMemory` had
+all of that right and `/api/settings` had open-coded a bare `docker compose up -d`
+with none of it.
 
 ### Roles & per-world access
 
@@ -420,102 +444,20 @@ UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 
 ### 7 Days to Die specifics
 
-- First boot runs a one-time **SteamCMD install (~17 GB, ~10-20 min)**. The
-  `sevendtd` service is `restart: "no"` so it never auto-starts on reboot — the
-  web UI powers it on deliberately (and stops MC first).
-- **A FRESH 7DTD INSTALL WIPES `sdtdserver.xml` BACK TO DEFAULTS — and a host
-  migration counts as fresh.** Hit on 2026-09-26, the first time 7DTD started on
-  netcup: SteamCMD re-installed 17.7 GB and regenerated the config, so
-  `GameWorld` became `Navezgane`, `GameName` became `MyGame`, `ServerName` became
-  "My Game Host", `Region` reverted to `NorthAmericaEast`, `SandboxCode` became a
-  default, and `TelnetPassword` was blank. **The server booted a brand-new empty
-  world and the dashboard went blind**, minutes before people tried to join.
-  - **Recovery source: the app's own `SevenDaysConfig` DB row survives**, because
-    it lives in `web-data`, not in the game volume. It held the real
-    `serverName` / `password` / `maxPlayers` / `gameDifficulty` / `dayLength` /
-    `sandboxCode`. Read it with the libSQL snippet in "Applying DB migrations".
-  - **Which save is live is decided by two XML values**, and getting them wrong
-    silently starts yet another empty world rather than erroring:
-    `GameWorld=Reveo Valley` + `GameName=Fresh2`. Identify the right one from disk
-    rather than guessing — count `<player ` entries in each
-    `Saves/<world>/<name>/players.xml` (Fresh2 had 2, and its world loads at
-    416 MiB / 59,651 chunks versus 193 MiB for the empty Navezgane one).
-  - `GameDifficulty` is **not** a property in the current XML — don't try to set it.
-  - Junk left behind from that incident: `Saves/Navezgane/MyGame` (18 MB, no
-    players). Safe to delete.
-  - After any fresh install, restore the XML and restart **before** anyone joins;
-    doing it afterwards costs them a kick.
-- **7DTD telnet password gotcha:** the app controls 7DTD over telnet (8081), but
-  7DTD only binds telnet to the network interface (reachable from the web
-  container) if a `TelnetPassword` is set in
-  `serverfiles/sdtdserver.xml`. The `TELNET_PASSWORD` **env var does NOT set
-  it** — you must edit the XML and restart the container. **The telnet password
-  had to be set in `sdtdserver.xml` (not the env var), and it is set to match
-  `SDTD_TELNET_PASSWORD` in the app's `.env`.** If you change one, change both.
-  (Path on the box:
-  `/var/lib/docker/volumes/yoshling_sdtd-server/_data/sdtdserver.xml`.)
-- **7DTD settings:** the Settings page has a curated "Quick settings" card
-  (name/password/players/difficulty/day length/RAM/**Sandbox code**) plus an
-  **"All settings"** expander backed by `/api/7dtd/config/all`, which reads *every*
-  `<property>` in `sdtdserver.xml` (comment → help text) and writes back changed
-  ones. Telnet/admin keys are locked out of that editor. All XML edits need a 7DTD
-  restart to apply.
-- **Sandbox code** (`SevenDaysConfig.sandboxCode` → `SandboxCode` XML property) is
-  the game's encoded difficulty/loot/XP preset from *New Game → Sandbox Options →
-  Copy Code*. It's the highest-impact setting, so it's surfaced in Quick settings
-  (not just All settings). The format is proprietary/opaque — the app just stores
-  and writes the pasted string.
-- **Server-browser visibility:** `ServerVisibility=2` (public) + `Region` must
-  match where players filter (box is in Germany → set `Region=Europe`, not the
-  default `NorthAmericaEast`). A fresh/empty server can still take 15-30 min to
-  appear and is best found by searching its exact `ServerName`.
-- **Game version / Steam branch:** set by the `VERSION` env on the `sevendtd`
-  service — `stable` (Default Public) or `latest_experimental`. **Currently
-  `latest_experimental`, installed build V 3.3.0 (b14)** as of 2026-09-26 — the
-  fresh netcup install pulled whatever was current, up from V3.1.0 b11 on the old
-  box. Anyone whose client is older will hang at "Starting game" and must let Steam
-  update first. Switching branches needs a one-time update run: recreate the
-  container with `START_MODE=3` (update+start) so the ~17GB files re-download, then
-  it goes back to `START_MODE=1` normal start.
-  IMPORTANT: recreate with **`docker compose up -d sevendtd`** (NOT `docker
-  compose run`, which omits the `sevendtd` network alias and breaks the web
-  app's telnet-by-name). Branch switches can break existing saves — back up
-  first.
-- **CLIENT↔SERVER BUILD MISMATCH = the #1 "stuck at Starting game" cause.**
-  `latest_experimental` gets frequent Steam patches; players' clients auto-update
-  but the **server only re-downloads on `START_MODE=3`**. If the server build ≠
-  the client build, join fails with a server-side `NullReferenceException` in
-  `ItemValue.SetMetadata`/`PlayerDataFile.ReadNetwork` (reading the client's
-  uploaded character) — client hangs at "Starting game". It is NOT a corrupt
-  save/world/profile (we chased all those). **Fix = update the server to match.**
-- **In-UI server maintenance** (7DTD Settings → "Server maintenance" card):
-  - `/api/7dtd/update` (GET compares installed `appmanifest_294420.acf` buildid
-    vs the branch's latest via `api.steamcmd.net`; POST recreates the container
-    via `docker run` with `START_MODE=3` + the `sevendtd` alias, so the web
-    container can update without compose). Surfaces build + "update available".
-  - `/api/7dtd/reset` (GET previews; POST = guarded reset): backs up the save,
-    stops the server, **wipes `Saves/<world>` but keeps the map** in
-    `GeneratedWorlds`, bumps `GameName` (Fresh2→Fresh3) so no client has a stale
-    cached character, then restarts. This is the sanctioned "start from scratch".
-- **World upload:** `/api/7dtd/world` (ADMIN) accepts a `.zip`, auto-detects
-  world-vs-save from marker files (`dtm.raw`/`biomes.png`/`prefabs.xml` → world →
-  `GeneratedWorlds/<name>`; `main.ttw`/`players.xml` → save → `Saves/`), extracts
-  with the container's `unzip`. UI is the uploader card in 7DTD Settings. To play
-  an uploaded world: set `GameWorld` to its name in All settings + restart.
-  Large worlds exceed **Cloudflare's 100MB request cap** (→ 413), so the uploader
-  routes the file to the **direct (non-Cloudflare) host** `direct.yoshling.xyz`
-  using a short-lived HMAC token from `/api/7dtd/world/token` (the session cookie
-  isn't sent cross-origin). See the TLS section for the direct-host cert setup.
-  `GameWorld` in All settings is a **dynamic dropdown** (stock `Data/Worlds` +
-  uploaded `GeneratedWorlds`, fed by `/api/7dtd/world` `allWorlds`).
-- **World delete:** `DELETE /api/7dtd/world?name=` (ADMIN) removes a custom world,
-  but **refuses if it's the active `GameWorld` or referenced by any backup**
-  (trash button on the uploader's world chips).
-- **7DTD backups are self-contained:** each bundles `Saves/` + the custom world
-  map (`GeneratedWorlds/<world>`) + `sdtdserver.xml` + a `manifest.json` (records
-  the world), so one-click restore rebuilds saves, map, and settings together.
-  (MC backups remain just the `world/` folder.) Note: tar stores members as
-  `./name`, so manifest reads try `./manifest.json` first.
+> **Read [`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md) first for anything 7DTD.**
+> It was 99 lines in this file that every Minecraft and Project Zomboid session paid
+> for. The three traps worth carrying without opening it:
+>
+> - **Control is telnet on 8081, and the `TELNET_PASSWORD` env var does not enable it**
+>   — only a `TelnetPassword` in `sdtdserver.xml` does, and it must match
+>   `SDTD_TELNET_PASSWORD` in `.env`.
+> - **A fresh SteamCMD install wipes `sdtdserver.xml` to defaults, and a host
+>   migration counts as fresh.** It boots a brand-new empty world and the dashboard
+>   goes blind. The app's `SevenDaysConfig` DB row survives and is the recovery source;
+>   the live save is `GameWorld=Reveo Valley` + `GameName=Fresh2`.
+> - **Client↔server build mismatch is the #1 "stuck at Starting game" cause.** The
+>   server only re-downloads on `START_MODE=3`. It is not a corrupt save — we chased
+>   that.
 
 ### Project Zomboid specifics
 
@@ -542,9 +484,11 @@ The bare minimum for shared code that has to know PZ exists:
   mount at `/zomboid-workshop`.
 - **Control is RCON on 27015**, unpublished — the web container reaches it as
   `zomboid:27015`. `PZ_RCON_PASSWORD` must match the game's `RCONPASSWORD`.
-- **`stop_grace_period: 300s`**, and the driver stops with `-t 300`. The entrypoint
-  saves the world on SIGTERM and a 76-mod save overran 120s once, so Docker
-  SIGKILLed it mid-save.
+- **`stop_grace_period: 300s`**, and the driver stops with `-t 300` — but **every PZ
+  stop takes the full five minutes and ends in SIGKILL**, which is why a restart feels
+  hung. The save itself takes 433 ms; the process just never exits. Measured, and not
+  for the reason this file gave for months — see
+  [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md) before changing the timeout.
 - The web app also runs a **Workshop update watcher** (`src/lib/zomboid-updates.ts`,
   a 15s interval in `src/instrumentation.ts` that does a full check at most every
   5 min) which can restart the server by itself when it is empty. If PZ restarts
@@ -660,29 +604,49 @@ card's configured-vs-live comparison does.
 
 Outstanding across the project:
 
-- **Ports 3000 (dashboard) and 8081 (7DTD telnet) are reachable from the public
-  internet** — `DOCKER-USER` is empty and published ports bypass ufw entirely. See
-  the firewall note under "Connecting to the game servers". Fixable without
-  touching a container.
-- **`/api/server/backups` passes `backupName` to `/bin/sh` unquoted** (command
-  injection as root, and the restore deletes the world before validating the
-  archive). Being fixed; until then don't expose the MC backups page to anyone new.
-- **Nothing detects or refuses two worlds running at once**, and no container sets
-  `mem_limit`. `powerOn` evicts; three other start paths don't.
-- **Backups are stale and manual-only**: newest MC 2026-05-30, 7DTD 2026-07-23
-  (predating both the migration and the config wipe), PZ 2026-09-18 despite daily
-  play. There is no scheduling, retention, pruning or download.
-- **Open decision blocking ~8 fixes: is `docker-compose.yml` app-owned or
-  git-owned?** The UI writes it (memory, MC version, `START_MODE`) and
-  `deploy.sh`'s `git checkout -f` reverts whatever it wrote. One commit (`f0cf692`)
-  already works around this by hand. Until it's settled, don't add another writer.
-- **There is no test suite and no `error.tsx`.** Every fix is verified by hand
-  against a live server, and any render throw white-screens the whole app.
-- The old Hetzner box (`178.105.163.254`, key `~/.ssh/mc_yoshling`) is still running
-  as a rollback. Delete it once Minecraft and 7DTD have been started and joined on
-  netcup.
-- **The netcup root password was pasted into a chat transcript and should be
-  rotated.**
+**Fixed and deployed 2026-09-28** (kept here only so nobody re-reports them): the MC
+backup shell injection; the public exposure of ports 3000/8080/8081; `install-modpack`
+clobbering compose; restores that never stopped the server; the missing `mem_limit`s
+and log rotation; the Minecraft version mismatch (**Minecraft now boots — verified,
+`Done (1.661s)!`**); `/api/settings` starting a stopped world outside the lock; the
+file-browser GETs exposing `rcon.password`; and the zombie-process leak. Details and
+the per-finding corrections are in
+[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
+
+Still open:
+
+- **Nothing detects or refuses two worlds running at once.** `powerOn` evicts; the
+  other start paths now hold the lock but still don't evict, and no code path *reports*
+  co-residency. The `mem_limit`s bound the damage; they don't prevent it. (The
+  2026-09-26 overlap was caused by a hand-run `docker start`, not by app code — six
+  findings blaming `restartGame`/`withGameStopped` were refuted.)
+- **Backups are still manual-only** — no scheduling, retention, pruning, checksum or
+  download — and `create` still snapshots a live world, so one taken while people play
+  can be torn. An out-of-band safety set from before the fixes is on the box at
+  `/root/pre-fix-backup-2026-09-28/` (all four archives verified with `tar -tzf`).
+- **PZ never exits on SIGTERM**, so every stop takes the full 300s and ends in SIGKILL
+  — see the Project Zomboid section. Five minutes of every restart is pure waiting.
+- **`docker-compose.yml` is git-owned in practice** (the box's copy was byte-identical
+  to git), but the app still writes it and `deploy.sh`'s `git checkout -f` discards
+  that. `deploy.sh` now **refuses and prints the diff** instead of reverting silently
+  (`FORCE_COMPOSE=1` overrides). The real fix — have those features write to git, or
+  drop compose from the checkout — is still open, so don't add another writer.
+- **There is no test suite and no `error.tsx`.** Every fix is verified by hand against a
+  live server, and any render throw white-screens the whole app.
+- **The 7DTD Difficulty and Day length quick settings still render** for XML properties
+  that do not exist. The API now reports them as `ignored`; the controls should be
+  deleted from `src/app/7dtd/settings/page.tsx`.
+- **Ops/whitelist entries are written with `uuid: ""`**, and Minecraft matches by UUID,
+  so that feature may never have worked. Unverified.
+- **224 legacy `ModpackMod` rows** have no download source. The apply now refuses
+  rather than wiping your mods for nothing, but three packs (COBBLEVERSE, Fabulously
+  Optimized, Hoplite) need re-importing to be usable.
+- The old Hetzner box (`178.105.163.254`, key `~/.ssh/mc_yoshling`) is still running as
+  a rollback. **Minecraft has now booted on netcup**; 7DTD has run but still has no
+  observed in-game join.
+- **Two secrets have been pasted into chat transcripts and should be rotated: the
+  netcup root password, and the 7DTD `TelnetPassword`** (which must be changed in both
+  `sdtdserver.xml` and `SDTD_TELNET_PASSWORD` in `.env`, or telnet control breaks).
 
 > **Keep this file current** — see "Documentation rules" at the top. Update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
