@@ -103,11 +103,16 @@ git fetch -q /root/y.bundle main
 #
 # Until those features write to git instead, the least this can do is refuse to
 # revert silently. Say exactly what is about to be lost and let the operator decide.
-if ! git diff --quiet FETCH_HEAD -- docker-compose.yml; then
-  echo "deploy: docker-compose.yml on the box differs from the commit being shipped." >&2
-  echo "        Something changed it here -- most likely the memory or Minecraft" >&2
-  echo "        version control in the dashboard. Deploying DISCARDS these:" >&2
-  git --no-pager diff FETCH_HEAD -- docker-compose.yml | sed 's/^/        /' >&2
+#
+# Compare the working tree against the box's CURRENT HEAD, not against FETCH_HEAD.
+# Only the former isolates "something on this box edited the file"; diffing against
+# the incoming commit also flags every legitimate compose change being shipped, which
+# would block every deploy that touches it.
+if ! git diff --quiet HEAD -- docker-compose.yml; then
+  echo "deploy: docker-compose.yml on the box has local edits." >&2
+  echo "        Most likely the memory or Minecraft version control in the" >&2
+  echo "        dashboard wrote it. Deploying DISCARDS these:" >&2
+  git --no-pager diff HEAD -- docker-compose.yml | sed 's/^/        /' >&2
   if [ "${FORCE_COMPOSE:-0}" != "1" ]; then
     echo "        Commit them, or re-run with FORCE_COMPOSE=1 to discard them." >&2
     exit 1
