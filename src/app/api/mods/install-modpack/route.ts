@@ -3,58 +3,12 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
-import { recreateService } from "@/lib/game-manager";
 import { installMod, removeMod } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { writeFile } from "fs/promises";
 
 const execAsync = promisify(exec);
-const COMPOSE_FILE = "/opt/yoshling/docker-compose.yml";
-
-function generateCompose(version: string, type: string, memory: string): string {
-  return `services:
-  minecraft:
-    image: itzg/minecraft-server
-    container_name: yoshling-mc
-    ports:
-      - "25565:25565"
-    environment:
-      EULA: "TRUE"
-      TYPE: "${type.toUpperCase()}"
-      VERSION: "${version}"
-      MEMORY: "${memory}"
-      RCON_PASSWORD: "\${RCON_PASSWORD}"
-      ENABLE_RCON: "true"
-      RCON_PORT: 25575
-    volumes:
-      - mc-data:/data
-    restart: unless-stopped
-    tty: true
-    stdin_open: true
-
-  web:
-    build: .
-    ports:
-      - "3000:3000"
-    env_file: .env
-    environment:
-      NODE_ENV: production
-      DOCKER_HOST: unix:///var/run/docker.sock
-    volumes:
-      - mc-data:/minecraft
-      - web-data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - minecraft
-    restart: unless-stopped
-
-volumes:
-  mc-data:
-  web-data:
-`;
-}
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -83,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Modpack not found" }, { status: 404 });
   }
 
-  let serverConfig = await db.serverConfig.findUnique({
+  const serverConfig = await db.serverConfig.findUnique({
     where: { id: "main" },
   });
 
@@ -92,27 +46,40 @@ export async function POST(request: NextRequest) {
   }
 
   // Use modpack's target version/loader, or explicit overrides, or current config
-  const finalMcVersion = mcVersion || (modpack as any).targetMcVersion || serverConfig.mcVersion;
-  const finalLoader = modLoader || (modpack as any).targetLoader || serverConfig.modLoader;
+  const finalMcVersion = mcVersion || modpack.targetMcVersion || serverConfig.mcVersion;
+  const finalLoader = modLoader || modpack.targetLoader || serverConfig.modLoader;
 
+  // A modpack that targets a different version/loader is refused, not applied.
+  // This branch used to regenerate docker-compose.yml from a two-service template
+  // and start Minecraft: that silently deleted the sevendtd and zomboid services
+  // plus the volumes the web container mounts, reverted MEMORY to ServerConfig's
+  // never-updated maxMemory, and started a world without evicting whichever one
+  // held the box or taking the control lock. Switching version/loader belongs to
+  // /api/settings, which patches only the minecraft block and RECREATES the
+  // container -- the only way a new VERSION/TYPE ever takes effect. Doing half of
+  // it here (write compose, don't recreate) would just be the "looks applied and
+  // silently isn't" trap again, with mods downloaded for a version that is not
+  // running.
   if (finalMcVersion !== serverConfig.mcVersion || finalLoader !== serverConfig.modLoader) {
-    await db.serverConfig.update({
-      where: { id: "main" },
-      data: { mcVersion: finalMcVersion, modLoader: finalLoader },
-    });
-
-    // Update compose file and recreate MC container
-    try {
-      const memory = serverConfig.maxMemory || "4G";
-      const composeContent = generateCompose(finalMcVersion, finalLoader, memory);
-      await writeFile(COMPOSE_FILE, composeContent, "utf-8");
-      await recreateService("minecraft", { start: true });
-    } catch {}
-
-    serverConfig = { ...serverConfig, mcVersion: finalMcVersion, modLoader: finalLoader };
+    return NextResponse.json(
+      {
+        error:
+          `This modpack targets Minecraft ${finalMcVersion} (${finalLoader}) but the server is ` +
+          `set to ${serverConfig.mcVersion} (${serverConfig.modLoader}). Change the version and ` +
+          `loader on the Minecraft settings page first, then install the modpack.`,
+        needsVersionChange: { mcVersion: finalMcVersion, modLoader: finalLoader },
+      },
+      { status: 409 }
+    );
   }
 
-  // Auto-backup world before making changes
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Auto-backup the world before touching mods. A failure here is reported rather
+  // than swallowed: this backup is the entire rollback story for a mod swap that
+  // corrupts the world, so "we took one" has to be true and not assumed. It is not
+  // fatal though -- a server with no world/ folder yet has nothing to back up.
   try {
     const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
     const BACKUP_DIR = "/app/data/backups";
@@ -122,19 +89,25 @@ export async function POST(request: NextRequest) {
       `tar -czf ${BACKUP_DIR}/auto-before-modpack-${timestamp}.tar.gz -C ${MC_DIR} world`,
       { timeout: 60000 }
     );
-  } catch {}
+  } catch (e: any) {
+    warnings.push(
+      `World backup failed (${e.message || "unknown error"}) — this install has no rollback point.`
+    );
+  }
 
-  // Remove all currently installed mods
+  // Remove all currently installed mods. A jar that survives this loads alongside
+  // the new pack, so a failed removal has to be said out loud.
   const installedMods = await db.installedMod.findMany();
   for (const mod of installedMods) {
     try {
       await removeMod(mod.id, session.user.id);
-    } catch {}
+    } catch (e: any) {
+      errors.push(`${mod.name}: could not be removed (${e.message || "failed"})`);
+    }
   }
 
   // Install modpack mods
   let installed = 0;
-  const errors: string[] = [];
 
   for (const mod of modpack.mods) {
     try {
@@ -192,17 +165,38 @@ export async function POST(request: NextRequest) {
         });
         installed++;
       } else {
-        errors.push(`${mod.name}: no download source`);
+        // Modpacks imported before f2018a4 stored no modrinthId (the Modrinth
+        // project endpoint returns `id`, not `project_id`), so whole packs are
+        // unusable until they are imported again.
+        errors.push(`${mod.name}: no download source recorded — re-import this modpack`);
       }
     } catch (e: any) {
       errors.push(`${mod.name}: ${e.message || "failed"}`);
     }
   }
 
-  return NextResponse.json({
-    success: true,
-    installed,
-    total: modpack.mods.length,
-    errors,
-  });
+  // Anything short of every mod is an error, not a success. This used to answer
+  // 200 {success:true} whatever happened, so a pack whose rows all lack a download
+  // source reported "Installed 0/166 mods" in a green toast.
+  const total = modpack.mods.length;
+  const complete = installed === total;
+
+  return NextResponse.json(
+    {
+      success: complete,
+      installed,
+      total,
+      errors,
+      warnings,
+      ...(complete
+        ? {}
+        : {
+            error:
+              installed === 0
+                ? `No mods were installed (0 of ${total}). The server's mods are now empty.`
+                : `Only ${installed} of ${total} mods were installed.`,
+          }),
+    },
+    { status: complete ? 200 : 500 }
+  );
 }
