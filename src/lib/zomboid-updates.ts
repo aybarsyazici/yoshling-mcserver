@@ -120,6 +120,21 @@ export interface WatchState {
   applyingSince: number;
   /** Titles being applied right now, so the UI can name them mid-flight. */
   applyingTitles: string[];
+  /**
+   * When an apply last *failed*, so we stop retrying it in a loop.
+   *
+   * Without this the retry is unbounded and it restarts the server every time.
+   * `seedMods` throws for permanent reasons as readily as transient ones — a
+   * Workshop item that was hidden or deleted can never download — and
+   * `withGameStopped` now boots the world again on failure. So a single dead mod
+   * produced: graceful stop, seed, fail, boot 89 mods, next tick, repeat. Forever,
+   * on the world people play daily, each cycle a few minutes of downtime.
+   *
+   * The mod list is unchanged after a failure, so nothing about the next attempt
+   * is different; only time can fix it (Steam recovering, or someone removing the
+   * mod). Hence a flat cooldown rather than a backoff.
+   */
+  applyFailedAt: number;
 }
 
 const EMPTY_STATE: WatchState = {
@@ -131,7 +146,17 @@ const EMPTY_STATE: WatchState = {
   lastError: "",
   applyingSince: 0,
   applyingTitles: [],
+  applyFailedAt: 0,
 };
+
+/**
+ * How long to wait after a failed apply before trying again.
+ *
+ * Long enough that a permanently-broken mod costs one restart an hour instead of
+ * one every few minutes, short enough that a genuine Steam outage recovers on its
+ * own overnight.
+ */
+const APPLY_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 
 let warnedStaleApply = false;
 
@@ -453,6 +478,20 @@ async function runPoll(
     return { action: "announced", stale, next };
   }
 
+  // Empty, but the last attempt failed recently. Retrying immediately restarts the
+  // server for an attempt that has no reason to go differently — see
+  // `applyFailedAt`. Report it as pending so the card keeps naming the mods.
+  const sinceFailure = Date.now() - state.applyFailedAt;
+  if (state.applyFailedAt && sinceFailure < APPLY_RETRY_COOLDOWN_MS) {
+    const mins = Math.ceil((APPLY_RETRY_COOLDOWN_MS - sinceFailure) / 60000);
+    console.log(`[pz-updates] apply failed recently; not retrying for ~${mins} min`);
+    return {
+      action: "announced",
+      stale,
+      next: { pendingIds: ids, pendingTitles: stale.map((s) => s.title) },
+    };
+  }
+
   // Empty: apply it. Publish that we have started BEFORE the long part, so the
   // dashboard can say "updating now" instead of "waiting for players to leave".
   const titles = stale.map((s) => s.title);
@@ -472,12 +511,24 @@ async function runPoll(
   console.log(`[pz-updates] applying (server restart): ${titles.join(", ")}`);
 
   try {
-    await withGameStopped("zomboid", "restart", () => seedMods(ids));
+    // `restartOnFailure` defaults to true and that is what we want here: a mod
+    // that Steam cannot fetch should not cost the world its uptime.
+    await withGameStopped("zomboid", "restart", () => seedMods(ids), {
+      stage: "Downloading updated mods",
+    });
   } catch (e) {
     // Clear the in-flight marker on any exit path, or the UI shows a restart
     // that is no longer happening.
-    await writeWatchState({ ...state, applyingSince: 0, applyingTitles: [] });
-    if (e instanceof ControlBusyError) return { action: "skipped", stale, next: {} };
+    const busy = e instanceof ControlBusyError;
+    await writeWatchState({
+      ...state,
+      applyingSince: 0,
+      applyingTitles: [],
+      // A busy lock is not a failed apply — nothing was attempted, and the next
+      // tick should be free to try. Only a real failure starts the cooldown.
+      applyFailedAt: busy ? state.applyFailedAt : Date.now(),
+    });
+    if (busy) return { action: "skipped", stale, next: {} };
     throw e;
   }
   return {
@@ -490,6 +541,9 @@ async function runPoll(
       appliedAt: Date.now(),
       applyingSince: 0,
       applyingTitles: [],
+      // Success clears the cooldown, so a transient failure doesn't keep
+      // suppressing applies for an hour after it stopped being true.
+      applyFailedAt: 0,
     },
   };
 }

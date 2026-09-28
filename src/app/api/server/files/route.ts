@@ -25,6 +25,15 @@ export async function GET(request: NextRequest) {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
+  // Reading these trees is an ADMIN/MOD action, not a browse. The files include
+  // `server.properties`, `sdtdserver.xml` and `yoshling.ini`, i.e. the live
+  // `rcon.password`, `TelnetPassword` and `RCONPassword` -- the exact keys the
+  // settings editors have a locked-key set to hide. Gating only the *editor* and
+  // leaving this open meant the password was still one click away under Files.
+  if (!hasPermission(session.user.role, "settings.edit")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { searchParams } = new URL(request.url);
   const relativePath = searchParams.get("path") || "";
   const action = searchParams.get("action") || "list";

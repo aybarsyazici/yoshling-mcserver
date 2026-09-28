@@ -33,6 +33,13 @@ export async function GET(request: NextRequest) {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
 
+  // Same gate as the editor: these trees hold the live `TelnetPassword` /
+  // `RCONPassword`, which the settings pages have a locked-key set to hide. An
+  // open GET here made that set decorative.
+  if (!hasPermission(gate.session.user.role, "settings.edit")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { searchParams } = new URL(request.url);
   const baseDir = resolveRoot(searchParams.get("root"));
   if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });

@@ -58,3 +58,6 @@ next-env.d.ts
 # python bytecode from scripts/
 __pycache__/
 *.pyc
+
+# Transient git worktrees created by background agents
+.claude/worktrees/

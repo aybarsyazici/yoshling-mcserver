@@ -36,6 +36,13 @@ export async function GET(request: NextRequest) {
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
 
+  // Same gate as the editor: these trees hold the live `TelnetPassword` /
+  // `RCONPassword`, which the settings pages have a locked-key set to hide. An
+  // open GET here made that set decorative.
+  if (!hasPermission(session.user.role, "settings.edit")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { searchParams } = new URL(request.url);
   const baseDir = resolveRoot(searchParams.get("root"));
   if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });

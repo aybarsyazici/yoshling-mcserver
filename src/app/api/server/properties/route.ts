@@ -100,8 +100,16 @@ export async function PUT(request: NextRequest) {
   // A Map, not an object: `"constructor" in {}` is true, so an object lookup would
   // treat inherited names as settings to write.
   const updates = new Map<string, string>();
+  // Locked keys are collected, not just skipped. Dropping them silently meant a
+  // PUT containing `rcon.password` answered `{success: true}` with the key in
+  // neither `applied` nor `ignored` -- which is exactly what a browser tab opened
+  // before this deploy will submit, since it still has the field on screen.
+  const locked: string[] = [];
   for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
-    if (LOCKED.has(key)) continue;
+    if (LOCKED.has(key)) {
+      locked.push(key);
+      continue;
+    }
     updates.set(key, sanitizeValue(value));
   }
   if (updates.size === 0) {
@@ -161,5 +169,17 @@ export async function PUT(request: NextRequest) {
     console.error("[mc-properties] activity log failed", e);
   }
 
-  return NextResponse.json({ success: true, applied, ignored });
+  return NextResponse.json({
+    success: true,
+    applied,
+    ignored,
+    locked,
+    ...(locked.length > 0
+      ? {
+          warning:
+            `${locked.join(", ")} ${locked.length === 1 ? "is" : "are"} managed by the dashboard ` +
+            `and cannot be edited here. Reload the page to see the current settings.`,
+        }
+      : {}),
+  });
 }

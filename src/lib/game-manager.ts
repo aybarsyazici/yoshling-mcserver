@@ -738,19 +738,45 @@ export async function powerOff(game: GameId): Promise<void> {
 export async function withGameStopped(
   game: GameId,
   action: ControlAction,
-  whileStopped: () => Promise<void>
+  whileStopped: () => Promise<void>,
+  opts: {
+    /** What to say while the callback runs. Surfaces in `OperationBanner`. */
+    stage?: string;
+    /**
+     * Whether to start the world again when the callback *throws*.
+     *
+     * The two callers want opposite things, and getting it backwards is silent.
+     *
+     * A mod update wants `true`: `seedMods` throws on a partial download, and
+     * leaving the world down for a mod that failed to fetch is a worse outcome
+     * than booting the previous version — `restart: "no"` means nothing else will
+     * ever revive it.
+     *
+     * A **restore** wants `false`. If the extract or the copy dies partway, the
+     * save and the player DB are half-replaced, and booting onto that is worse
+     * than staying down: the game will happily rewrite the mess on its first
+     * autosave and take the archive's contents with it. Staying stopped is
+     * recoverable — it leaves the archive intact and a second restore possible.
+     */
+    restartOnFailure?: boolean;
+  } = {}
 ): Promise<{ restarted: boolean }> {
+  const { stage, restartOnFailure = true } = opts;
   return withControlLock(game, action, async () => {
     const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
     if (wasRunning) {
       setControlStage("Saving and stopping the server");
       await DRIVERS[game].gracefulStop();
     }
+    let failed = false;
     try {
-      setControlStage("Downloading updated mods");
+      setControlStage(stage ?? "Working");
       await whileStopped();
+    } catch (err) {
+      failed = true;
+      throw err;
     } finally {
-      if (wasRunning) {
+      if (wasRunning && (!failed || restartOnFailure)) {
         setControlStage("Starting the server");
         await DRIVERS[game].start();
       }
@@ -967,6 +993,54 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
  * Change the heap size and make it take effect. Serialized with the power
  * controls, because it stops and recreates a container.
  */
+/**
+ * Apply a compose-env change to one service and recreate it, safely.
+ *
+ * A container's env is fixed when it is created, so a new value only takes effect
+ * on a recreate — and a recreate has three traps this encodes once so no caller has
+ * to remember them:
+ *
+ *  1. **`create`, never `up`.** `up` starts the container, so applying a setting to
+ *     a *stopped* world would boot it — and since only one world fits on the box,
+ *     that quietly produces two running at once. Start it again afterwards only if
+ *     it was running to begin with.
+ *  2. **Save first.** Recreating a running game server is otherwise a hard kill.
+ *  3. **Take the control lock**, so this cannot interleave with a power operation.
+ *
+ * `/api/settings` (Minecraft version/loader) open-coded a `docker compose up -d
+ * --force-recreate` and got all three wrong; `setMemory` had them right. Both now
+ * come through here.
+ */
+export async function applyServiceEnv(
+  game: GameId,
+  updates: Record<string, string>,
+  { stage }: { stage: string }
+): Promise<void> {
+  const rt = RUNTIME[game];
+  return withControlLock(game, "restart", async () => {
+    setControlStage(stage);
+    const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
+    if (applied.length === 0) {
+      throw new Error(
+        `Couldn't find ${Object.keys(updates).join("/")} in the ${rt.service} service block of docker-compose.yml`
+      );
+    }
+    await writeCompose(text);
+
+    const wasRunning = (await containerState(rt.container)) === "running";
+    if (wasRunning) {
+      setControlStage("Saving and stopping the server");
+      await DRIVERS[game].gracefulStop();
+    }
+    setControlStage(stage);
+    await recreateService(game, { start: false });
+    if (wasRunning) {
+      setControlStage("Starting the server");
+      await DRIVERS[game].start();
+    }
+  });
+}
+
 export async function setMemory(game: GameId, gb: number): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");

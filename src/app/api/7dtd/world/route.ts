@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { mkdir, writeFile, rm, readdir, readFile, stat } from "fs/promises";
 import path from "path";
@@ -30,7 +30,16 @@ export const runtime = "nodejs";
 // Worlds can be large; allow a long-running request for the extract.
 export const maxDuration = 300;
 
-const execAsync = promisify(exec);
+/**
+ * `execFile`, never `exec`.
+ *
+ * Every argument below is a path, and two of them (`rootDir`, and the temp dir keyed
+ * on the upload) are derived from the *contents of the uploaded zip*. Quoting them
+ * with `JSON.stringify` is not protection: those are double quotes, inside which
+ * `sh` still expands `$(...)` and backticks. `safeName` only ever covered the world
+ * name, not the extracted directory these use. An argv array spawns no shell.
+ */
+const execFileAsync = promisify(execFile);
 const SAVES_DIR = process.env.SDTD_SERVER_DIR || "/sevendtd"; // = .local/share/7DaysToDie
 const WORLDS_DIR = path.join(SAVES_DIR, "GeneratedWorlds");
 const TMP_DIR = "/app/data/tmp";
@@ -51,7 +60,18 @@ function safeName(name: string): string {
  * destructive as a delete (the live map, Reveo Valley, is 417 MB).
  * Returns null when the world is fair game.
  */
-async function protectedWorldReason(name: string): Promise<string | null> {
+async function protectedWorldReason(
+  name: string,
+  /**
+   * `"delete"` blocks on anything a backup depends on. `"replace"` (an upload of
+   * the same name) does not, because that rule is wrong for uploads: it told an
+   * admin to **delete their only 7DTD backup in order to upload a map**, which
+   * trades a recoverable mismatch for an unrecoverable one. Replacing terrain a
+   * backup references only means that backup's saves pair with different terrain --
+   * worth a confirmation, not a refusal. The active world stays blocked either way.
+   */
+  mode: "delete" | "replace" = "delete"
+): Promise<string | null> {
   // 1) the world the server is configured to load (sdtdserver.xml GameWorld).
   try {
     const xml = await readFile(
@@ -66,13 +86,15 @@ async function protectedWorldReason(name: string): Promise<string | null> {
 
   // 2) a backup bundles this map, so swapping it out would leave that backup's
   //    saves paired with different terrain.
-  try {
-    const { worldsUsedByBackups } = await import("@/app/api/7dtd/backups/route");
-    const used = await worldsUsedByBackups();
-    if (used.has(name)) {
-      return `"${name}" is included in one or more backups. Delete those backups first.`;
-    }
-  } catch {}
+  if (mode === "delete") {
+    try {
+      const { worldsUsedByBackups } = await import("@/app/api/7dtd/backups/route");
+      const used = await worldsUsedByBackups();
+      if (used.has(name)) {
+        return `"${name}" is included in one or more backups. Delete those backups first.`;
+      }
+    } catch {}
+  }
 
   return null;
 }
@@ -146,7 +168,7 @@ export async function POST(request: NextRequest) {
     await writeFile(zipPath, buf);
 
     // Validate + list contents (also rejects non-zips / zip bombs early).
-    const { stdout: listing } = await execAsync(`unzip -l ${JSON.stringify(zipPath)}`, { maxBuffer: 16 * 1024 * 1024 });
+    const { stdout: listing } = await execFileAsync("unzip", ["-l", zipPath], { maxBuffer: 16 * 1024 * 1024 });
     if (/\.\.\//.test(listing)) {
       return json({ error: "Zip contains unsafe paths" }, 400);
     }
@@ -164,7 +186,7 @@ export async function POST(request: NextRequest) {
     // Extract to a clean work dir first, then place into the right home.
     await rm(workDir, { recursive: true, force: true });
     await mkdir(workDir, { recursive: true });
-    await execAsync(`unzip -o -q ${JSON.stringify(zipPath)} -d ${JSON.stringify(workDir)}`, { maxBuffer: 16 * 1024 * 1024, timeout: 240000 });
+    await execFileAsync("unzip", ["-o", "-q", zipPath, "-d", workDir], { maxBuffer: 16 * 1024 * 1024, timeout: 240000 });
 
     // Find the folder that actually contains the world/save markers (handles a
     // wrapping top-level folder in the zip).
@@ -195,13 +217,15 @@ export async function POST(request: NextRequest) {
       }
       // Installing over an existing world deletes it, so refuse the same worlds
       // DELETE refuses rather than silently taking out a map in use.
-      const blocked = await protectedWorldReason(worldName);
+      // "replace", not "delete": an upload of the same name may replace terrain a
+      // backup references, but must never take out the world the server is running.
+      const blocked = await protectedWorldReason(worldName, "replace");
       if (blocked) return json({ error: blocked }, 409);
 
       replacedExisting = await stat(dest).then(() => true).catch(() => false);
       await mkdir(WORLDS_DIR, { recursive: true });
       await rm(dest, { recursive: true, force: true });
-      await execAsync(`mv ${JSON.stringify(rootDir)} ${JSON.stringify(dest)}`);
+      await execFileAsync("mv", [rootDir, dest]);
       installedAs = worldName;
     } else {
       kind = "save";
@@ -209,7 +233,7 @@ export async function POST(request: NextRequest) {
       const dest = path.join(SAVES_DIR, "Saves");
       await mkdir(dest, { recursive: true });
       // Copy contents of the extracted tree into Saves/ (merge).
-      await execAsync(`cp -a ${JSON.stringify(rootDir)}/. ${JSON.stringify(dest)}/`);
+      await execFileAsync("cp", ["-a", `${rootDir}/.`, `${dest}/`]);
       installedAs = path.basename(rootDir);
     }
 

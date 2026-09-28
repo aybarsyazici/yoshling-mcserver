@@ -27,16 +27,35 @@ export function GameConsole({ game }: { game: GameId }) {
   const [command, setCommand] = useState("");
   const [sending, setSending] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [histIdx, setHistIdx] = useState(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Fetch the tail, and say so when it fails.
+   *
+   * This used to be `if (data.logs != null) setLogs(data.logs)` inside an empty
+   * catch, which is the worst combination available: the console route now returns
+   * a non-2xx when `docker logs` fails instead of handing back the error text as
+   * log content, so on the 3 s auto-refresh the first fetch would succeed and later
+   * ones fail — leaving the **old log frozen on screen** with "Auto: ON" still lit.
+   * A stale console during an incident is worse than a blank one, because it reads
+   * as "the server has gone quiet".
+   */
   async function fetchLogs() {
     try {
       const res = await fetch(`${endpoint}?lines=200`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || `Couldn't read the log (HTTP ${res.status})`);
+        return;
+      }
+      setError(null);
       if (data.logs != null) setLogs(data.logs);
-    } catch {}
+    } catch {
+      setError("Couldn't reach the server to read the log");
+    }
   }
 
   useEffect(() => {
@@ -117,6 +136,12 @@ export function GameConsole({ game }: { game: GameId }) {
           </Button>
         </div>
       </div>
+
+      {error && (
+        <div className="mb-3 rounded-lg bg-chart-5/10 px-3 py-2 text-xs text-chart-5 ring-1 ring-chart-5/25">
+          {error}. The output below is whatever was last read, not the current log.
+        </div>
+      )}
 
       <div
         ref={scrollRef}

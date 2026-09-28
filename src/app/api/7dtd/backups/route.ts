@@ -215,7 +215,9 @@ export async function POST(request: NextRequest) {
       const { restarted } = await withGameStopped("7dtd", "restart", async () => {
         setControlStage("Restoring the saves from backup");
         await restoreBundle(backupPath, m);
-      });
+      },
+      { restartOnFailure: false }
+      );
       return NextResponse.json({ success: true, restoredWorld: m?.gameWorld ?? null, restarted });
     } catch (e) {
       if (e instanceof ControlBusyError) {
@@ -264,7 +266,19 @@ async function restoreBundle(backupPath: string, m: Manifest | null): Promise<vo
     await execFileAsync("cp", ["-a", savesSrc, SDTD_DIR]);
 
     // The custom world map, if the bundle carries one.
+    //
+    // `m.gameWorld` is read out of a manifest.json *inside the archive*, so it is
+    // attacker-controlled for anyone who can put a file in the backups directory.
+    // Two lines below it reaches `rm(..., {recursive: true, force: true})` running
+    // as root, where `"../.."` would climb out of GeneratedWorlds. Require it to be
+    // a single path segment and nothing else.
     if (m?.includesWorldMap && m.gameWorld) {
+      if (m.gameWorld !== path.basename(m.gameWorld) || m.gameWorld.startsWith(".")) {
+        throw new Error(
+          `This backup's manifest names an unusable world ("${m.gameWorld}") — ` +
+            `the saves were restored, the map was left alone.`
+        );
+      }
       const mapSrc = path.join(work, "GeneratedWorlds", m.gameWorld);
       if (!(await isDir(mapSrc))) {
         throw new Error(

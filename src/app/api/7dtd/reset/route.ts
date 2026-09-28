@@ -1,16 +1,27 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
-import { readFile, writeFile, rm, readdir } from "fs/promises";
+import { readFile, writeFile, rm, readdir, mkdir } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
 import { RUNTIME, restartGame, ControlBusyError } from "@/lib/game-manager";
 
 export const maxDuration = 120;
 
-const execAsync = promisify(exec);
+/**
+ * `execFile`, never `exec`.
+ *
+ * `GameWorld` comes out of `sdtdserver.xml`, which `/api/7dtd/config/all` lets any
+ * MOD write, and it ends up in a `tar` argument. Quoting it with
+ * `JSON.stringify` looks safe and is not: those are *double* quotes, and `sh`
+ * still expands `$(...)` and backticks inside them. The name guard below rejects
+ * slashes and dots, so traversal is covered, but `$(...)` sails through it.
+ * `execFile` takes an argv array and spawns no shell, so the value cannot be
+ * anything but one argument.
+ */
+const execFileAsync = promisify(execFile);
 const SAVES_DIR = RUNTIME["7dtd"].dir; // .local/share/7DaysToDie
 const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml");
 
@@ -78,7 +89,7 @@ export async function POST() {
     // Saves/ and then finds no Saves/ inside the tar to put back, losing every
     // save. Keep it out of that listing; it's a recovery artefact, not a backup.
     const backupDir = "/app/data/backups-7dtd/presreset";
-    await execAsync(`mkdir -p ${backupDir}`);
+    await mkdir(backupDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     // Probe and archive separately. They used to share one catch commented "no
     // existing save to back up — fine", so a *failed* tar was indistinguishable
@@ -90,8 +101,9 @@ export async function POST() {
     if (hadSave) {
       const archive = path.join(backupDir, `presreset-${world}-${stamp}.tar.gz`);
       try {
-        await execAsync(
-          `tar -czf ${JSON.stringify(archive)} -C ${JSON.stringify(path.join(SAVES_DIR, "Saves"))} ${JSON.stringify(world)}`,
+        await execFileAsync(
+          "tar",
+          ["-czf", archive, "-C", path.join(SAVES_DIR, "Saves"), world],
           { timeout: 120000 }
         );
       } catch (e) {

@@ -140,7 +140,11 @@ export async function POST(request: NextRequest) {
       const { restarted } = await withGameStopped("minecraft", "restart", async () => {
         setControlStage("Restoring the world from backup");
         await restoreWorld(backupPath);
-      });
+      },
+      // A half-replaced world is worse than a stopped one: the game would rewrite
+      // the mess on its first autosave. Staying down keeps the archive usable.
+      { restartOnFailure: false }
+      );
       return NextResponse.json({ success: true, restarted });
     } catch (e) {
       if (e instanceof ControlBusyError) {

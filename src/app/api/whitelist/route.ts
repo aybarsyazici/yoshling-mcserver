@@ -53,7 +53,17 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "users must be an array" }, { status: 400 });
   }
 
-  const cleaned = users.map((u: unknown) => String(u).trim().toLowerCase()).filter(Boolean);
+  // Reject non-strings rather than coercing: `String({})` is "[object Object]",
+  // which would be saved as a real whitelist entry that can never match anyone and
+  // is indistinguishable from a typo when someone later reads the list.
+  const bad = users.filter((u: unknown) => typeof u !== "string");
+  if (bad.length > 0) {
+    return NextResponse.json(
+      { error: `Every entry must be a name. Got ${bad.length} that ${bad.length === 1 ? "isn't" : "aren't"}.` },
+      { status: 400 }
+    );
+  }
+  const cleaned = users.map((u: string) => u.trim().toLowerCase()).filter(Boolean);
 
   // Clearing the list doesn't lock the door, it opens it (see `isWhitelisted`),
   // so it must never happen by accident. The page loads with a GET and then PUTs

@@ -3,13 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
-import { COMPOSE_FILE, patchServiceEnv, readCompose, writeCompose } from "@/lib/compose";
-import { COMPOSE_PROJECT } from "@/lib/game-manager";
-import path from "path";
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
+import { applyServiceEnv, ControlBusyError } from "@/lib/game-manager";
 
 // Memory is NOT set here — /api/games/memory owns it, because applying a heap
 // change means recreating the container, not just rewriting this file.
@@ -61,32 +55,35 @@ export async function PUT(request: NextRequest) {
   const loaderChanged = modLoader && modLoader !== oldConfig?.modLoader;
 
   if (versionChanged || loaderChanged) {
+    // Declared outside the try so the failure message can name them — the caller
+    // needs to know *which* version the DB now claims but the container doesn't run.
+    const finalVersion = mcVersion || oldConfig?.mcVersion || "1.21.4";
+    const finalLoader = modLoader || oldConfig?.modLoader || "fabric";
     try {
-      const finalVersion = mcVersion || oldConfig?.mcVersion || "1.21.4";
-      const finalLoader = modLoader || oldConfig?.modLoader || "fabric";
-
-      // Patch only the minecraft service's env in docker-compose.yml
-      const { text, applied } = patchServiceEnv(await readCompose(), "minecraft", {
-        TYPE: finalLoader.toUpperCase(),
-        VERSION: finalVersion,
-      });
-      if (applied.length === 0) {
-        return NextResponse.json({
-          success: true,
-          warning: "Settings saved, but the minecraft service wasn't found in docker-compose.yml.",
-        });
-      }
-      await writeCompose(text);
-
-      // Recreate only the minecraft container with new config
-      await execAsync(
-        `cd ${path.dirname(COMPOSE_FILE)} && docker compose -p ${COMPOSE_PROJECT} up -d --no-deps --force-recreate minecraft`
+      // `applyServiceEnv` owns the compose patch, the graceful stop, `create`
+      // (never `up`, so a stopped world stays stopped) and the control lock. This
+      // route used to open-code that and got every part of it wrong.
+      await applyServiceEnv(
+        "minecraft",
+        { TYPE: finalLoader.toUpperCase(), VERSION: finalVersion },
+        { stage: `Applying ${finalLoader} ${finalVersion}` }
       );
-    } catch (e: any) {
-      return NextResponse.json({
-        success: true,
-        warning: `Settings saved but failed to restart server: ${e.message}`,
-      });
+    } catch (e) {
+      if (e instanceof ControlBusyError) {
+        return NextResponse.json({ error: e.message, busy: e.lock }, { status: 409 });
+      }
+      // Not `{success: true, warning}` with HTTP 200: the settings page checks only
+      // `res.ok` and never reads `warning`, so a failed apply rendered as "Saved."
+      // The DB row has already been written, which is why the message has to say
+      // that the two now disagree rather than just "failed".
+      return NextResponse.json(
+        {
+          error:
+            `Saved ${finalLoader} ${finalVersion} to settings, but applying it to the container failed: ` +
+            `${(e as Error).message}. The configured and running versions now disagree — retry, or check the Minecraft container.`,
+        },
+        { status: 500 }
+      );
     }
   }
 

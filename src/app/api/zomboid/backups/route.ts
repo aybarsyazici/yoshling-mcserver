@@ -200,7 +200,9 @@ export async function POST(request: NextRequest) {
       const { restarted } = await withGameStopped("zomboid", "restart", async () => {
         setControlStage("Restoring the save from backup");
         await restoreBundle(backupPath, serverName, m);
-      });
+      },
+      { restartOnFailure: false }
+      );
       return NextResponse.json({ success: true, restoredWorld: serverName, restarted });
     } catch (e) {
       if (e instanceof ControlBusyError) {

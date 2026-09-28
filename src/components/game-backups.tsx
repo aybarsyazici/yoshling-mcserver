@@ -88,7 +88,9 @@ export function GameBackups({ game }: { game: GameId }) {
 
   async function restore(name: string) {
     const consequence = running
-      ? `${meta.name} will be saved and stopped, the ${noun} replaced, then started again.`
+      ? `${meta.name} will be saved and stopped, the ${noun} replaced, then started again. ` +
+        `This can take several minutes, and the browser may give up waiting before it finishes — ` +
+        `the bar at the top of the page is what to watch, not this dialog.`
       : `This replaces the current ${noun}. The server stays powered down.`;
     if (!confirm(`Restore "${name}"?\n\n${consequence}`)) return;
     setRestoring(name);
@@ -107,6 +109,17 @@ export function GameBackups({ game }: { game: GameId }) {
       } else {
         toast.error(d.error || "Restore failed");
       }
+    } catch {
+      // The request died, but the restore did not: it runs server-side under the
+      // control lock and carries on regardless. A Project Zomboid restore opens
+      // with `docker stop -t 300`, which outlasts Cloudflare's ~100s origin
+      // timeout, so the *successful* path routinely ends with a dead connection.
+      // Reporting that as "Restore failed" on a destructive operation is the worst
+      // available answer — it invites someone to run it a second time.
+      toast.info(
+        `Still restoring "${name}". The connection timed out before it finished, which is normal ` +
+          `for a large ${noun} — watch the bar at the top of the page, and don't start it again.`
+      );
     } finally {
       setRestoring(null);
       refresh();

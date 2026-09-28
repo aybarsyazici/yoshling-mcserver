@@ -95,6 +95,36 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Refuse before deleting anything if this pack cannot actually be installed.
+  //
+  // The order below is destroy-then-create, so a pack whose rows carry no download
+  // source wipes every installed jar and puts nothing back. That is not
+  // hypothetical: 224 `ModpackMod` rows predate the importer fix in f2018a4
+  // (2026-05-27, Modrinth returns `id` not `project_id`), and one saved pack —
+  // Fabulously Optimized, 45 mods — has a source for *none* of them. Reporting the
+  // 0/45 honestly was only half the fix; the other half is not starting.
+  const installable = modpack.mods.filter(
+    (m: { downloadUrl?: string | null; modrinthId?: string | null }) =>
+      m.downloadUrl || m.modrinthId
+  ).length;
+  if (installable === 0) {
+    return NextResponse.json(
+      {
+        error:
+          `None of the ${modpack.mods.length} mods in "${modpack.name}" has a download source, ` +
+          `so installing it would remove every current mod and add nothing. ` +
+          `This pack was imported before a fix to the importer — re-import it to repair it.`,
+      },
+      { status: 409 }
+    );
+  }
+  if (installable < modpack.mods.length) {
+    warnings.push(
+      `${modpack.mods.length - installable} of ${modpack.mods.length} mods in this pack have no ` +
+        `download source and will be skipped — re-import the pack to repair it.`
+    );
+  }
+
   // Remove all currently installed mods. A jar that survives this loads alongside
   // the new pack, so a failed removal has to be said out loud.
   const installedMods = await db.installedMod.findMany();
