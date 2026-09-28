@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, writeFile, mkdir, cp } from "fs/promises";
 import path from "path";
 import { PZ_DIR, savePaths } from "@/lib/zomboid";
+import { ControlBusyError, setControlStage, withGameStopped } from "@/lib/game-manager";
 
 export const maxDuration = 300;
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const BACKUP_DIR = "/app/data/backups-zomboid";
+const TAR_TIMEOUT_MS = 240_000;
 
 // A Project Zomboid backup is self-contained: restoring it rebuilds the world,
 // the accounts and the settings exactly as they were.
@@ -26,20 +28,47 @@ interface Manifest {
   includesDb: boolean;
 }
 
+/**
+ * `backupName` arrives straight off the request body and is used both as a
+ * filesystem path and as an argument to `tar`, so it has to be closed off before
+ * either. `path.basename` + `JSON.stringify` — what this route used to do — is
+ * not enough: basename stops traversal but leaves shell metacharacters intact,
+ * and JSON quoting produces *double* quotes, inside which `sh` still runs `$(…)`
+ * and backticks. So: an allowlist, and `execFile` (argv array, no shell) for
+ * every command below. A space is admitted because `/api/7dtd/reset` names its
+ * pre-reset archive after the world ("Reveo Valley") without sanitising it, and
+ * with no shell in the picture a space is just a character.
+ */
+function safeBackupName(name: unknown): string | null {
+  if (typeof name !== "string") return null;
+  if (name !== path.basename(name)) return null; // no directory part at all
+  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*\.tar\.gz$/.test(name)) return null;
+  return name;
+}
+
+async function exists(p: string): Promise<boolean> {
+  return stat(p).then(
+    () => true,
+    () => false
+  );
+}
+
 /** Read the manifest out of a backup tar without extracting the whole thing. */
 async function backupManifest(file: string): Promise<Manifest | null> {
-  try {
-    // tar stores members as "./manifest.json" when created with `-C <dir> .`;
-    // try both spellings to be safe across tar versions.
-    const target = JSON.stringify(path.join(BACKUP_DIR, file));
-    const { stdout } = await execAsync(
-      `tar -xzOf ${target} ./manifest.json 2>/dev/null || tar -xzOf ${target} manifest.json 2>/dev/null`,
-      { maxBuffer: 1024 * 1024 }
-    );
-    return JSON.parse(stdout);
-  } catch {
-    return null;
+  const target = path.join(BACKUP_DIR, file);
+  // tar stores members as "./manifest.json" when created with `-C <dir> .`;
+  // try both spellings to be safe across tar versions.
+  for (const member of ["./manifest.json", "manifest.json"]) {
+    try {
+      const { stdout } = await execFileAsync("tar", ["-xzOf", target, member], {
+        maxBuffer: 1024 * 1024,
+      });
+      return JSON.parse(stdout);
+    } catch {
+      /* try the other spelling */
+    }
   }
+  return null;
 }
 
 export async function GET() {
@@ -81,43 +110,40 @@ export async function POST(request: NextRequest) {
   const { action, backupName } = await request.json();
 
   if (action === "create") {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const work = path.join(BACKUP_DIR, `.work-${stamp}`);
+    let target = "";
     try {
       await mkdir(BACKUP_DIR, { recursive: true });
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const { name, world, db: dbFile, serverDir } = await savePaths();
 
       // Stage the pieces in a work dir, then tar them together.
-      const work = path.join(BACKUP_DIR, `.work-${stamp}`);
       await rm(work, { recursive: true, force: true });
       await mkdir(work, { recursive: true });
 
       // 1) the world
       let includesWorld = false;
-      try {
-        await stat(world);
+      if (await exists(world)) {
         await mkdir(path.join(work, "Saves", "Multiplayer"), { recursive: true });
         await cp(world, path.join(work, "Saves", "Multiplayer", name), { recursive: true });
         includesWorld = true;
-      } catch {
-        // never started — nothing to snapshot yet, still back up the config.
       }
+      // else: never started — nothing to snapshot yet, still back up the config.
 
       // 2) the player database
       let includesDb = false;
-      try {
+      if (await exists(dbFile)) {
         await mkdir(path.join(work, "db"), { recursive: true });
         await cp(dbFile, path.join(work, "db", `${name}.db`));
         includesDb = true;
-      } catch {}
+      }
 
       // 3) the server config trio (.ini + SandboxVars + spawnregions)
       await mkdir(path.join(work, "Server"), { recursive: true });
-      try {
-        for (const f of await readdir(serverDir)) {
-          if (!f.startsWith(name)) continue;
-          await cp(path.join(serverDir, f), path.join(work, "Server", f), { recursive: true });
-        }
-      } catch {}
+      for (const f of await readdir(serverDir)) {
+        if (!f.startsWith(name)) continue;
+        await cp(path.join(serverDir, f), path.join(work, "Server", f), { recursive: true });
+      }
 
       const manifest: Manifest = {
         createdAt: new Date().toISOString(),
@@ -128,13 +154,10 @@ export async function POST(request: NextRequest) {
       await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
 
       const filename = `zomboid-${name}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
-      await execAsync(
-        `tar -czf ${JSON.stringify(path.join(BACKUP_DIR, filename))} -C ${JSON.stringify(work)} .`,
-        { timeout: 240000 }
-      );
-      await rm(work, { recursive: true, force: true });
+      target = path.join(BACKUP_DIR, filename);
+      await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
 
-      const s = await stat(path.join(BACKUP_DIR, filename));
+      const s = await stat(target);
       return NextResponse.json({
         success: true,
         backup: {
@@ -146,65 +169,55 @@ export async function POST(request: NextRequest) {
         },
       });
     } catch (e) {
+      // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
+      // that the listing would offer as restorable.
+      if (target) await rm(target, { force: true }).catch(() => {});
       return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: 500 });
+    } finally {
+      await rm(work, { recursive: true, force: true }).catch(() => {});
     }
   }
 
   if (action === "restore") {
-    if (!backupName) return NextResponse.json({ error: "backupName required" }, { status: 400 });
-    const backupPath = path.join(BACKUP_DIR, path.basename(backupName));
+    const name = safeBackupName(backupName);
+    if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
+    const backupPath = path.join(BACKUP_DIR, name);
     try {
       await stat(backupPath);
-      const m = await backupManifest(path.basename(backupName));
-      const name = m?.serverName ?? (await savePaths()).name;
+    } catch {
+      return NextResponse.json({ error: "No such backup" }, { status: 404 });
+    }
 
-      const work = path.join(BACKUP_DIR, `.restore-${Date.now()}`);
-      await rm(work, { recursive: true, force: true });
-      await mkdir(work, { recursive: true });
-      await execAsync(`tar -xzf ${JSON.stringify(backupPath)} -C ${JSON.stringify(work)}`, {
-        timeout: 240000,
+    try {
+      const m = await backupManifest(name);
+      const serverName = m?.serverName ?? (await savePaths()).name;
+      // A running server holds the world in memory and writes it back on its next
+      // autosave, so restoring underneath it changed nothing that survived — and
+      // still reported success. `withGameStopped` saves + stops first, restores,
+      // and starts again only if it was running; it also holds the control lock,
+      // so a Power on can't race in halfway through and the banner can say what
+      // is happening.
+      const { restarted } = await withGameStopped("zomboid", "restart", async () => {
+        setControlStage("Restoring the save from backup");
+        await restoreBundle(backupPath, serverName, m);
       });
-
-      // World (replace)
-      const worldSrc = path.join(work, "Saves", "Multiplayer", name);
-      try {
-        await stat(worldSrc);
-        const worldDest = path.join(PZ_DIR, "Saves", "Multiplayer", name);
-        await rm(worldDest, { recursive: true, force: true });
-        await mkdir(path.dirname(worldDest), { recursive: true });
-        await cp(worldSrc, worldDest, { recursive: true });
-      } catch {}
-
-      // Player database
-      try {
-        await mkdir(path.join(PZ_DIR, "db"), { recursive: true });
-        await cp(path.join(work, "db", `${name}.db`), path.join(PZ_DIR, "db", `${name}.db`), {
-          force: true,
-        });
-      } catch {}
-
-      // Config files
-      try {
-        await mkdir(path.join(PZ_DIR, "Server"), { recursive: true });
-        for (const f of await readdir(path.join(work, "Server"))) {
-          await cp(path.join(work, "Server", f), path.join(PZ_DIR, "Server", f), {
-            recursive: true,
-            force: true,
-          });
-        }
-      } catch {}
-
-      await rm(work, { recursive: true, force: true });
-      return NextResponse.json({ success: true, restoredWorld: name });
+      return NextResponse.json({ success: true, restoredWorld: serverName, restarted });
     } catch (e) {
+      if (e instanceof ControlBusyError) {
+        return NextResponse.json(
+          { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
+          { status: 409 }
+        );
+      }
       return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
     }
   }
 
   if (action === "delete") {
-    if (!backupName) return NextResponse.json({ error: "backupName required" }, { status: 400 });
+    const name = safeBackupName(backupName);
+    if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
     try {
-      await rm(path.join(BACKUP_DIR, path.basename(backupName)));
+      await rm(path.join(BACKUP_DIR, name));
       return NextResponse.json({ success: true });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
@@ -212,4 +225,79 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+/**
+ * Extract the bundle, check each piece is really in it, and only then replace the
+ * live copy. Every step used to sit in its own `try {} catch {}`, so a bundle whose
+ * world was missing — or a copy that failed halfway — removed the live save and
+ * still answered `{success:true}`. What the manifest promises is now enforced:
+ * absent-and-not-promised is skipped, absent-but-promised is a hard failure.
+ */
+async function restoreBundle(
+  backupPath: string,
+  serverName: string,
+  m: Manifest | null
+): Promise<void> {
+  // The web container writes as root; the game runs as another uid (1000 on this
+  // box). Neither `fs.cp` nor this bundle carries ownership — every member of the
+  // existing backup is recorded root/root — so everything restored lands
+  // root-owned and the server silently cannot write its own save afterwards.
+  // (MC and 7DTD escape this: their pipelines are `tar`/`cp -a` throughout, which
+  // do preserve it.) Take the ownership off the data dir and re-apply it.
+  const { uid, gid } = await stat(PZ_DIR);
+  const own = (p: string) => execFileAsync("chown", ["-R", `${uid}:${gid}`, p]);
+
+  const work = path.join(BACKUP_DIR, `.restore-${Date.now()}`);
+  await rm(work, { recursive: true, force: true });
+  await mkdir(work, { recursive: true });
+  try {
+    await execFileAsync("tar", ["-xzf", backupPath, "-C", work], { timeout: TAR_TIMEOUT_MS });
+
+    // World (replace) — assert it is in the archive BEFORE removing the live one.
+    const worldSrc = path.join(work, "Saves", "Multiplayer", serverName);
+    if (await exists(worldSrc)) {
+      const worldDest = path.join(PZ_DIR, "Saves", "Multiplayer", serverName);
+      await mkdir(path.dirname(worldDest), { recursive: true });
+      await rm(worldDest, { recursive: true, force: true });
+      await cp(worldSrc, worldDest, { recursive: true });
+      await own(worldDest);
+    } else if (m?.includesWorld !== false) {
+      // Only a backup that recorded "no world" (server never started) may skip it.
+      throw new Error(
+        `This backup has no world for "${serverName}" in it — nothing was changed.`
+      );
+    }
+
+    // Player database
+    const dbSrc = path.join(work, "db", `${serverName}.db`);
+    if (await exists(dbSrc)) {
+      const dbDest = path.join(PZ_DIR, "db", `${serverName}.db`);
+      await mkdir(path.dirname(dbDest), { recursive: true });
+      await cp(dbSrc, dbDest, { force: true });
+      await own(dbDest);
+    } else if (m?.includesDb) {
+      throw new Error(
+        `This backup says it carries the player database but does not — ` +
+          `the world was restored, the accounts were left alone.`
+      );
+    }
+
+    // Config files (.ini, SandboxVars, spawnregions). Older bundles may not have
+    // the dir; a failed copy is a real error and used to be swallowed.
+    const cfgSrc = path.join(work, "Server");
+    if (await exists(cfgSrc)) {
+      const cfgDest = path.join(PZ_DIR, "Server");
+      await mkdir(cfgDest, { recursive: true });
+      for (const f of await readdir(cfgSrc)) {
+        await cp(path.join(cfgSrc, f), path.join(cfgDest, f), {
+          recursive: true,
+          force: true,
+        });
+      }
+      await own(cfgDest);
+    }
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => {});
+  }
 }
