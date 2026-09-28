@@ -44,6 +44,9 @@ export function FileBrowser({
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  // Whether what's on screen is really the file, or a message about why it
+  // couldn't be read. Saving is only allowed in the first case — see viewFile.
+  const [readOk, setReadOk] = useState(false);
 
   const rootQuery = root ? `&root=${encodeURIComponent(root)}` : "";
 
@@ -53,6 +56,8 @@ export function FileBrowser({
       setFileContent(null);
       setViewingFile(null);
       setEditing(false);
+      setEditContent("");
+      setReadOk(false);
       try {
         const res = await fetch(`${endpoint}?path=${encodeURIComponent(dirPath)}${rootQuery}`);
         const data = await res.json();
@@ -70,26 +75,40 @@ export function FileBrowser({
     [endpoint, rootQuery]
   );
 
+  /**
+   * Every branch sets `editContent` and `readOk`, and neither is optional.
+   * When a read failed we used to leave `editContent` holding the *previous*
+   * file's text while still offering Edit (which only looked at the extension) —
+   * so opening a 3.7 MB `blocks.xml`, getting "File too large", then Edit + Save
+   * wrote the last file's contents over it. Cancel was worse: it loaded the
+   * literal "Error: …" string into the buffer.
+   */
   async function viewFile(filePath: string) {
+    let content: string;
+    let ok = false;
     try {
       const res = await fetch(`${endpoint}?path=${encodeURIComponent(filePath)}&action=read${rootQuery}`);
       const data = await res.json();
       if (data.content !== undefined) {
-        setFileContent(data.content);
-        setEditContent(data.content);
-        setViewingFile(filePath);
-      } else if (data.error) {
-        setFileContent(`Error: ${data.error}`);
-        setViewingFile(filePath);
+        content = data.content;
+        ok = true;
+      } else {
+        content = `Error: ${data.error || "Failed to read file"}`;
       }
     } catch {
-      setFileContent("Failed to read file");
-      setViewingFile(filePath);
+      content = "Failed to read file";
     }
+    // All four together, from this call's `filePath`, so the save buffer can never
+    // belong to a different file than the one named in `viewingFile`.
+    setViewingFile(filePath);
+    setFileContent(content);
+    setEditContent(ok ? content : "");
+    setReadOk(ok);
   }
 
   async function saveFile() {
-    if (!viewingFile) return;
+    // readOk, not just viewingFile: never write a buffer that isn't this file's.
+    if (!viewingFile || !readOk) return;
     setSaving(true);
     try {
       const res = await fetch(endpoint, {
@@ -143,9 +162,12 @@ export function FileBrowser({
   // `lua` matters: Project Zomboid keeps its sandbox preset and spawn regions in
   // <name>_SandboxVars.lua and <name>_spawnregions.lua, and those are the only
   // place to change loot, XP or zombie settings — there is no .ini equivalent.
-  const isEditable = viewingFile
-    ? /\.(properties|json|yml|yaml|toml|txt|cfg|conf|ini|log|csv|md|xml|lua)$/i.test(viewingFile)
-    : false;
+  // `readOk` as well as the extension: a file whose read failed is not editable,
+  // because there is nothing correct to save back over it.
+  const isEditable =
+    viewingFile && readOk
+      ? /\.(properties|json|yml|yaml|toml|txt|cfg|conf|ini|log|csv|md|xml|lua)$/i.test(viewingFile)
+      : false;
 
   return (
     <div className="rounded-2xl bg-card/70 p-4 ring-1 ring-foreground/10 backdrop-blur" style={{ ["--tint" as string]: tint }}>
@@ -216,7 +238,7 @@ export function FileBrowser({
             </>
           )}
           {viewingFile && (
-            <Button size="sm" variant="outline" onClick={() => { setFileContent(null); setViewingFile(null); setEditing(false); }}>
+            <Button size="sm" variant="outline" onClick={() => { setFileContent(null); setViewingFile(null); setEditing(false); setEditContent(""); setReadOk(false); }}>
               <X className="h-3.5 w-3.5" /> Close
             </Button>
           )}
