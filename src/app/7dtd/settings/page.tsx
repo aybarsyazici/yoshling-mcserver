@@ -8,36 +8,40 @@ import { PhotoFooter } from "@/components/photo-footer";
 import { SdtdAllSettings } from "@/components/sdtd-all-settings";
 import { SdtdWorldUpload } from "@/components/sdtd-world-upload";
 import { SdtdMaintenance } from "@/components/sdtd-maintenance";
+import { MemoryCard } from "@/components/memory-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { GAMES } from "@/lib/games";
 
+/**
+ * Only the fields this page can actually change.
+ *
+ * **Difficulty and Day length used to be here and were deleted**, along with the
+ * `DIFFICULTY` preset list. They rendered a Select and a slider for
+ * `GameDifficulty` / `DayNightLength`, XML properties that **do not exist** on this
+ * server: measured 2026-09-29, the live `sdtdserver.xml` has 69 `<property>` entries
+ * and neither of those is among them — modern 7DTD folds both into the sandbox preset,
+ * i.e. into Sandbox code. So setting a difficulty stored a number in the DB, produced
+ * an amber "that setting had no effect in-game" toast, and then kept displaying the
+ * value it had not applied. The API has reported them as `skipped` for a while; the
+ * controls simply never read it.
+ *
+ * The DB columns and the route's `XML_KEYS` entries **stay** on purpose: the
+ * `SevenDaysConfig` row is the only config that survives a fresh SteamCMD install, and
+ * the route still writes those keys whenever the property does turn out to exist.
+ *
+ * `version` and `maxMemory` are also gone from this interface. They were clamped,
+ * stored and read by nothing — `/api/7dtd/update` reads the Steam branch off compose,
+ * not off this row, and 7DTD is a native server with no JVM heap to set. The four DB
+ * columns stay (dropping them needs a hand-applied production migration).
+ */
 interface SdtdConfig {
   serverName: string;
   password: string;
   maxPlayers: number;
-  gameDifficulty: number;
-  dayLength: number;
-  version: string;
-  maxMemory: string;
   sandboxCode: string;
 }
-
-const DIFFICULTY = [
-  { v: 1, label: "Scavenger (easiest)" },
-  { v: 2, label: "Adventurer" },
-  { v: 3, label: "Nomad" },
-  { v: 4, label: "Warrior" },
-  { v: 5, label: "Survivalist (hardest)" },
-];
 
 export default function SevenDtdSettings() {
   const tint = GAMES["7dtd"].tint;
@@ -45,10 +49,6 @@ export default function SevenDtdSettings() {
     serverName: "Yoshling 7DTD",
     password: "",
     maxPlayers: 8,
-    gameDifficulty: 2,
-    dayLength: 60,
-    version: "stable",
-    maxMemory: "5G",
     sandboxCode: "",
   });
   const [loading, setLoading] = useState(true);
@@ -63,10 +63,6 @@ export default function SevenDtdSettings() {
             serverName: data.serverName ?? "Yoshling 7DTD",
             password: data.password ?? "",
             maxPlayers: data.maxPlayers ?? 8,
-            gameDifficulty: data.gameDifficulty ?? 2,
-            dayLength: data.dayLength ?? 60,
-            version: data.version ?? "stable",
-            maxMemory: data.maxMemory ?? "5G",
             sandboxCode: data.sandboxCode ?? "",
           });
         }
@@ -129,7 +125,11 @@ export default function SevenDtdSettings() {
                 />
               </Field>
 
-              <Field label="Max players" hint="1–16 (mind the 8 GB box)">
+              {/* `max={16}` is a player count, not gigabytes — the hint used to read
+                  "1–16 (mind the 8 GB box)", a figure that was wrong twice over: it is a
+                  16 GB box, and the number is derived by `maxGameGb()` rather than
+                  hardcoded anywhere. */}
+              <Field label="Max players" hint="1–16">
                 <Input
                   type="number"
                   min={1}
@@ -137,39 +137,6 @@ export default function SevenDtdSettings() {
                   value={config.maxPlayers}
                   onChange={(e) => set("maxPlayers", parseInt(e.target.value) || 1)}
                 />
-              </Field>
-
-              <Field label="Difficulty">
-                <Select value={String(config.gameDifficulty)} onValueChange={(v) => v && set("gameDifficulty", parseInt(v))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DIFFICULTY.map((d) => (
-                      <SelectItem key={d.v} value={String(d.v)}>
-                        {d.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-
-              <Field label="Day length" hint="Real minutes per in-game day">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={10}
-                    max={120}
-                    step={5}
-                    value={config.dayLength}
-                    onChange={(e) => set("dayLength", parseInt(e.target.value))}
-                    className="flex-1 accent-[var(--tint)]"
-                    style={{ accentColor: tint }}
-                  />
-                  <span className="w-16 text-right font-mono text-sm font-semibold" style={{ color: tint }}>
-                    {config.dayLength} min
-                  </span>
-                </div>
               </Field>
 
               {/* Sandbox code spans both columns — it's long and important. */}
@@ -185,7 +152,7 @@ export default function SevenDtdSettings() {
                   style={{ ["--tw-ring-color" as string]: `color-mix(in oklab, ${tint} 45%, transparent)` }}
                 />
                 <p className="text-xs text-muted-foreground">
-                  The game&rsquo;s difficulty/loot/XP preset. In 7DTD: <span className="text-foreground">New Game → Sandbox Options</span>, adjust settings, then <span className="text-foreground">Copy Code</span> and paste it here.
+                  The game&rsquo;s difficulty/loot/XP preset, and <span className="text-foreground">the only place difficulty and day length can be set</span> — current 7DTD versions fold both into this code rather than exposing them as server properties. In 7DTD: <span className="text-foreground">New Game → Sandbox Options</span>, adjust settings, then <span className="text-foreground">Copy Code</span> and paste it here.
                 </p>
               </div>
             </div>
@@ -199,6 +166,15 @@ export default function SevenDtdSettings() {
           </div>
         </Reveal>
       )}
+
+      {/* Mounted even though 7DTD has no memory setting.
+          `/api/games/memory?game=7dtd` has always returned a fully-formed
+          `supported: false` plus the sentence explaining why (a Unity native server, no
+          JVM heap to size), and 7DTD was the one settings page of three that did not
+          render it — so an absent card read as "the feature is missing here" rather than
+          "it does not apply here". The card's own `supported` branch shows the reason
+          with no control; do NOT invent a slider for it. */}
+      <MemoryCard game="7dtd" tint={tint} />
 
       <SdtdMaintenance tint={tint} />
 

@@ -6,9 +6,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
-import { RUNTIME, withGameStopped } from "@/lib/game-manager";
-import { refuseIfPreempted, runOperation, type OperationFact } from "@/lib/operations";
-import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { containerIsRunning, RUNTIME, withGameStopped } from "@/lib/game-manager";
+import { sdtdSaveWorld } from "@/lib/telnet";
+import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
+import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
 
 export const maxDuration = 300;
@@ -32,6 +33,14 @@ interface Manifest {
   createdAt: string;
   gameWorld: string; // value of GameWorld at backup time
   includesWorldMap: boolean; // true if GeneratedWorlds/<gameWorld> was bundled
+  /**
+   * Whether the server was asked to write its save out before the copy.
+   *
+   * `false` = the server was stopped, so there was nothing to flush and the files on
+   * disk were already at rest. `undefined` = an archive from before this was recorded,
+   * i.e. genuinely unknown rather than "no".
+   */
+  flushed?: boolean;
 }
 
 /**
@@ -156,6 +165,15 @@ export async function POST(request: NextRequest) {
         async (op) => {
           await mkdir(BACKUP_DIR, { recursive: true });
 
+          // Ask the game to write its save out before we copy it. No `create` path used
+          // to do this, though every driver exposes a save and the *restore* paths all
+          // use one, so a backup taken while people played copied files the server was
+          // still midway through writing.
+          //
+          // Flush only — deliberately no `save-off` equivalent, because 7DTD has none.
+          // Inventing a command that silently fails is the defect class being cleaned up.
+          const flushed = await flushSaves(op);
+
           // Determine the active world from the config.
           let xml = "";
           try { xml = await readFile(XML_PATH, "utf-8"); } catch {}
@@ -201,7 +219,15 @@ export async function POST(request: NextRequest) {
           if (xml) await writeFile(path.join(work, "sdtdserver.xml"), xml, "utf-8");
 
           // 4) manifest
-          const manifest: Manifest = { createdAt: new Date().toISOString(), gameWorld, includesWorldMap };
+          // `flushed` goes in the manifest so a restore can say whether this archive came
+          // from a quiesced world rather than leaving that to be assumed. Older bundles
+          // have no such key, which reads as `undefined` — honestly "unknown".
+          const manifest: Manifest = {
+            createdAt: new Date().toISOString(),
+            gameWorld,
+            includesWorldMap,
+            flushed,
+          };
           await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
 
           const filename = `7dtd-${gameWorld || "world"}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -230,6 +256,10 @@ export async function POST(request: NextRequest) {
           facts.push({
             label: "World map",
             value: includesWorldMap ? "included" : "not needed (stock world)",
+          });
+          facts.push({
+            label: "Saves flushed first",
+            value: flushed ? "yes" : "not needed — the server was not running",
           });
           return {
             facts,
@@ -305,6 +335,14 @@ export async function POST(request: NextRequest) {
   if (action === "delete") {
     const name = safeBackupName(backupName);
     if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
+
+    // The lane, for the same reason the config endpoints take it: deleting an archive
+    // while a restore reads it, or while a create writes into this directory, is the
+    // case worth refusing. An `rm` is sub-second, so it gets the lane rather than a
+    // `runOperation` record — a strip row and a completion toast for it would be noise.
+    const laneBusy = fileLaneBusy("7dtd");
+    if (laneBusy) return laneBusy;
+
     try {
       await rm(path.join(BACKUP_DIR, name));
       return NextResponse.json({ success: true });
@@ -314,6 +352,39 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+/**
+ * Ask 7DTD to write its save to disk before the copy, over telnet.
+ *
+ * Returns whether the flush was asked for at all — `false` means the container is not
+ * running, which is a `noop` step rather than a failure. A telnet failure is recorded as
+ * a warn and does NOT abort: a torn archive beats no archive, and an unreachable server
+ * is exactly when someone wants a backup.
+ *
+ * No `save-off`: 7DTD has no such command, so there is nothing to pause and nothing to
+ * re-enable in a `finally`.
+ */
+async function flushSaves(op: OpHandle): Promise<boolean> {
+  op.step("Flushing the saves to disk");
+  if (!(await containerIsRunning("7dtd").catch(() => false))) {
+    op.settle("The server is not running — nothing to flush", { kind: "noop" });
+    return false;
+  }
+  const t0 = Date.now();
+  try {
+    await sdtdSaveWorld();
+    op.settle(`Flushed the saves — ${Date.now() - t0} ms`);
+    return true;
+  } catch (e) {
+    op.settle("Could not flush the saves — the server did not answer over telnet");
+    op.fact({
+      label: "Save flush",
+      value: `failed (${(e as Error).message}) — the archive may be torn`,
+      verdict: "warn",
+    });
+    return true;
+  }
 }
 
 /**

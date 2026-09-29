@@ -1,8 +1,26 @@
-import { writeFile, unlink, readdir } from "fs/promises";
+import { writeFile, unlink } from "fs/promises";
 import path from "path";
 import { db } from "./db";
 import { getProjectVersions, type ModrinthVersion } from "./modrinth";
 import { getModsDir } from "./server-manager";
+
+/**
+ * Every Activity row this module writes carries `game: "minecraft"` in its `details`
+ * blob, matching the wording 7DTD's and PZ's routes already use.
+ *
+ * It was missing, and one omission broke two features in opposite directions.
+ * `/api/activity` deliberately keeps *untagged* rows visible (role changes and
+ * whitelist edits are genuinely shared), so an untagged mod install leaked to a MOD
+ * granted only `zomboid`. And `/minecraft/page.tsx` selects
+ * `details: { contains: "minecraft" }`, so Minecraft's own recent-activity panel could
+ * never show a mod install at all. Minecraft's *properties* route already tagged its
+ * rows, which is what makes this drift rather than policy. Both symptoms fix
+ * themselves here, with no reader change.
+ *
+ * Rows written before this are still untagged. Nothing is lost; they stay visible to
+ * everyone and stay absent from the Minecraft panel.
+ */
+const GAME = "minecraft";
 
 export async function installMod(params: {
   modrinthId: string;
@@ -41,7 +59,7 @@ export async function installMod(params: {
     data: {
       userId,
       action: "install_mod",
-      details: JSON.stringify({ modName: name, version: version.version_number }),
+      details: JSON.stringify({ game: GAME, modName: name, version: version.version_number }),
     },
   });
 }
@@ -65,7 +83,7 @@ export async function removeMod(modId: string, userId: string): Promise<void> {
     data: {
       userId,
       action: "remove_mod",
-      details: JSON.stringify({ modName: mod.name, version: mod.version }),
+      details: JSON.stringify({ game: GAME, modName: mod.name, version: mod.version }),
     },
   });
 }
@@ -161,6 +179,7 @@ export async function updateMod(
       userId,
       action: "update_mod",
       details: JSON.stringify({
+        game: GAME,
         modName: mod.name,
         fromVersion: mod.version,
         toVersion: newVersion.version_number,

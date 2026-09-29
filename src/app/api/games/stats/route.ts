@@ -5,7 +5,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { readFile } from "fs/promises";
 import { isGameId } from "@/lib/games";
-import { RUNTIME } from "@/lib/game-manager";
+import { containerIsRunning, RUNTIME } from "@/lib/game-manager";
 
 const execAsync = promisify(exec);
 
@@ -39,15 +39,27 @@ export async function GET(request: NextRequest) {
   const container = RUNTIME[game].container;
   const history = await getHistory(game);
 
+  // `offline` is decided by asking the container, not by the shape of `docker stats`.
+  //
+  // This used to be `parts.length < 5`, on the belief that `docker stats` returns a
+  // short line for a container that is not running. It does not: measured on the box
+  // 2026-09-29 against the stopped `yoshling-mc`, that exact format string printed
+  // `0.00%|0B / 0B|0.00%|0B / 0B|0` and exited 0 — five populated fields. So the
+  // branch was unreachable, `offline` was ALWAYS false, and the Monitor pane rendered
+  // "Live · refreshes every 5s" with a pulsing dot over a flat line of zeros. Two of
+  // the three worlds are stopped at any moment, so this was the normal reading.
+  const running = await containerIsRunning(game).catch(() => false);
+
   try {
     const { stdout: statsRaw } = await execAsync(
       `timeout 3 docker stats ${container} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.PIDs}}" 2>/dev/null`
     );
 
     const parts = statsRaw.trim().split("|");
-    if (parts.length < 5) {
+    if (!running || parts.length < 5) {
       // Container is off — still return disk/host info + history so the graph
-      // shows the last session rather than an error.
+      // shows the last session rather than an error. `parts.length < 5` is kept as a
+      // belt-and-braces guard for a `docker stats` that genuinely fails or times out.
       const host = await getHostStats();
       return NextResponse.json({
         offline: true,

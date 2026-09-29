@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Folder, FileText, CornerLeftUp, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 
@@ -305,10 +306,14 @@ export function FileBrowser({
   );
 }
 
-function formatSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
+/**
+ * One formatter for every byte count in the app.
+ *
+ * This was a local copy that divided by 1024 and labelled the result "KB/MB/GB" — the
+ * exact bug `format.ts`'s docstring records fixing, still live here. The consequence was
+ * that the same archive read "165 MiB" on the backups page and "165.3 MB" in the file
+ * browser, so the two views of one file disagreed by ~5% and neither was obviously wrong.
+ * `format.ts` stays binary on purpose (`du -h` on the box agrees); what the copy got
+ * wrong was the label, not the arithmetic.
+ */
+const formatSize = formatBytes;

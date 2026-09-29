@@ -19,6 +19,21 @@ export async function register() {
 
     async function collectFor(game: string, container: string) {
       try {
+        // Record nothing while the container is stopped.
+        //
+        // `docker stats` on an exited container does NOT fail and does NOT return a
+        // short line — measured 2026-09-29 against the stopped `yoshling-mc`, it prints
+        // `0.00%|0B / 0B|0.00%|0B / 0B|0` and exits 0. So this loop was faithfully
+        // appending {cpu: 0, memory: 0} every 5s for every stopped world, and within
+        // 30 minutes of a stop all 360 retained points were zeros. `/api/games/stats`
+        // then serves that as "the last session", which is what its comment promises
+        // and what the Monitor's offline banner says it is showing — both of which were
+        // false. An `inspect` is cheap and is the same question the stats route asks.
+        const { stdout: state } = await execAsync(
+          `docker inspect -f "{{.State.Running}}" ${container} 2>/dev/null`
+        );
+        if (state.trim() !== "true") return;
+
         const { stdout } = await execAsync(
           `docker stats ${container} --no-stream --format "{{.CPUPerc}}|{{.MemPerc}}" 2>/dev/null`
         );

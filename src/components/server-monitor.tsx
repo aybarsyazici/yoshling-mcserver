@@ -12,10 +12,19 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { GAMES, type GameId } from "@/lib/games";
-import { AnimatedNumber } from "@/components/motion";
-import { Cpu, MemoryStick, HardDrive, Network, Activity, Server } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive, Network } from "lucide-react";
 
 interface Stats {
+  /**
+   * The container is not running, so every number below is a zero and the curve is
+   * history rather than a live reading.
+   *
+   * Decided server-side from `docker inspect`, deliberately — this pane and the stats
+   * route must never disagree about whether what you are looking at is live. The route
+   * used to infer it from the *shape* of `docker stats` output, which for a stopped
+   * container is five populated zero-fields, so this was always `false` and the pane
+   * always claimed "Live".
+   */
   offline?: boolean;
   container: { cpu: string; memory: string; memoryPercent: string; network: string; processes: string };
   host: { disk: { used: string; total: string; percent: string }; uptime: string | null };
@@ -99,9 +108,23 @@ export function ServerMonitor({ game = "minecraft" }: { game?: GameId }) {
             )}
             <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: offline ? "var(--muted-foreground)" : meta.tint }} />
           </span>
-          {offline ? "Server offline — showing last session" : "Live · refreshes every 5s"}
+          {offline
+            ? history.length > 0
+              ? `${meta.name} is stopped — the graph is its last recorded session, not a live reading`
+              : `${meta.name} is stopped, and nothing was recorded while it last ran`
+            : "Live · refreshes every 5s"}
         </p>
       </div>
+
+      {/* The x-axis is wall-clock times with no gap marker, so a historic curve is
+          indistinguishable from a live one by looking at it. Say which it is, next to
+          the numbers, rather than only in the line above the charts. */}
+      {offline && history.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Times on the axis are when those readings were taken, which may be a while ago.
+          The gauges below read zero because the container is not running.
+        </p>
+      )}
 
       {/* Charts */}
       <div className="grid gap-4 lg:grid-cols-2">

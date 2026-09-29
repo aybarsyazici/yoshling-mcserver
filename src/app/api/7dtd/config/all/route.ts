@@ -6,13 +6,17 @@ import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
-import { RUNTIME } from "@/lib/game-manager";
 
 // The full sdtdserver.xml, exposed generically: read every <property>, keep its
 // trailing comment as help text, and write back any subset the UI sends. This
 // adapts automatically to whatever properties the server file actually has,
 // rather than hardcoding the ~69 keys.
-const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || RUNTIME["7dtd"].dir, "sdtdserver.xml");
+//
+// The fallback is `/sevendtd-config`, matching the five other readers of this variable.
+// It used to fall back to `RUNTIME["7dtd"].dir`, which is `/sevendtd` — the **saves**
+// volume, where there is no `sdtdserver.xml` at all (verified on the box 2026-09-29).
+// Latent only because SDTD_CONFIG_DIR is set in production.
+const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml");
 
 export interface SdtdProperty {
   name: string;
