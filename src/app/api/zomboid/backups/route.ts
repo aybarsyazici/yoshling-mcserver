@@ -63,6 +63,10 @@ async function exists(p: string): Promise<boolean> {
  * that cost lands on the backups page's first paint. The in-tar copy stays as the
  * fallback for every archive written before the sidecar existed, and as the thing that
  * keeps an archive self-describing once it has been copied off the box.
+ *
+ * The fallback **fills the sidecar in**, so archives that predate this get the speed-up
+ * on their second listing rather than never. Best-effort: a write that fails changes
+ * nothing, and only a manifest that actually parsed is ever cached.
  */
 async function backupManifest(file: string): Promise<Manifest | null> {
   const target = path.join(BACKUP_DIR, file);
@@ -75,7 +79,9 @@ async function backupManifest(file: string): Promise<Manifest | null> {
       const { stdout } = await execFileAsync("tar", ["-xzOf", target, member], {
         maxBuffer: 1024 * 1024,
       });
-      return JSON.parse(stdout);
+      const parsed: Manifest = JSON.parse(stdout);
+      await writeManifestSidecar(target, parsed);
+      return parsed;
     } catch {
       /* try the other spelling */
     }

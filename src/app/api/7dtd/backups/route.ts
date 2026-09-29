@@ -74,6 +74,10 @@ function readGameWorld(xml: string): string {
  *
  * The in-tar copy is not going anywhere — it is what makes an archive self-describing
  * after it has been copied off the box, which the sidecar cannot be.
+ *
+ * The fallback **fills the sidecar in**, so the nine archives that predate this get the
+ * speed-up on their second listing rather than never. Best-effort: a write that fails
+ * changes nothing, and only a manifest that actually parsed is ever cached.
  */
 async function backupManifest(file: string): Promise<Manifest | null> {
   const target = path.join(BACKUP_DIR, file);
@@ -86,7 +90,9 @@ async function backupManifest(file: string): Promise<Manifest | null> {
       const { stdout } = await execFileAsync("tar", ["-xzOf", target, member], {
         maxBuffer: 1024 * 1024,
       });
-      return JSON.parse(stdout);
+      const parsed: Manifest = JSON.parse(stdout);
+      await writeManifestSidecar(target, parsed);
+      return parsed;
     } catch {
       /* try the other spelling */
     }
