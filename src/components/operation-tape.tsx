@@ -55,7 +55,15 @@ export function OperationTape({
 }) {
   return (
     <div
-      className="relative max-h-[min(50vh,340px)] overflow-y-auto pr-1 sm:max-h-[min(42vh,340px)]"
+      /* Focusable because it scrolls. Nine settled steps clip at 340px and every
+         descendant is a `<p>`, `<span>` or `<time>`, so a keyboard-only user had no way
+         to reach the earlier steps at all — the evidence the tape exists to show.
+         (axe `scrollable-region-focusable`, WCAG 2.1.1.) `aria-live="off"` stays: this
+         is a region you go and read, not one that should announce itself. */
+      tabIndex={0}
+      role="group"
+      aria-label={`${op.title} — steps`}
+      className="relative max-h-[min(50vh,340px)] overflow-y-auto pr-1 outline-none focus-visible:ring-1 focus-visible:ring-ring sm:max-h-[min(42vh,340px)]"
       style={{ overflowAnchor: "auto" }}
       aria-live="off"
     >
@@ -86,6 +94,7 @@ export function OperationTape({
                 quietMs={quietMs}
                 beatTick={beatTick}
                 progress={op.progress}
+                synthetic={op.synthetic === true}
               />
             </li>
           );
@@ -110,6 +119,7 @@ function StepRow({
   quietMs,
   beatTick,
   progress,
+  synthetic,
 }: {
   step: OpStepView;
   live: boolean;
@@ -120,22 +130,35 @@ function StepRow({
   quietMs: number;
   beatTick: number;
   progress: OperationView["progress"];
+  /** A projected boot: no heartbeat of its own, so "quiet" means something else. */
+  synthetic: boolean;
 }) {
   const tint = step.game ? GAMES[step.game].tint : "var(--primary)";
   const durationMs = live ? Math.max(0, now - step.at) : Math.max(0, (step.endedAt ?? step.at) - step.at);
   const gap = live ? gapPx(elapsedMs / 1000) : gapPx(durationMs / 1000);
-  const quiet = live && quietMs > 30_000;
+  /**
+   * 30s is 1.5x the server's heartbeat interval — one missed beat is not yet an
+   * accusation. A **synthetic** boot has no heartbeat: its signal is the last log line,
+   * and during a 17 GB SteamCMD fetch or a Minecraft world load that line legitimately
+   * sits unchanged for minutes. Claiming "no response from the server" there is a claim
+   * about something we never measured, so the threshold is longer and the sentence is
+   * about the log, which is what was actually observed.
+   */
+  const quiet = live && quietMs > (synthetic ? 150_000 : 30_000);
 
-  // Only trouble gets colour. A settled "done" row is the neutral default because
-  // the absence of alarm is the message.
+  // Only trouble gets colour, and never colour alone — the `sr-only` words below carry
+  // the same distinction, because `textClass` and the ✕/▲ marks are invisible to a
+  // screen reader and to a red/green deficiency.
   const textClass =
     step.kind === "failed"
-      ? "text-destructive"
+      ? "op-bad"
       : step.kind === "noop"
-      ? "text-chart-5"
+      ? "op-warn"
       : live
       ? "text-foreground"
       : "text-muted-foreground";
+  const severity =
+    step.kind === "failed" ? "failed" : step.kind === "noop" ? "no change" : undefined;
 
   const detail =
     live && progress.kind === "fraction" && !step.detail
@@ -152,26 +175,38 @@ function StepRow({
           ) : (
             // A tick crossing the rail, not a round dot: /activity uses round dots
             // for things a *person* did, and merging the marks merges two kinds of fact.
+            // 2px × 9px, not 1px × 7px at 55%: one device pixel of #9ac68e over a
+            // #e8ebf0 wash does not perceptibly cross a rail that is itself only
+            // `foreground 12%`, so the tape read as an unmarked indented list with a
+            // stray hairline beside it. Trouble still steps up to 3px.
             <span
-              className="h-px w-[7px]"
               style={{
                 background:
                   step.kind === "failed"
                     ? "var(--destructive)"
                     : step.kind === "noop"
                     ? "var(--chart-5)"
-                    : `color-mix(in oklab, ${tint} 55%, transparent)`,
-                height: step.kind === "done" ? "1px" : "2px",
+                    : `color-mix(in oklab, ${tint} 80%, transparent)`,
+                height: step.kind === "done" ? "2px" : "3px",
+                width: step.kind === "done" ? "9px" : "11px",
               }}
             />
           )}
         </span>
 
         <div className="min-w-0 flex-1">
-          <p className={cn("flex items-baseline gap-2 text-[13px] leading-4", textClass)}>
+          <p
+            className={cn("flex items-baseline gap-2 text-[13px] leading-4", textClass)}
+            title={severity ? `${severity} — ${step.label}` : undefined}
+          >
             <span className="min-w-0 flex-1 truncate">
               {step.kind === "noop" && <span aria-hidden>▲ </span>}
               {step.kind === "failed" && <span aria-hidden>✕ </span>}
+              {/* The ✕/▲ marks and `textClass` are both invisible to a screen reader, so
+                  a failed step and a successful one were textually identical — and a
+                  failed step keeps its present-tense running label ("Stopping the
+                  container"), which made it worse. */}
+              {severity && <span className="sr-only">{severity} — </span>}
               {step.label}
               {step.count && (
                 <span className="ml-1.5 font-mono text-[11px] tabular-nums opacity-80">
@@ -194,8 +229,10 @@ function StepRow({
             {!live && <span className="sr-only">took {spellDuration(durationMs)}</span>}
           </p>
           {quiet ? (
-            <p className="mt-0.5 truncate font-mono text-[11px] text-chart-5">
-              No response from the server for {Math.round(quietMs / 1000)}s
+            <p className="op-warn mt-0.5 truncate font-mono text-[11px]">
+              {synthetic
+                ? `The log hasn't moved for ${Math.round(quietMs / 1000)}s`
+                : `No response from the server for ${Math.round(quietMs / 1000)}s`}
             </p>
           ) : detail ? (
             <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</p>

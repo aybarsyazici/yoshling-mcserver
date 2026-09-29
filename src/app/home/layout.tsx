@@ -23,7 +23,11 @@ export default async function HomeLayout({ children }: { children: React.ReactNo
           refresh-surviving operation feedback at all. `MissionControl` narrated
           itself from local React state that vanished on reload. CLAUDE.md said the
           banner was on every page; it was not. */}
-      <OperationLedger />
+      {/* `HomeChrome` above and `<main>` below are both `max-w-5xl … sm:px-6`, so the
+          strip has to share that column — the default (`DashShell`'s `max-w-6xl …
+          lg:px-8`) put its glyph and clock 56px outside the content edge on the one page
+          whose whole identity is axial symmetry around the Power Core. */}
+      <OperationLedger className="mx-auto w-full max-w-5xl px-4 sm:px-6" />
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 sm:px-6 lg:py-16">
         {children}
       </main>

@@ -2,7 +2,7 @@
 // cannot drift on what "blocked" means or on what to say about it.
 
 import { GAMES, type GameId } from "@/lib/games";
-import { formatElapsed, liveStep, type OperationView } from "@/lib/operations-types";
+import { formatElapsed, liveStep, lowerFirst, type OperationView } from "@/lib/operations-types";
 
 /**
  * What is stopping this world's power buttons from working right now.
@@ -27,9 +27,15 @@ export function fileOperations(ops: OperationView[], game: GameId): OperationVie
   );
 }
 
-/** "Creating a backup (3m 21s)" — for a disabled control's stated reason. */
+/**
+ * "creating a backup (3m 21s)" — for a disabled control's stated reason.
+ *
+ * `lowerFirst`, not `toLowerCase()`: two of these titles embed a proper noun, and the
+ * whole-string version produced "updating 7 days to die" and "changing project
+ * zomboid's memory setting".
+ */
 export function fileOperationLabel(op: OperationView, elapsedMs: number): string {
-  return `${op.title.toLowerCase()} (${formatElapsed(elapsedMs)})`;
+  return `${lowerFirst(op.title)} (${formatElapsed(elapsedMs)})`;
 }
 
 /**
@@ -38,6 +44,12 @@ export function fileOperationLabel(op: OperationView, elapsedMs: number): string
  * A disabled control that does not say why is the same failure as a silent
  * operation, so this always names the world, the work and how long it has been
  * going.
+ *
+ * The stage is a **separate sentence**, in its own case. It used to be spliced in
+ * lowercased after an em dash, which was harmless while stages were generic strings
+ * ("Saving and stopping the server") and stopped being harmless the moment they became
+ * step labels that name worlds: "Project Zomboid is starting up — saving project
+ * zomboid (12s)".
  */
 export function blockedReason(op: OperationView, elapsedMs: number): string {
   const name = op.game ? GAMES[op.game].name : "The server";
@@ -51,9 +63,9 @@ export function blockedReason(op: OperationView, elapsedMs: number): string {
         : op.action === "restart"
         ? "restarting"
         : "busy";
-    return `${name} is ${verb}${stage ? ` — ${stage.toLowerCase()}` : ""} (${formatElapsed(
-      elapsedMs
-    )}). Controls unlock when it finishes.`;
+    return `${name} is ${verb} (${formatElapsed(elapsedMs)}).${
+      stage ? ` ${stage}.` : ""
+    } Controls unlock when it finishes.`;
   }
   return `Locked while ${name} is being worked on — ${fileOperationLabel(op, elapsedMs)}.`;
 }

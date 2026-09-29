@@ -147,7 +147,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
                   key={g.id}
                   href={g.base}
                   onClick={() => setMobileOpen(false)}
-                  title={g.name}
+                  title={`${g.name}${busyWorlds.has(g.id) ? " — working" : on ? " — online" : ""}`}
                   className={cn(
                     "group relative flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-2 text-xs font-medium transition-all",
                     collapsed && "justify-center px-0",
@@ -159,25 +159,37 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
                       : undefined
                   }
                 >
+                  {/* "Working" is a 2px bar down the row's leading edge, in the power-bus
+                      vernacular this product already owns — NOT a change of corner radius
+                      on the online dot. The first version swapped a 6px `rounded-full`
+                      for a 6px square of the same colour in the same place: a corner
+                      radius is below perceptual threshold at that size, and it also
+                      *replaced* the online dot, so the sidebar silently stopped saying
+                      the world was up in exchange for a signal nobody could see. Both
+                      marks now coexist, and both have text. */}
+                  {busyWorlds.has(g.id) && (
+                    <span
+                      className="absolute inset-y-1 left-0 w-0.5 rounded-full"
+                      style={{ background: g.tint, filter: `drop-shadow(0 0 4px ${g.tint})` }}
+                      aria-hidden
+                    />
+                  )}
                   <span className="relative">
                     <GameMark game={g.id} className="h-4 w-4" />
-                    {/* Square, not round, and it overrides the online dot: a collapsed
-                        strip on another world's page still has to tell you WHERE the
-                        thing you are waiting on is happening. Same 6px square as the
-                        ledger's liveness pip, so the two read as one signal. */}
-                    {busyWorlds.has(g.id) ? (
-                      <span
-                        className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 ring-2 ring-sidebar"
-                        style={{ background: g.tint, filter: `drop-shadow(0 0 4px ${g.tint})` }}
-                      />
-                    ) : on ? (
+                    {on && (
                       <span
                         className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-sidebar"
                         style={{ background: g.tint }}
+                        aria-hidden
                       />
-                    ) : null}
+                    )}
                   </span>
                   {!collapsed && <span className="truncate">{g.short}</span>}
+                  {/* The only text either marker has ever had. Without it the whole
+                      signal was absent from assistive tech and from hover. */}
+                  <span className="sr-only">
+                    {busyWorlds.has(g.id) ? " — working" : on ? " — online" : ""}
+                  </span>
                 </Link>
               );
             })}

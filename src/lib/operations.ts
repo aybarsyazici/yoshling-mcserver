@@ -39,6 +39,7 @@ import { GAME_LIST, GAMES, type GameId } from "@/lib/games";
 import {
   OPERATION_STALE_MS,
   formatElapsed,
+  lowerFirst,
   type OperationFact,
   type OperationKind,
   type OperationProgress,
@@ -178,19 +179,64 @@ interface Entry {
   error?: string;
 }
 
-const LIVE = new Map<string, Entry>();
+/**
+ * The registry is pinned to `globalThis`, the same way `src/lib/db.ts` pins Prisma.
+ *
+ * Module-level `const LIVE = new Map()` is NOT one instance here. Next builds route
+ * handlers, server components and `instrumentation.ts` into separate module graphs,
+ * so each layer gets its own copy of this file's module scope — measured in this tree
+ * against `next dev`: a route handler's `listOperations()` returned the running
+ * backup while a server component's `operationsPayload()` on the same process
+ * returned `[]`, and an operation entered from `instrumentation.ts` was invisible to
+ * both. `globalThis` *is* shared across the layers, so hoisting the three mutable
+ * roots onto it collapses them back into one registry.
+ *
+ * Consequences of getting this wrong, for the record: the Project Zomboid Workshop
+ * apply runs on the instrumentation timer, so its six minutes produced no ledger row
+ * and no `busy` — the exact 2026-09-15 silence — and `DashShell`'s server-rendered
+ * seed was permanently empty, which both removed the refresh-survival property and
+ * made `CompletionToasts` prime from nothing and replay history on the first poll.
+ *
+ * NOT gated on NODE_ENV: this is not an HMR workaround, it is how the layers share
+ * state in production too.
+ */
+interface Registry {
+  live: Map<string, Entry>;
+  finished: Entry[];
+  seq: number;
+}
+const g = globalThis as unknown as { __yoshlingOperations?: Registry };
+const REGISTRY: Registry = (g.__yoshlingOperations ??= {
+  live: new Map<string, Entry>(),
+  finished: [],
+  seq: 0,
+});
+
+const LIVE = REGISTRY.live;
 
 /** Terminal records, newest last. Bounded so it cannot grow. */
-const FINISHED: Entry[] = [];
+const FINISHED = REGISTRY.finished;
 const FINISHED_MAX = 20;
+/**
+ * A clean record ages out in ten minutes. Anything that did NOT end cleanly is kept
+ * for hours, because the design rule is that a non-`ok` record never clears itself
+ * and ten minutes broke it: a restore that threw left Project Zomboid powered off
+ * (`restartOnFailure: false`, and `restart: "no"` revives nothing), and someone back
+ * at their desk fifteen minutes later found an empty strip, no toast and nothing in
+ * `/activity` — the only remaining signal being that the world was off.
+ */
 const FINISHED_TTL_MS = 10 * 60 * 1000;
+const FINISHED_TTL_BAD_MS = 6 * 60 * 60 * 1000;
+
+function finishedTtl(e: Entry): number {
+  return e.outcome === "ok" ? FINISHED_TTL_MS : FINISHED_TTL_BAD_MS;
+}
 
 const HEARTBEAT_MS = 20_000;
 
-let seq = 0;
 function nextId(kind: OperationKind): string {
-  seq += 1;
-  return `${kind.replace(/\./g, "-")}-${Date.now().toString(36)}-${seq}`;
+  REGISTRY.seq += 1;
+  return `${kind.replace(/\./g, "-")}-${Date.now().toString(36)}-${REGISTRY.seq}`;
 }
 
 function notStale(e: Entry, now = Date.now()): boolean {
@@ -211,6 +257,16 @@ export interface OperationSpec {
 
 export interface OpHandle {
   readonly id: string;
+  /**
+   * True once a power operation has been admitted *over* this one.
+   *
+   * A file operation is not cancelled — nothing here can interrupt an in-flight
+   * `cp -r` — but it can be asked, and a route that produces an artefact should ask
+   * before publishing it. The three backup-create routes throw on this, which both
+   * deletes the half-written archive (their existing `catch` does the `rm`) and makes
+   * the confirm dialog's "the archive will be incomplete and is deleted" true.
+   */
+  readonly preempted: boolean;
   /** Settle the current step (keeping its label) and open a new one. Present tense. */
   step(label: string, opts?: { game?: GameId }): void;
   /** Settle the current step with its past-tense label and a real count. */
@@ -304,6 +360,20 @@ export async function runOperation<T>(
   } finally {
     clearInterval(heart);
     entry.endedAt = Date.now();
+    // Pre-emption is EVIDENCE, not just bookkeeping.
+    //
+    // `admit()` used to set this flag and nothing anywhere read it, so a backup that a
+    // Power off ran straight through still concluded `ok` and published "Backup created
+    // — 198 MB, world map included." as a restore point, for an archive taken across a
+    // save-and-SIGKILL boundary. Recording it as a fact is what makes that impossible:
+    // `bad` for an artefact (it is not restorable), `warn` for everything else.
+    if (entry.preempted) {
+      entry.facts.push({
+        label: "Interrupted",
+        value: "a power operation ran while this was working",
+        verdict: entry.kind === "backup.create" ? "bad" : "warn",
+      });
+    }
     entry.outcome = concludeOperation(entry);
     entry.summary = summarize(entry, entry.outcome);
     // Identity-checked: only remove the record if it is still ours. An expired
@@ -318,6 +388,9 @@ export async function runOperation<T>(
 function makeHandle(entry: Entry): OpHandle {
   return {
     id: entry.id,
+    get preempted() {
+      return entry.preempted === true;
+    },
     step(label, opts) {
       settleCurrent(entry, undefined, "done");
       entry.steps.push({
@@ -337,7 +410,24 @@ function makeHandle(entry: Entry): OpHandle {
       entry.heartbeatAt = Date.now();
     },
     reject(label) {
-      settleCurrent(entry, label, "failed");
+      // A route may refuse before it has opened its first step — `/api/7dtd/reset`
+      // validates `GameWorld` before touching anything. With no step to settle this
+      // used to record nothing at all, which `concludeOperation` read as "finished and
+      // checked nothing" → `unverified`, so a *rejected* request got a summary telling
+      // the user to go and inspect a world list. Record the refusal as its own failed
+      // step instead.
+      if (!current(entry)) {
+        entry.steps.push({
+          id: `${entry.id}:${entry.steps.length}`,
+          label,
+          kind: "failed",
+          game: entry.game ?? undefined,
+          at: Date.now(),
+          endedAt: Date.now(),
+        });
+      } else {
+        settleCurrent(entry, label, "failed");
+      }
       entry.heartbeatAt = Date.now();
     },
     detail(line) {
@@ -354,6 +444,24 @@ function makeHandle(entry: Entry): OpHandle {
       entry.heartbeatAt = Date.now();
     },
   };
+}
+
+/**
+ * Refuse to publish an artefact a power operation ran through.
+ *
+ * Throwing is what makes the confirm dialog's "the archive will be incomplete and is
+ * deleted" TRUE: the three backup-create routes already `rm(target)` in their `catch`,
+ * so this both deletes the half-written file and makes the operation conclude `failed`
+ * with a sentence naming why. Nothing here can abort an in-flight `cp -r`/`tar`; what
+ * it can do is decline to hand back a torn archive the backups list would then offer
+ * as a restore point.
+ */
+export function refuseIfPreempted(op: OpHandle, what: string): void {
+  if (!op.preempted) return;
+  throw new Error(
+    `A power operation ran while ${what} was being written, so it was taken across a ` +
+      `save-and-shutdown boundary and cannot be trusted. It has been deleted.`
+  );
 }
 
 function current(entry: Entry): Step | undefined {
@@ -456,7 +564,7 @@ function conflictMessage(other: Entry, now: number): string {
       other.action === "start" ? "starting" : other.action === "stop" ? "stopping" : "restarting";
     return `${name} is already ${verb} (${ago}). Try again when it finishes.`;
   }
-  return `${name} is busy — ${other.title.toLowerCase()} (${ago}). Try again when it finishes.`;
+  return `${name} is busy — ${lowerFirst(other.title)} (${ago}). Try again when it finishes.`;
 }
 
 // ── conclusion: the honesty spine ────────────────────────────────────────────
@@ -485,11 +593,16 @@ function concludeOperation(entry: Entry): Outcome {
   // "every step is a noop" and concluded `nothing` — reporting that 142 downloaded
   // mods had changed nothing, which is its own kind of lie. Verified against the
   // in-process probe, which is how this was caught.
+  // `!madeProgress` guards BOTH clauses, not just `allNoop`. Without it on this one, a
+  // modpack apply whose "Removed the current mods" step settled 0 of 3 (a mods-dir
+  // permission error) and then installed all 166 concluded `nothing`, and the summary
+  // read "finished in 4m 12s, but nothing changed. 166 of 166 mods were installed." —
+  // self-contradictory in eight words, while 166 new jars were on disk.
   const madeProgress = steps.some((s) => (s.count?.done ?? 0) > 0);
   const allNoop = steps.length > 0 && steps.every((s) => s.kind === "noop") && !madeProgress;
-  const zeroOfSomething = steps.some(
-    (s) => s.kind === "noop" && s.count && s.count.done === 0 && (s.count.total ?? 0) > 0
-  );
+  const zeroOfSomething =
+    !madeProgress &&
+    steps.some((s) => s.kind === "noop" && s.count && s.count.done === 0 && (s.count.total ?? 0) > 0);
   if (allNoop || zeroOfSomething) return "nothing";
 
   if (steps.some((s) => s.kind === "noop")) return "partial";
@@ -517,6 +630,57 @@ function factValue(entry: Entry, label: string): string | undefined {
 
 function warnFacts(entry: Entry): OperationFact[] {
   return entry.facts.filter((f) => f.verdict === "warn");
+}
+
+/** The value of a fact only if it actually carries a `warn`. */
+function warnValue(entry: Entry, label: string): string | undefined {
+  const f = entry.facts.find((x) => x.label === label);
+  return f?.verdict === "warn" ? f.value : undefined;
+}
+
+/**
+ * Grammar for a warn fact the *template* did not select on.
+ *
+ * A fact's `value` is terse so the facts row stays scannable ("killed after 300s"),
+ * which means splicing it in after "but " produces nonsense — and worse, it lets an
+ * unrelated warn drive a sentence that makes a specific factual claim.
+ *
+ * That was not hypothetical. **Every** Project Zomboid stop ends in SIGKILL (measured,
+ * documented), so `narratedStop` always adds `Shutdown: killed after 300s` as a warn,
+ * so `concludeOperation` always returned `partial` for anything that stops PZ. The
+ * `partial` branches then fired for a reason that had nothing to do with them:
+ *
+ *   - a restore that WAS restarting the world said "Project Zomboid stayed powered off
+ *     — Power on when you're ready", one line below the code that computed `restarted`
+ *     specifically to answer that question;
+ *   - a successful memory change said "The configured and running values disagree"
+ *     while quoting two identical values — inverting the one read-back the docs call
+ *     never-wrong, next to a green toast from the same request saying the opposite;
+ *   - a fully successful 89-mod Workshop apply — the flagship operation — summarised
+ *     as the bare fragment "killed after 300s. The container is up…", losing the count
+ *     and reading as a failure.
+ *
+ * So each branch below selects on the evidence it understands, and everything else
+ * comes through here as its own trailing clause with template-supplied grammar.
+ */
+const WARN_CLAUSE: Record<string, (v: string) => string> = {
+  Shutdown: (v) => `it had to be ${v}`,
+  Interrupted: (v) => v,
+  Replaced: (v) => `it replaced ${v}`,
+  "Rollback point": (v) => v,
+  "New game name": (v) => `the new game name ${v}`,
+  "World map": (v) => `the world map is ${v}`,
+  Container: (v) => `the container reports ${v}`,
+  Build: (v) => `the build is ${v}`,
+};
+
+function sideNote(entry: Entry, understood: string[]): string {
+  const rest = warnFacts(entry).filter((f) => !understood.includes(f.label));
+  if (rest.length === 0) return "";
+  const parts = rest.map((f) =>
+    (WARN_CLAUSE[f.label] ?? ((v: string) => `${f.label.toLowerCase()}: ${v}`))(f.value)
+  );
+  return ` Also, ${parts.join("; ")}.`;
 }
 
 /**
@@ -569,7 +733,14 @@ function summarize(entry: Entry, outcome: Outcome): string {
   }
 
   if (outcome === "nothing") {
-    const what = count ? ` ${count.done} of ${count.total} ${count.noun} ${count.total === 1 ? "was" : "were"} ${pastNoun(entry)}.` : "";
+    // `count.total` is optional, so it has to be checked — "0 of undefined files" is
+    // the kind of sentence that makes a reader distrust everything else on the row.
+    const what =
+      count && count.total != null
+        ? ` ${count.done} of ${count.total} ${count.noun} ${
+            count.total === 1 ? "was" : "were"
+          } ${pastNoun(entry)}.`
+        : "";
     return `${name} — finished in ${took}, but nothing changed.${what}`;
   }
 
@@ -577,15 +748,19 @@ function summarize(entry: Entry, outcome: Outcome): string {
     case "power": {
       const past =
         entry.action === "stop" ? "stopped" : entry.action === "restart" ? "restarted" : "started";
+      // `warnValue`, not `factValue`: a CLEAN stop also records a `Shutdown` fact
+      // ("exited cleanly (code 0)"), so reading it unconditionally produced "but it had
+      // to be exited cleanly (code 0)" whenever the partial came from somewhere else.
+      const shutdown = warnValue(entry, "Shutdown");
+      if (shutdown) {
+        return `${name} — ${past} in ${took}, but it had to be ${shutdown}. ${powerSentence(
+          entry
+        )}${sideNote(entry, ["Shutdown", "Power"])}`;
+      }
       if (outcome === "partial") {
-        // A fact's `value` is terse so the facts row stays scannable, which means the
-        // template has to supply the grammar. "but killed after 300s" is not a
-        // sentence; "but it had to be killed after 300s" is.
-        const shutdown = factValue(entry, "Shutdown");
-        const why = shutdown
-          ? `it had to be ${shutdown}`
-          : warnText.toLowerCase() || "it did not go cleanly";
-        return `${name} — ${past} in ${took}, but ${why}. ${powerSentence(entry)}`;
+        return `${name} — ${past} in ${took}, but ${
+          warnText.toLowerCase() || "it did not go cleanly"
+        }. ${powerSentence(entry)}`;
       }
       return `${name} ${past} in ${took}. ${powerSentence(entry)}`;
     }
@@ -596,31 +771,55 @@ function summarize(entry: Entry, outcome: Outcome): string {
       const conf = factValue(entry, "Configured");
       const live = factValue(entry, "Container");
       if (!conf || !live) return `${name} settings applied in ${took}.`;
-      if (outcome === "partial") {
-        return `Saved ${conf}, but the container reports ${live}. The configured and running values disagree.`;
+      // Selected on the `Container` fact's OWN verdict, never on the operation-wide
+      // outcome: `recordEnvApplied` marks that one fact `warn` when and only when the
+      // compose value and the container disagree, which is the exact claim this
+      // sentence makes.
+      if (warnValue(entry, "Container") !== undefined) {
+        return `Saved ${conf}, but the container reports ${live}. The configured and running values disagree.${sideNote(
+          entry,
+          ["Container"]
+        )}`;
       }
-      return `${what ?? "The setting"} is now ${conf}. The container reports ${live}.`;
+      return `${what ?? "The setting"} is now ${conf}. The container reports ${live}.${sideNote(
+        entry,
+        ["Container", "Power"]
+      )}`;
     }
     case "backup.create": {
       const size = factValue(entry, "Size") ?? "unknown size";
-      if (outcome === "partial") {
-        const map = factValue(entry, "World map");
-        const why = map?.startsWith("not included")
-          ? "the world map isn't in it"
-          : warnText.toLowerCase() || "part of it is missing";
+      // Selected on the `World map` fact, which is the only thing that makes an
+      // archive unusable as a restore point.
+      const noMap = warnValue(entry, "World map");
+      if (noMap) {
         // Said plainly, because a 4 MB config-only archive looks entirely plausible in
         // the backups list and is the one thing you cannot restore a world from.
-        return `Backup created — ${size}, but ${why}. This is not a restore point.`;
+        return `Backup created — ${size}, but the world map isn't in it. This is not a restore point.${sideNote(
+          entry,
+          ["World map"]
+        )}`;
       }
-      return `Backup created — ${size}${factValue(entry, "World map") === "included" ? ", world map included" : ""}.`;
+      if (outcome === "partial") {
+        return `Backup created — ${size}, but ${
+          warnText.toLowerCase() || "part of it is missing"
+        }. This is not a restore point.`;
+      }
+      return `Backup created — ${size}${
+        factValue(entry, "World map") === "included" ? ", world map included" : ""
+      }.`;
     }
     case "backup.restore": {
       const from = factValue(entry, "Archive");
+      // `withGameStopped` records this specifically to answer "is the world coming
+      // back?", and it is the ONLY thing that may decide this sentence. The old code
+      // computed it and then let the operation-wide `partial` pick the branch, so every
+      // restore of a running Project Zomboid claimed it had stayed powered off.
       const restarted = factValue(entry, "Server") === "starting again";
-      if (outcome === "partial") {
-        return `${name} restored${from ? ` from ${from}` : ""}. ${name} stayed powered off — Power on when you're ready.`;
-      }
-      return `${name} restored${from ? ` from ${from}` : ""}. ${restarted ? "The server is starting again." : "The server is powered off."}`;
+      return `${name} restored${from ? ` from ${from}` : ""}. ${
+        restarted
+          ? "The server is starting again."
+          : `${name} stayed powered off — Power on when you're ready.`
+      }${sideNote(entry, ["Server", "Power"])}`;
     }
     case "backup.delete":
       return `Deleted ${factValue(entry, "Archive") ?? "the backup"}.`;
@@ -641,29 +840,54 @@ function summarize(entry: Entry, outcome: Outcome): string {
       return `Installed ${count.done} of ${count.total} ${count.noun}. Restart ${name} to load them.`;
     }
     case "mods.update": {
-      if (outcome === "partial") {
-        return `${warnText || "Some mods failed to download"}. ${powerSentence(entry)}`;
+      // Selected on the DOWNLOAD's own count — Steam's number, recorded by the route —
+      // not on the operation-wide outcome. A Project Zomboid apply always stops PZ and
+      // a PZ stop always ends in SIGKILL, so `outcome === "partial"` was unavoidable and
+      // the `ok` sentence (with the count in it) was unreachable for the one world this
+      // feature was built for. Every successful 89-mod apply reported "killed after
+      // 300s." and nothing else.
+      const short = count && count.total != null && count.done < count.total;
+      if (short) {
+        const missing = (count.total ?? 0) - count.done;
+        return `Downloaded ${count.done} of ${count.total} ${count.noun} — ${missing} failed. ${powerSentence(
+          entry
+        )}${sideNote(entry, ["Shutdown", "Power"])}`;
       }
-      return `Finished in ${took}. ${count ? `${count.done} ${count.noun} updated` : "Mods updated"}, ${
-        factValue(entry, "Power") === "running" ? "the server is back up" : "the server is powered off"
-      }.`;
+      const dlWarns = warnFacts(entry).filter((f) => f.label !== "Shutdown" && f.label !== "Power");
+      if (!count && dlWarns.length > 0) {
+        return `${dlWarns.map((f) => f.value).join("; ")}. ${powerSentence(entry)}`;
+      }
+      return `Finished in ${took}. ${
+        count ? `${count.done} ${count.noun} updated` : "Mods updated"
+      }, ${
+        power === "running" ? "the server is back up" : "the server is powered off"
+      }.${sideNote(entry, ["Power"])}`;
     }
     case "world.upload": {
       const placed = factValue(entry, "Installed as");
-      if (outcome === "partial") return `Upload finished, but ${warnText.toLowerCase()}.`;
-      return `Uploaded and placed ${placed ?? "the world"}${count ? ` — ${count.done} ${count.noun}` : ""}.`;
+      // The ok sentence always renders; a warn becomes its own clause. "Upload
+      // finished, but an existing copy of the same name." was both ungrammatical and
+      // threw away the thing that actually happened.
+      return `Uploaded and placed ${placed ?? "the world"}${
+        count ? ` — ${count.done} ${count.noun}` : ""
+      }.${sideNote(entry, [])}`;
     }
     case "world.reset": {
-      const to = factValue(entry, "New game name");
-      if (outcome === "partial") return `World reset, but ${warnText.toLowerCase()}.`;
-      return `World reset. ${name} is generating ${to ?? "a fresh save"}.`;
+      const to = warnValue(entry, "New game name") ? undefined : factValue(entry, "New game name");
+      return `World reset. ${name} is generating ${to ?? "a fresh save"}.${sideNote(entry, [
+        "Power",
+      ])}`;
     }
     case "game.update":
       // The route can only ever prove it *requested* the update — the build id does
-      // not change until the ~17 GB download finishes inside the container. So this
-      // is amber by construction, and the synthetic boot carries the next 20 minutes.
-      return outcome === "partial"
-        ? `Update requested — ${name} is downloading the new build. Watch the bar at the top of the page.`
+      // not change until the ~17 GB download finishes inside the container. So the
+      // `Build` fact is amber by construction, which is what this branch is about, and
+      // the synthetic boot carries the next 20 minutes.
+      return warnValue(entry, "Build") !== undefined
+        ? `Update requested — ${name} is downloading the new build. Watch the strip at the top of the page.${sideNote(
+            entry,
+            ["Build", "Power", "Shutdown"]
+          )}`
         : `${name} update applied in ${took}.`;
     default:
       return `${name} — finished in ${took}.`;
@@ -731,8 +955,11 @@ function powerSentence(entry: Entry): string {
 }
 
 function pruneFinished(): void {
-  const cutoff = Date.now() - FINISHED_TTL_MS;
-  while (FINISHED.length && (FINISHED.length > FINISHED_MAX || (FINISHED[0].endedAt ?? 0) < cutoff)) {
+  const now = Date.now();
+  while (
+    FINISHED.length &&
+    (FINISHED.length > FINISHED_MAX || now - (FINISHED[0].endedAt ?? 0) > finishedTtl(FINISHED[0]))
+  ) {
     FINISHED.shift();
   }
 }
@@ -812,7 +1039,7 @@ export function listOperations(access: GameId[] = GAME_LIST.map((g) => g.id)): O
  */
 export function listFinished(access: GameId[] = GAME_LIST.map((g) => g.id)): OperationView[] {
   pruneFinished();
-  return FINISHED.filter((e) => Date.now() - (e.endedAt ?? 0) < FINISHED_TTL_MS)
+  return FINISHED.filter((e) => Date.now() - (e.endedAt ?? 0) < finishedTtl(e))
     .map((e) => view(e, !visible(e, access)))
     .reverse();
 }
@@ -827,20 +1054,11 @@ function orderKey(o: OperationView, now: number): number {
   return -(now - o.startedAt);
 }
 
-/**
- * The operation that blocks power for `game`: either something holding the power
- * slot, or a file operation on that world.
- */
-export function powerBlockedBy(ops: OperationView[], game: GameId): OperationView | undefined {
-  return ops.find(
-    (o) => !o.synthetic && (o.holdsPower || o.resources.includes(`files:${game}`))
-  );
-}
-
-/** Live, non-stale file operations on `game` — what a power op would pre-empt. */
-export function fileOperationsFor(ops: OperationView[], game: GameId): OperationView[] {
-  return ops.filter((o) => !o.synthetic && !o.holdsPower && o.resources.includes(`files:${game}`));
-}
+// `powerBlockedBy` / `fileOperationsFor` used to live here as a second, subtly
+// different copy of `operation-ui.ts`'s `powerBlocker` / `fileOperations` — they
+// omitted the `!o.endedAt` guard, so a future server-side caller reaching for the
+// name a reader would expect would silently match finished records too. Deleted
+// rather than kept in sync; `operation-ui.ts` is the one definition of "blocked".
 
 // ── back-compat: the control lock as a projection ─────────────────────────────
 
@@ -910,10 +1128,21 @@ export function setControlStage(stage: string): void {
  * borrows it rather than inventing anything.
  *
  * Rules: never admissible (no resources, so it can never block), never in
- * FINISHED, never dismissible, and **suppressed while a real operation holding
- * `"power"` names the same world** — that operation's own steps already narrate
- * the boot, and two rows for one boot is the drift to avoid.
+ * FINISHED, and **suppressed while a real operation holding `"power"` names the same
+ * world** — that operation's own steps already narrate the boot, and two rows for one
+ * boot is the drift to avoid.
+ *
+ * **Bounded at `BOOT_STALL_MS`, the same 12 minutes `game-controls.tsx` uses.** The
+ * drivers set `status: "starting"` purely from `containerRunning && !reachable`, with
+ * no upper bound, so a wedged Project Zomboid game loop (documented, 2026-09-22) or a
+ * rotated 7DTD `TelnetPassword` projected "7 Days to Die is starting … +3h 41m" onto
+ * every page for every user, forever and undismissibly — re-conflating the two states
+ * commit a7d76b8 split on purpose, and contradicting the controls on the same screen,
+ * which correctly said "Not responding". Past the threshold the projection says what is
+ * actually known (the container is up and not answering; Restart is the way out) and
+ * becomes dismissible.
  */
+const BOOT_STALL_MS = 12 * 60 * 1000;
 export function syntheticBoots(
   statuses: Record<
     GameId,
@@ -935,34 +1164,51 @@ export function syntheticBoots(
     if (powerOwners.has(g.id)) continue;
 
     const startedAt = snap.startedAtMs ?? now;
+    const stalled = now - startedAt > BOOT_STALL_MS;
     const v: OperationView = {
       id: `boot:${g.id}`,
       kind: "boot",
       game: g.id,
-      title: `${g.name} is starting`,
+      title: stalled ? `${g.name} is not answering` : `${g.name} is starting`,
       startedAt,
       heartbeatAt: now,
       facts: [],
       steps: [
         {
           id: `boot:${g.id}:0`,
-          label: snap.boot?.stage ?? "Starting up",
+          label: stalled
+            ? `The container is up but the game has not answered for ${Math.round(
+                (now - startedAt) / 60000
+              )} minutes`
+            : snap.boot?.stage ?? "Starting up",
           kind: "running",
           game: g.id,
           at: startedAt,
-          detail: tidyLine(snap.boot?.detail),
+          detail: stalled
+            ? "Restart is the way out — Powering off and on again does the same thing more slowly"
+            : tidyLine(snap.boot?.detail),
         },
       ],
       progress:
-        snap.boot?.percent != null
+        !stalled && snap.boot?.percent != null
           ? { kind: "fraction", percent: snap.boot.percent }
           : { kind: "indeterminate" },
       resources: [],
       holdsPower: false,
       startedBy: null,
       synthetic: true,
+      stalled,
     };
-    out.push(access.includes(g.id) ? v : { ...redact(v), synthetic: true, title: "A server is starting" });
+    out.push(
+      access.includes(g.id)
+        ? v
+        : {
+            ...redact(v),
+            synthetic: true,
+            stalled,
+            title: stalled ? "A server is not answering" : "A server is starting",
+          }
+    );
   }
   return out;
 }

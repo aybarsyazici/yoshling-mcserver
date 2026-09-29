@@ -10,7 +10,7 @@ import {
   getGameStatus,
   withGameStopped,
 } from "@/lib/game-manager";
-import { OperationConflictError, listOperations } from "@/lib/operations";
+import { OperationConflictError, POWER_RESOURCES, listOperations, runOperation } from "@/lib/operations";
 
 const execAsync = promisify(exec);
 
@@ -458,6 +458,15 @@ export async function pollModUpdates(): Promise<{ action: PollAction; stale: Sta
     await writeWatchState({ ...state, ...next, checkedAt: Date.now(), lastError: "" });
     return { action, stale };
   } catch (e) {
+    // A refusal is not a failure: the `seeded` branch now enters an operation, and a
+    // second "Check now" (or a tick racing one) is *supposed* to be turned away rather
+    // than start a second SteamCMD run on the same volume. Recording it as `lastError`
+    // would put "Project Zomboid is busy — downloading mod updates" on the card as
+    // though the watcher had broken.
+    if (e instanceof OperationConflictError) {
+      await writeWatchState({ ...state, checkedAt: Date.now(), lastError: "" });
+      return { action: "skipped", stale: [] };
+    }
     const message = e instanceof Error ? e.message : String(e);
     await writeWatchState({ ...state, checkedAt: Date.now(), lastError: message });
     throw e;
@@ -482,8 +491,45 @@ async function runPoll(
 
   // Stopped anyway — bring the files up to date so the next start is clean and
   // the server never has to run its own crash-prone downloader.
+  //
+  // Tracked, and this is the branch that most needed it. `pollModUpdates` is entered
+  // from BOTH the instrumentation timer and the "Check now" route, and only the timer
+  // has a re-entry guard — so two clicks (or a click racing the 15s pending tick) ran
+  // two SteamCMD containers against the same `pz-workshop` volume, which is the exact
+  // documented race that once reported "updated 0 of 1 mods". And because Project
+  // Zomboid is off whenever another world holds the box, this is the *normal* path, not
+  // the edge case: a 45-minute download that entered no record, held no resource, wrote
+  // no `applyingSince`, and left `powerOn("zomboid")` free to boot the game onto a
+  // half-written workshop volume. The `catch` in `pollModUpdates`'s caller already
+  // treats an `OperationConflictError` as "nothing was attempted".
   if (snap.status !== "online") {
-    await seedMods(ids);
+    const titles = stale.map((s) => s.title);
+    await runOperation(
+      {
+        kind: "mods.update",
+        game: "zomboid",
+        title: "Downloading mod updates",
+        // `POWER_RESOURCES`, not just `files:zomboid`: a boot landing mid-seed is the
+        // harmful case, and the world is already stopped so nothing is being held
+        // hostage that could not wait.
+        resources: POWER_RESOURCES,
+        // No `startedBy`: the watcher runs on a timer, and pinning it on whoever
+        // happened to press "Check now" would be a small lie in the record.
+        startedBy: null,
+      },
+      async (op) => {
+        op.step("Downloading mods from Steam");
+        op.detail(titles.slice(0, 3).join(", ") + (titles.length > 3 ? `, +${titles.length - 3} more` : ""));
+        await seedMods(ids);
+        // `seedMods` throws unless SteamCMD reported every item downloaded, so reaching
+        // here IS the read-back — the count is Steam's own, not ours.
+        op.settle(`Downloaded ${ids.length} of ${ids.length} mods`, {
+          count: { done: ids.length, total: ids.length, noun: "mods" },
+        });
+        op.fact({ label: "Power", value: "powered off" });
+        return { value: undefined as void };
+      }
+    );
     return {
       action: "seeded",
       stale,

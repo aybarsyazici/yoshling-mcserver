@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { AlertTriangle, ChevronDown, OctagonX } from "lucide-react";
 import { GAMES, type GameId } from "@/lib/games";
 import { cn } from "@/lib/utils";
 import { GameMark } from "@/components/glyphs";
@@ -42,8 +42,16 @@ import {
  * app-wide, and a surface you can close while the buttons stay dead is the 2026-09-15
  * bug wearing a different hat.
  */
-export function OperationLedger() {
-  const { operations, finished, dismiss, elapsedMs } = useOperations();
+export function OperationLedger({
+  /**
+   * The inner container. Defaults to `DashShell`'s column; `/home` passes its own,
+   * because `HomeChrome` and `/home`'s `<main>` are `max-w-5xl sm:px-6` and the strip
+   * hung 56px outside the content column on the one page whose identity is axial
+   * symmetry around the Power Core.
+   */
+  className = "mx-auto max-w-6xl px-4 sm:px-6 lg:px-8",
+}: { className?: string } = {}) {
+  const { operations, finished, dismiss, elapsedMs, skewMs } = useOperations();
   const reduced = usePrefersReducedMotion();
   const mounted = useMounted();
 
@@ -66,7 +74,15 @@ export function OperationLedger() {
   const active = live.length > 0;
   // Keep ticking while a settled record is still on screen: the 90s auto-clear for a
   // clean finish is driven off this clock.
-  const now = useSecondTick(active || settled.length > 0);
+  //
+  // TWO clocks, deliberately. `browserNow` is the raw tick and is only ever compared
+  // against other browser timestamps (the beat map, which this component writes). `now`
+  // is skew-corrected and is the only one allowed near a server epoch —
+  // `heartbeatAt`, `startedAt`, `endedAt`, `step.at`. Mixing them is what made a laptop
+  // three minutes fast report every live operation as "lost contact 3m 0s ago" beside a
+  // corrected "+2s", with a Dismiss button on a running operation.
+  const browserNow = useSecondTick(active || settled.length > 0);
+  const now = browserNow + skewMs;
 
   const beats = useBeats(live);
   const [open, setOpen] = useState(false);
@@ -97,11 +113,11 @@ export function OperationLedger() {
    * minutes and you are elsewhere for them.
    */
   useEffect(() => {
-    const stale = settled.filter((o) => o.outcome === "ok" && Date.now() - (o.endedAt ?? 0) > 90_000);
+    const stale = settled.filter(
+      (o) => o.outcome === "ok" && Date.now() + skewMs - (o.endedAt ?? 0) > 90_000
+    );
     for (const o of stale) dismiss(o.id);
-  }, [settled, now, dismiss]);
-
-  if (!active && settled.length === 0) return null;
+  }, [settled, now, dismiss, skewMs]);
 
   /**
    * A finished operation stays on screen next to a live one **for the same world**.
@@ -127,12 +143,28 @@ export function OperationLedger() {
     ? [...live.filter((o) => !o.synthetic), ...context, ...live.filter((o) => o.synthetic)]
     : context;
   const primary = shown[0];
-  if (!primary) return null;
 
-  const tint = primary.game ? GAMES[primary.game].tint : "var(--primary)";
-  const drained = !active;
-  const railTint = drained ? "var(--border)" : tint;
-  const primaryStale = isLost(primary, now);
+  const tint = primary?.game ? GAMES[primary.game].tint : "var(--primary)";
+  const primaryStale = primary ? isLost(primary, now) : false;
+  /**
+   * The bar keeps weight when the outcome was not clean.
+   *
+   * Draining to `var(--border)` for everything made the one sentence this feature
+   * exists to deliver — "Finished, but nothing changed. 0 of 166 mods installed." —
+   * render in Latte as `#df8e1d` on a `#e8ebf0` bar over a `#eff1f5` page: 2.15:1 at
+   * 13px, below AA, in a bar you can barely see. Every other warning in this app pairs
+   * `text-chart-5` with an `AlertTriangle` and a tinted panel; this was the one place
+   * colour carried it alone.
+   */
+  const railTint = primary?.stalled
+    ? "var(--chart-5)"
+    : !active
+    ? primary?.outcome === "failed"
+      ? "var(--destructive)"
+      : primary?.outcome === "partial" || primary?.outcome === "nothing"
+      ? "var(--chart-5)"
+      : "var(--border)"
+    : tint;
 
   const runningCount = shown.filter((o) => !o.endedAt).length;
   // Collapsed, a second live operation gets one line of its own; a third becomes
@@ -142,7 +174,34 @@ export function OperationLedger() {
   const secondary = extras[0];
   const moreCount = Math.max(0, extras.length - 1);
 
+  const primaryQuiet = primary ? isQuiet(beats.get(primary.id), browserNow) : false;
+
   return (
+    <>
+      {/*
+        The live region is mounted UNCONDITIONALLY, and it is the only one.
+
+        A region created at the same moment as its content is the documented unreliable
+        case for `aria-live`: neither NVDA nor VoiceOver is required to announce it, and
+        in practice neither does. This component returned `null` while idle, so pressing
+        Power on inserted a brand-new `<p role="status">` already containing "Project
+        Zomboid — Saving the world" — and since every start toast was deliberately
+        removed in favour of "the strip appearing IS the announcement", a screen-reader
+        user heard nothing at all until the next step label swapped in, which for a PZ
+        stop is five minutes later.
+
+        It also carries the world name unconditionally, because the visible name is
+        `hidden sm:inline` and every `GameMark` glyph hard-codes `aria-hidden` — so below
+        `sm` the region said "Downloading mods from Steam" with no way to tell which of
+        three worlds it was on. And it never contains a per-second figure, so a stale
+        operation cannot make a screen reader repeat the same sentence once a second
+        forever with no way to stop it but finding the Dismiss button.
+      */}
+      <p role="status" aria-live="polite" aria-atomic="false" className="sr-only">
+        {primary ? `${headline(primary)} — ${announce(primary, now)}` : ""}
+      </p>
+
+      {!primary ? null : (
     <div
       className="flex-shrink-0 backdrop-blur"
       style={{
@@ -152,21 +211,33 @@ export function OperationLedger() {
         transition: reduced ? undefined : "background 600ms ease-out, border-color 600ms ease-out",
       }}
     >
-      <div className="mx-auto max-w-6xl px-4 py-2 sm:px-6 lg:px-8">
-        {/* Collapsed header. Only this line is inside the live region — expanding the
-            tape must not dump nine rows into a screen reader. */}
-        <div className="flex items-center gap-2.5">
-          <GameMark
-            game={(primary.game ?? "minecraft") as GameId}
-            className="h-4 w-4 flex-shrink-0"
-            style={{ color: railTint }}
-          />
-          <p
-            className="min-w-0 flex-1 truncate text-[13px]"
-            role="status"
-            aria-live="polite"
-            aria-atomic="false"
-          >
+      <div className={cn("py-2", className)}>
+        {/* Collapsed header. The announcement lives in the sr-only region above; this
+            line is the visual half, so nothing here needs a role. */}
+        <div className="flex items-center gap-3">
+          {/* 31px wide, matching the tape's mark column, so the glyph sits exactly over
+              the rail below it and every line in the strip shares one left edge. There
+              used to be five different ones (26 / 0 / 43 / 23 / 24 px), which read as
+              sloppiness rather than as a column. */}
+          <span className="flex h-4 w-[31px] flex-shrink-0 items-center justify-center">
+            {/* Severity is never colour alone: every other warning in this app pairs
+                `text-chart-5` with an AlertTriangle, and this was the one place it
+                didn't. A settled non-ok outcome replaces the world glyph with the mark,
+                which is the strongest signal available at 14px. */}
+            {!active && primary.outcome === "failed" ? (
+              <OctagonX className="op-bad h-4 w-4" aria-hidden />
+            ) : (!active && (primary.outcome === "partial" || primary.outcome === "nothing")) ||
+              primary.stalled ? (
+              <AlertTriangle className="op-warn h-4 w-4" aria-hidden />
+            ) : (
+              <GameMark
+                game={(primary.game ?? "minecraft") as GameId}
+                className="h-4 w-4"
+                style={{ color: railTint }}
+              />
+            )}
+          </span>
+          <p className="min-w-0 flex-1 truncate text-[13px]">
             <span className="hidden font-semibold text-foreground sm:inline">
               {headline(primary)}
             </span>
@@ -181,16 +252,27 @@ export function OperationLedger() {
                 {runningCount > 1 ? `${runningCount} operations running` : primary.title}
               </span>
             ) : (
-              <span className={cn(primaryStale ? "text-chart-5" : statusToneClass(primary))}>
+              <span
+                className={cn(
+                  primaryStale || primary.stalled ? "op-warn" : statusToneClass(primary)
+                )}
+              >
                 {lede(primary, now)}
               </span>
+            )}
+            {/* Under reduced motion the pip does not move, so its 1 → 0.6 opacity step
+                on a 6px square is the ONLY signal that the server has gone quiet. Say
+                it in words too. No seconds figure, so it changes at most once and is
+                safe in the region above. */}
+            {primaryQuiet && !primaryStale && (
+              <span className="op-warn"> — no response from the server yet</span>
             )}
           </p>
 
           {active && (
             <>
               <span className="flex-shrink-0" aria-hidden>
-                <Pip tint={tint} beat={beats.get(primary.id)} reduced={reduced} now={now} />
+                <Pip tint={tint} beat={beats.get(primary.id)} reduced={reduced} now={browserNow} />
               </span>
               <span
                 className="flex-shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
@@ -220,8 +302,11 @@ export function OperationLedger() {
 
           {/* Dismiss once nothing is locked — or once we have lost contact, because a
               surface you cannot close while the buttons stay dead is the 2026-09-15
-              bug in a new hat, and a surface you cannot close AND cannot trust is worse. */}
-          {((!active && !primary.synthetic) || primaryStale) && (
+              bug in a new hat, and a surface you cannot close AND cannot trust is worse.
+              A *stalled* projected boot counts too: it is re-derived on every poll from
+              a container that is up and not answering, so without this it was an
+              undismissible strip on every page that climbed past "+4h 12m". */}
+          {((!active && !primary.synthetic) || primaryStale || primary.stalled) && (
             <button
               type="button"
               onClick={() =>
@@ -238,7 +323,7 @@ export function OperationLedger() {
 
         {/* A settled failure has to name a way forward, and the container log is it. */}
         {!active && primary.outcome === "failed" && primary.game && (
-          <p className="mt-1 pl-6 text-[11px] text-muted-foreground">
+          <p className="mt-1 pl-[43px] text-[11px] text-muted-foreground">
             <Link href={`${GAMES[primary.game].base}/server`} className="underline hover:text-foreground">
               Open the console
             </Link>{" "}
@@ -247,7 +332,7 @@ export function OperationLedger() {
         )}
 
         {!open && secondary && (
-          <p className="mt-1 flex items-center gap-1.5 pl-6 text-xs text-muted-foreground">
+          <p className="mt-1 flex items-center gap-1.5 pl-[43px] text-xs text-muted-foreground">
             <span className="font-mono text-[10px] uppercase tracking-[0.16em]">also</span>
             <GameMark
               game={(secondary.game ?? "minecraft") as GameId}
@@ -267,48 +352,51 @@ export function OperationLedger() {
           <button
             type="button"
             onClick={() => setOpen(true)}
-            className="mt-1 pl-6 text-xs text-muted-foreground underline hover:text-foreground"
+            className="mt-1 pl-[43px] text-xs text-muted-foreground underline hover:text-foreground"
           >
             and {moreCount} more
           </button>
         )}
 
-        {open && (
-          <div
-            id="operation-tapes"
-            className={cn(
-              "mt-2 grid gap-4 border-t pt-2",
-              shown.length > 1 && "lg:grid-cols-2"
-            )}
-            style={{ borderColor: `color-mix(in oklab, ${railTint} 15%, transparent)` }}
-          >
-            {/* Each operation gets its own tape, never interleaved. Merging two
-                machines' event streams invents causality, and on a box where "two
-                worlds running at once" is an open defect, blurring which world did
-                what is worse than two tapes. */}
-            {shown.map((op) => {
+        {/* Rendered always and hidden with `hidden`, so `aria-controls` above never
+            points at an id that does not exist — which, collapsed, was the state the
+            control actually matters in. */}
+        <div
+          id="operation-tapes"
+          hidden={!open}
+          className={cn("mt-2 grid gap-4 border-t pt-2", shown.length > 1 && "lg:grid-cols-2")}
+          style={{ borderColor: `color-mix(in oklab, ${railTint} 15%, transparent)` }}
+        >
+          {/* Each operation gets its own tape, never interleaved. Merging two
+              machines' event streams invents causality, and on a box where "two
+              worlds running at once" is an open defect, blurring which world did
+              what is worse than two tapes. */}
+          {open &&
+            shown.map((op) => {
               const beat = beats.get(op.id);
-              const quietMs = beat ? now - beat.at : 0;
+              // Browser-vs-browser: `beat.at` is stamped by this component, so this one
+              // comparison must NOT be skew-corrected.
+              const quietMs = beat ? browserNow - beat.at : 0;
               return (
                 <section key={op.id} className="min-w-0">
                   {/* Only when there are several: with one operation the header line
                       above already names it, and repeating it is noise. */}
                   {shown.length > 1 && (
-                    <div className="mb-1 flex items-baseline gap-2">
-                      <GameMark
-                        game={(op.game ?? "minecraft") as GameId}
-                        className="h-3.5 w-3.5 flex-shrink-0 self-center"
-                        style={{ color: op.game ? GAMES[op.game].tint : "var(--primary)" }}
-                      />
+                    <div className="mb-1 flex items-center gap-3">
+                      <span className="flex h-4 w-[31px] flex-shrink-0 items-center justify-center">
+                        <GameMark
+                          game={(op.game ?? "minecraft") as GameId}
+                          className="h-3.5 w-3.5"
+                          style={{ color: op.game ? GAMES[op.game].tint : "var(--primary)" }}
+                        />
+                      </span>
                       <h2 className="min-w-0 truncate text-[13px] font-semibold">{op.title}</h2>
                     </div>
                   )}
-                  <p
-                    className={cn(
-                      "mb-1.5 text-[11px] text-muted-foreground",
-                      shown.length > 1 && "pl-[23px]"
-                    )}
-                  >
+                  {/* One indent for every line in the strip — 43px, the tape's own mark
+                      column plus its gap — and unconditional, so opening a second
+                      operation no longer shifts the first one's text sideways. */}
+                  <p className="mb-1.5 pl-[43px] text-[11px] text-muted-foreground">
                     {chrome(op, now, elapsedMs(op))}
                   </p>
                   <OperationTape
@@ -321,21 +409,21 @@ export function OperationLedger() {
                     beatTick={beat?.tick ?? 0}
                   />
                   {op.summary && op.endedAt && (
-                    <p className={cn("mt-1.5 pl-[23px] text-[12px]", statusToneClass(op))}>
+                    <p className={cn("mt-1.5 pl-[43px] text-[12px]", statusToneClass(op))}>
                       {op.summary}
                     </p>
                   )}
                   {op.facts.length > 0 && op.endedAt && (
-                    <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 pl-[23px] font-mono text-[10px] text-muted-foreground">
+                    <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 pl-[43px] font-mono text-[10px] text-muted-foreground">
                       {op.facts.map((f, i) => (
                         <div key={`${f.label}-${i}`} className="flex gap-1.5">
                           <dt className="uppercase tracking-[0.12em]">{f.label}</dt>
                           <dd
                             className={cn(
                               f.verdict === "bad"
-                                ? "text-destructive"
+                                ? "op-bad"
                                 : f.verdict === "warn"
-                                ? "text-chart-5"
+                                ? "op-warn"
                                 : "text-foreground"
                             )}
                           >
@@ -348,10 +436,11 @@ export function OperationLedger() {
                 </section>
               );
             })}
-          </div>
-        )}
+        </div>
       </div>
     </div>
+      )}
+    </>
   );
 }
 
@@ -363,6 +452,11 @@ function headline(op: OperationView): string {
 /** We stopped hearing from it. NOT the same claim as "it failed". */
 function isLost(op: OperationView, now: number): boolean {
   return !op.endedAt && !op.synthetic && now - op.heartbeatAt > OPERATION_STALE_MS;
+}
+
+/** The pip has not moved for a while. Browser-clock only — we stamp `beat.at`. */
+function isQuiet(beat: { at: number } | undefined, browserNow: number): boolean {
+  return beat ? browserNow - beat.at > OPERATION_QUIET_MS : false;
 }
 
 /** The one line the strip must get right: what is happening, or what happened. */
@@ -379,6 +473,21 @@ function lede(op: OperationView, now: number): string {
   return liveStep(op)?.label ?? op.title;
 }
 
+/**
+ * `lede` with every per-second figure removed, for the live region.
+ *
+ * `lede`'s stale branch embeds `formatElapsed(now - heartbeatAt)`, which changes once a
+ * second — and the region it sat in has no terminal state, so NVDA/VoiceOver read the
+ * whole sentence once a second, indefinitely, talking over the user's search for the
+ * Dismiss button that is the only escape. The counting figure stays on screen in an
+ * `aria-hidden` span; the announcement says the thing that is true and stops.
+ */
+function announce(op: OperationView, now: number): string {
+  if (op.endedAt) return op.summary ?? `${op.title} finished.`;
+  if (isLost(op, now)) return `${op.title} — lost contact with this operation. Check the console.`;
+  return liveStep(op)?.label ?? op.title;
+}
+
 /** The sub-line under an expanded operation. Always about THAT operation. */
 function chrome(op: OperationView, now: number, elapsed: number): string {
   if (op.endedAt) {
@@ -391,6 +500,8 @@ function chrome(op: OperationView, now: number, elapsed: number): string {
   const at = `${p(started.getHours())}:${p(started.getMinutes())}:${p(started.getSeconds())}`;
   const locked = op.holdsPower
     ? " — server controls are locked until this finishes"
+    : op.stalled
+    ? " — the container is up but the game is not answering; Restart is the way out"
     : op.synthetic
     ? " — the server is not answering yet"
     : "";
@@ -400,14 +511,23 @@ function chrome(op: OperationView, now: number, elapsed: number): string {
   return `Started ${at}, ${formatElapsed(elapsed)} ago${locked}`;
 }
 
+/**
+ * `op-warn` / `op-bad`, not `text-chart-5` / `text-destructive`.
+ *
+ * In Latte `--chart-5` (#df8e1d) on the strip's wash is 2.15:1 at 13px and
+ * `--destructive` (#d20f39) is 4.49:1 — both short of AA for the single most important
+ * sentence this feature produces. The two classes in `globals.css` mix the tone toward
+ * `--foreground`, which clears 4.5:1 in Latte and stays correct in Mocha for free
+ * (foreground is light there), without adding a colour to the palette.
+ */
 function statusToneClass(op: OperationView): string {
   if (!op.endedAt) return "text-muted-foreground";
   switch (op.outcome) {
     case "failed":
-      return "text-destructive";
+      return "op-bad";
     case "partial":
     case "nothing":
-      return "text-chart-5";
+      return "op-warn";
     // `unverified` gets no colour at all. It is the state nobody designs, and
     // dressing it as either a success or a failure would be the invention.
     default:

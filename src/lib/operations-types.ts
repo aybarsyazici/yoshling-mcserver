@@ -106,8 +106,15 @@ export interface OperationView {
   preempted?: boolean;
   /** Viewer lacks this world: labels, details, facts and summary stripped. */
   redacted?: boolean;
-  /** True for `kind: "boot"` — derived, not tracked. No dismiss, no history. */
+  /** True for `kind: "boot"` — derived, not tracked. No history. */
   synthetic?: boolean;
+  /**
+   * A projected boot that has outlived a plausible boot (12 minutes — the same
+   * threshold `game-controls.tsx` uses for "Not responding"). The container is up and
+   * the game is not answering, which is its own state and not "starting": it stops
+   * claiming progress, drops out of the fast poll, and becomes dismissible.
+   */
+  stalled?: boolean;
 }
 
 export interface OperationsPayload {
@@ -157,6 +164,17 @@ export function liveStep(op: OperationView): OpStepView | undefined {
 export function gapPx(seconds: number): number {
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
   return Math.min(56, Math.max(0, Math.round(22 * Math.log10(1 + seconds)) - 8));
+}
+
+/**
+ * Lowercase the FIRST letter only, for splicing a title into mid-sentence.
+ *
+ * `title.toLowerCase()` mangled the two titles that embed a proper noun: "7 Days to
+ * Die is busy — updating 7 days to die", and "changing project zomboid's memory
+ * setting". The generic titles ("Creating a backup") lowercase fine either way.
+ */
+export function lowerFirst(s: string): string {
+  return s ? s[0].toLowerCase() + s.slice(1) : s;
 }
 
 /** "4m 58s" / "26s" / "1h 04m". */

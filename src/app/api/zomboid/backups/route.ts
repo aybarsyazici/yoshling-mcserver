@@ -7,7 +7,7 @@ import { readdir, stat, rm, writeFile, mkdir, cp } from "fs/promises";
 import path from "path";
 import { PZ_DIR, savePaths } from "@/lib/zomboid";
 import { withGameStopped } from "@/lib/game-manager";
-import { runOperation, type OperationFact } from "@/lib/operations";
+import { refuseIfPreempted, runOperation, type OperationFact } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
 
@@ -199,6 +199,13 @@ export async function POST(request: NextRequest) {
             mtime = s.mtime;
           } catch {}
           op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
+
+          // A power operation admitted over this one means the world was saved and
+          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
+          // as a restore point would be exactly the "reports success after doing the
+          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
+          // below does the `rm`.
+          refuseIfPreempted(op, "this backup");
 
           const facts: OperationFact[] = [];
           if (size != null) facts.push({ label: "Size", value: formatBytes(size) });

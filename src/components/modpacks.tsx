@@ -284,13 +284,15 @@ export function Modpacks() {
         });
       }
 
-      if (data.installed === 0 && data.total > 0) {
-        toast.error(`No mods installed (0 of ${data.total}). The server has no mods now.`);
-      } else if (missing > 0) {
-        toast.warning(`Installed ${data.installed} of ${data.total} mods — ${missing} failed.`);
-      }
-      // A clean install says nothing here: the operation's completion toast carries
-      // the server-derived count, which is the number that was actually recorded.
+      // NO outcome toast here, for any outcome.
+      //
+      // The operation's own completion toast carries `op.summary`, which is derived
+      // server-side from the recorded count and cannot overstate — and the
+      // visibility-suppression rule only silences `ok`, so these two fired *together*
+      // for exactly the non-clean outcomes: "Installed 142 of 166 mods — 24 failed."
+      // beside "Installed 142 of 166 mods; 24 failed. Open the report for which ones.",
+      // filling two of three toast slots with one sentence. `setInstallReport` above
+      // stays: the scrollable per-mod dialog carries detail no summary can.
     } catch {
       // Up to 166 sequential Modrinth fetches, so past ~100s a *successful* apply
       // reported failure — and `setInstallReport` never ran, so the scrollable per-mod

@@ -246,21 +246,60 @@
   to { transform: scaleY(1); opacity: 1; }
 }
 
+/* Operation severity text.
+   `text-chart-5` in Latte is #df8e1d, which on the ledger's wash measures 2.15:1 at
+   13px — below AA — and `--destructive` (#d20f39) is 4.49:1, also short. Mixing the
+   tone toward `--foreground` clears 4.5:1 in Latte and is automatically correct in
+   Mocha, where `--foreground` is light, so neither theme needs a second value and no
+   colour is added to the palette. Use these wherever an outcome is stated as text. */
+.op-warn {
+  color: color-mix(in oklab, var(--chart-5) 78%, var(--foreground));
+}
+.op-bad {
+  color: color-mix(in oklab, var(--destructive) 82%, var(--foreground));
+}
+
 /* Toasts.
    `src/components/ui/sonner.tsx` has always set
    `toastOptions.classNames.toast = "cn-toast"`, and **the class was defined
    nowhere** — one grep hit in the whole repo, the declaration itself. So every
    toast in the app has been rendering as unstyled sonner default. `richColors`
    stays off deliberately: it ships sonner's own green/red, which is a second
-   palette standing next to Catppuccin. */
+   palette standing next to Catppuccin.
+
+   **Feed sonner its variables; do not try to out-specify it.** Sonner injects
+   `[data-sonner-toast][data-styled=true] { background: var(--normal-bg); border: 1px
+   solid var(--normal-border); border-radius: var(--border-radius); box-shadow: 0 4px
+   12px rgba(0,0,0,.1) }` at runtime — specificity (0,2,0), so a `.cn-toast` (0,1,0)
+   declaration of any of those four properties loses regardless of source order. The
+   first version of this block set exactly those four and therefore did nothing: with
+   `richColors` off, an error, a warning and a success toast rendered pixel-identically
+   apart from a monochrome glyph, which inverts this feature's central promise for the
+   one person it is aimed at — whoever navigated away. The variables win because sonner
+   reads them from the cascade, and the shadow is the one property with no variable, so
+   it needs `!important` to displace the soft grey default. */
 .cn-toast {
-  @apply rounded-2xl bg-card/90 text-[13px] ring-1 ring-foreground/10 backdrop-blur;
+  --normal-bg: color-mix(in oklab, var(--card) 92%, transparent);
+  --normal-text: var(--card-foreground);
+  --normal-border: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --border-radius: var(--radius-xl);
+  box-shadow: 0 6px 20px color-mix(in oklab, var(--foreground) 12%, transparent) !important;
+  backdrop-filter: blur(8px);
 }
 .cn-toast[data-type="error"] {
-  @apply ring-destructive/40;
+  --normal-border: color-mix(in oklab, var(--destructive) 55%, transparent);
+}
+.cn-toast[data-type="error"] [data-icon] {
+  color: var(--destructive);
 }
 .cn-toast[data-type="warning"] {
-  --tw-ring-color: color-mix(in oklab, var(--chart-5) 45%, transparent);
+  --normal-border: color-mix(in oklab, var(--chart-5) 55%, transparent);
+}
+.cn-toast[data-type="warning"] [data-icon] {
+  color: color-mix(in oklab, var(--chart-5) 78%, var(--foreground));
+}
+.cn-toast[data-type="success"] [data-icon] {
+  color: var(--primary);
 }
 
 /* Type */

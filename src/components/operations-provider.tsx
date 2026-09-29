@@ -35,6 +35,18 @@ interface OperationsState {
   dismiss(id: string): void;
   /** Skew-corrected, so it can never be negative or wild. */
   elapsedMs(op: { startedAt: number }): number;
+  /**
+   * `serverNow - Date.now()`, from the last poll.
+   *
+   * Exported because `elapsedMs` was not enough: the ledger also compares the browser
+   * clock against `heartbeatAt`, `endedAt` and `step.at` to decide whether an operation
+   * is lost, whether a settled row should auto-clear, and how long a live step has been
+   * running — and only the elapsed counters were corrected. On a laptop three minutes
+   * fast, every healthy live operation read "lost contact 3m 0s ago. Check the console."
+   * with a Dismiss button, on the same line as a corrected "+2s". Add this to
+   * `Date.now()` anywhere a server epoch is on the other side of the comparison.
+   */
+  skewMs: number;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -70,13 +82,20 @@ export function OperationsProvider({
   const [payload, setPayload] = useState<OperationsPayload | null>(initial ?? null);
   const [loading, setLoading] = useState(!initial);
   const [dismissed, setDismissed] = useState<string[]>([]);
+  /** True once a payload has arrived over the network, as opposed to from the seed. */
+  const [fetched, setFetched] = useState(false);
   const alive = useRef(true);
   /**
-   * `serverNow - receivedAt`. Elapsed time is computed against the server's clock,
-   * because `Date.now() - startedAt` mixes a browser clock with a server epoch and a
-   * machine that is a few minutes out then shows nonsense (or negative) durations.
+   * `serverNow - receivedAt`. Every comparison against a server epoch is corrected
+   * with this, because `Date.now() - startedAt` mixes a browser clock with a server
+   * epoch and a machine that is a few minutes out then shows nonsense (or negative)
+   * durations — or, worse, declares a healthy operation dead.
+   *
+   * State, not a ref: the ledger re-renders on its own 1s tick, but a ref would leave
+   * the first render after a skew change using the stale value with no re-render to fix
+   * it, and skew is read during render.
    */
-  const skew = useRef(0);
+  const [skewMs, setSkewMs] = useState(0);
 
   // sessionStorage is read after mount: touching it during render would differ
   // between the server pass and the client one and break hydration.
@@ -92,8 +111,12 @@ export function OperationsProvider({
       if (!res.ok) return;
       const data = (await res.json()) as OperationsPayload;
       if (!alive.current) return;
-      skew.current = data.serverNow - receivedAt;
+      // Only replace the skew when it moved by more than a second: a re-render per poll
+      // for 40ms of network jitter is pure churn, and the ledger ticks anyway.
+      const next = data.serverNow - receivedAt;
+      setSkewMs((prev) => (Math.abs(next - prev) > 1000 ? next : prev));
       setPayload(data);
+      setFetched(true);
     } catch {
       /* keep the last known state; a dropped poll is not news */
     } finally {
@@ -101,7 +124,10 @@ export function OperationsProvider({
     }
   }, []);
 
-  const running = payload?.operations.length ?? 0;
+  // A *stalled* projected boot is not progress to watch: the container has been up and
+  // unreachable for over twelve minutes and nothing about it is going to change on a
+  // 1.5s cadence, so it must not pin the poller to the fast interval indefinitely.
+  const running = (payload?.operations ?? []).filter((o) => !o.stalled).length;
 
   useEffect(() => {
     alive.current = true;
@@ -138,8 +164,8 @@ export function OperationsProvider({
   }, []);
 
   const elapsedMs = useCallback(
-    (op: { startedAt: number }) => Math.max(0, Date.now() + skew.current - op.startedAt),
-    []
+    (op: { startedAt: number }) => Math.max(0, Date.now() + skewMs - op.startedAt),
+    [skewMs]
   );
 
   const value = useMemo<OperationsState>(
@@ -148,15 +174,16 @@ export function OperationsProvider({
       finished: (payload?.finished ?? []).filter((f) => !dismissed.includes(f.id)),
       dismiss,
       elapsedMs,
+      skewMs,
       loading,
       refresh,
     }),
-    [payload, dismissed, dismiss, elapsedMs, loading, refresh]
+    [payload, dismissed, dismiss, elapsedMs, skewMs, loading, refresh]
   );
 
   return (
     <Ctx.Provider value={value}>
-      <CompletionToasts operations={value.operations} finished={value.finished} />
+      <CompletionToasts operations={value.operations} finished={value.finished} fetched={fetched} />
       {children}
     </Ctx.Provider>
   );
@@ -172,6 +199,7 @@ export function useOperations(): OperationsState {
     finished: [],
     dismiss: () => {},
     elapsedMs: () => 0,
+    skewMs: 0,
     loading: false,
     refresh: async () => {},
   };
@@ -194,15 +222,48 @@ export function useOperations(): OperationsState {
 function CompletionToasts({
   operations,
   finished,
+  fetched,
 }: {
   operations: OperationView[];
   finished: OperationView[];
+  /** True once a payload has come over the network, not just from the server seed. */
+  fetched: boolean;
 }) {
   const seen = useRef<Set<string>>(new Set());
   const everHidden = useRef<Map<string, boolean>>(new Map());
-  const primed = useRef(false);
+  const primedRender = useRef(false);
+  const primedFetch = useRef(false);
+  /** The live ids, for the `visibilitychange` listener to stamp. */
+  const liveIds = useRef<string[]>([]);
 
-  // Track which live operations we watched while the tab was hidden at any point.
+  useEffect(() => {
+    liveIds.current = operations.filter((o) => !o.synthetic).map((o) => o.id);
+  }, [operations]);
+
+  /**
+   * Record hidden-ness from the event, not from a poll.
+   *
+   * This effect used to be keyed on `[operations]` and read `visibilityState` — but the
+   * poller *declines to run while the tab is hidden*, so `operations` never changed
+   * while hidden, so this never observed a hidden tab and `everHidden` stayed `false`
+   * for practically every operation. Rule 4 then suppressed the completion toast for
+   * exactly the users who had missed the completion: start a 5-minute PZ restart, switch
+   * tabs, come back — no toast, and the ledger's 90s auto-clear had already taken the
+   * settled row. Zero feedback, which is the 2026-09-15 silence for the background case.
+   */
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onChange = () => {
+      if (document.visibilityState !== "hidden") return;
+      for (const id of liveIds.current) everHidden.current.set(id, true);
+    };
+    // Also stamp on mount if we are already hidden (a background tab restored by the
+    // browser on startup).
+    onChange();
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+
   useEffect(() => {
     if (typeof document === "undefined") return;
     const hidden = document.visibilityState === "hidden";
@@ -214,10 +275,22 @@ function CompletionToasts({
   }, [operations]);
 
   useEffect(() => {
-    // The first payload is server-seeded history: toasting all of it on mount would
-    // replay up to twenty old operations at once.
-    if (!primed.current) {
-      primed.current = true;
+    // Prime twice, and both matter.
+    //
+    // The server-seeded first render is history: toasting it would replay up to twenty
+    // old operations at once. But the seed can also be *empty* (a failed
+    // `operationsPayload`, or — before the registry was hoisted onto `globalThis` —
+    // always), and then priming on it alone left every already-finished record unseen,
+    // so the first real poll replayed the lot as toasts, `toast.error`s included, on
+    // every layout remount. So the first *fetched* payload primes as well, and never
+    // toasts.
+    if (!primedRender.current) {
+      primedRender.current = true;
+      for (const op of finished) seen.current.add(op.id);
+      if (!fetched) return;
+    }
+    if (fetched && !primedFetch.current) {
+      primedFetch.current = true;
       for (const op of finished) seen.current.add(op.id);
       return;
     }
@@ -246,7 +319,7 @@ function CompletionToasts({
           toast(text, { duration: 8000 });
       }
     }
-  }, [finished]);
+  }, [finished, fetched]);
 
   return null;
 }

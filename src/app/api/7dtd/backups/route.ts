@@ -7,7 +7,7 @@ import { promisify } from "util";
 import { readdir, stat, rm, readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { RUNTIME, withGameStopped } from "@/lib/game-manager";
-import { runOperation, type OperationFact } from "@/lib/operations";
+import { refuseIfPreempted, runOperation, type OperationFact } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
 
@@ -217,6 +217,13 @@ export async function POST(request: NextRequest) {
             mtime = s.mtime;
           } catch {}
           op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
+
+          // A power operation admitted over this one means the world was saved and
+          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
+          // as a restore point would be exactly the "reports success after doing the
+          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
+          // below does the `rm`.
+          refuseIfPreempted(op, "this backup");
 
           const facts: OperationFact[] = [];
           if (size != null) facts.push({ label: "Size", value: formatBytes(size) });

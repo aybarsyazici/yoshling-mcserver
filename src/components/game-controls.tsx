@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { GAMES, otherGames, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
-import { fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
+import { blockedReason, fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
 import { StatusPill } from "@/components/ui-bits";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { PowerGlyph } from "@/components/glyphs";
@@ -26,7 +26,9 @@ export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, busy: serverBusy, can, memoryGb, refresh } = useGames(localBusy ? 1500 : 4000);
+  const { games, busy: serverBusy, can, memoryGb, clockSkewMs, refresh } = useGames(
+    localBusy ? 1500 : 4000
+  );
   // The registry, not just the power lock: a four-minute backup of this world also
   // has to disable these buttons, and the single-slot lock could never say so.
   const { operations, elapsedMs } = useOperations();
@@ -47,9 +49,23 @@ export function GameControls({ game }: { game: GameId }) {
    * dialog is what "force" looks like here.
    */
   const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
+  /**
+   * Whatever holds the box's power slot, from the REGISTRY — not from the projected
+   * `busy`.
+   *
+   * `projectLock()` returns null for an operation with no `action`, deliberately
+   * (`busyLabel()` renders a verb straight out of `action`, so projecting one would put
+   * a lie in the verb). But `/api/7dtd/update` holds `POWER_RESOURCES` with no action,
+   * so `busy` stayed null for the whole ~20-minute update while the ledger said "server
+   * controls are locked until this finishes" — and Power off, Restart, the memory card
+   * and the version save all stayed live and returned 409 with a red toast. That is the
+   * "pressed the button, got an unexplained refusal" shape the `can:{}` flags were
+   * shipped to remove, reintroduced for the longest operation on the box.
+   */
+  const powerHeld = blocker?.holdsPower ? blocker : undefined;
   // Busy if THIS tab fired a request, or a *power* operation is in flight anywhere
   // (another admin, another tab, the Workshop watcher). Either way, controls lock.
-  const busy = localBusy || serverBusy !== null;
+  const busy = localBusy || serverBusy !== null || powerHeld !== undefined;
   const busyAction = serverBusy?.action;
 
   // Only one world can hold the box at a time, but check every other one
@@ -77,7 +93,10 @@ export function GameControls({ game }: { game: GameId }) {
   const unreachable = containerUp && !isOnline;
   // A normal boot also sits here, so only call it stuck once it has taken clearly
   // longer than a boot ever does. Below that, it is just starting.
-  const startedFor = snap?.startedAtMs ? Date.now() - snap.startedAtMs : 0;
+  // Skew-corrected: `startedAtMs` is the box's clock (docker's `StartedAt`), so a laptop
+  // a few minutes fast declared a healthy 30-second boot "Not responding", and one a few
+  // minutes slow would never say it at all.
+  const startedFor = snap?.startedAtMs ? Date.now() + clockSkewMs - snap.startedAtMs : 0;
   const looksStuck = unreachable && startedFor > 12 * 60 * 1000;
 
   // Power on cannot help when the container is already up, so offer stop instead —
@@ -87,6 +106,15 @@ export function GameControls({ game }: { game: GameId }) {
   // Only *this* world's operation should describe itself here — a hand-off that
   // is stopping another world shouldn't caption this card.
   const busyStage = serverBusy?.game === game ? serverBusy.stage : undefined;
+
+  // Drop the pending intent once the thing it was about is gone, so a later file
+  // operation on this world cannot re-open a dialog nobody asked for.
+  useEffect(() => {
+    if (!preemptable && confirmPreempt !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConfirmPreempt(null);
+    }
+  }, [preemptable, confirmPreempt]);
 
   function onPower() {
     if (busy) return;
@@ -237,17 +265,14 @@ export function GameControls({ game }: { game: GameId }) {
         </Button>
 
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
-          {serverBusy ? (
-            <span>
-              <strong className="text-foreground">{GAMES[serverBusy.game].name}</strong> is{" "}
-              {serverBusy.action === "start"
-                ? "starting up"
-                : serverBusy.action === "stop"
-                ? "shutting down"
-                : "restarting"}
-              {serverBusy.stage ? ` — ${serverBusy.stage.toLowerCase()}` : ""}. Controls unlock when
-              it finishes.
-            </span>
+          {powerHeld ? (
+            // One helper for every "why is this dead" sentence in the app, so this and
+            // `/{game}/backups` and the 7DTD maintenance card cannot drift. It also
+            // covers the action-less power holder (the 7DTD update), which the old
+            // inline `serverBusy` branch structurally could not see — and it no longer
+            // lowercases the stage, which now embeds world names ("saving project
+            // zomboid").
+            <span>{blockedReason(powerHeld, elapsedMs(powerHeld))}</span>
           ) : preemptable ? (
             <span>
               <strong className="text-foreground">{meta.name}</strong> is being worked on —{" "}
@@ -350,7 +375,15 @@ export function GameControls({ game }: { game: GameId }) {
       {/* Pre-empting a file operation. The dialog IS the force flag: there is no
           `{force:true}` in the request body, because the only honest gate on a
           destructive interruption is a sentence naming the consequence. */}
-      <Dialog open={confirmPreempt !== null} onOpenChange={(o) => !o && setConfirmPreempt(null)}>
+      {/* `open` is derived from the CONTENT, not from the intent. Gating it on
+          `confirmPreempt` alone meant that when the backup finished three seconds after
+          the dialog opened, `preemptable` went undefined and the modal stayed open
+          containing only its X button — no title, so no accessible name, and the
+          decision the user was mid-way through making had silently vanished. */}
+      <Dialog
+        open={confirmPreempt !== null && preemptable !== undefined}
+        onOpenChange={(o) => !o && setConfirmPreempt(null)}
+      >
         <DialogContent>
           {preemptable && confirmPreempt && (
             <>

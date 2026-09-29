@@ -102,8 +102,19 @@ async function resetWorld(
   userId: string
 ): Promise<OpSuccess<NextResponse>> {
   {
+    // Both refusals below go through `op.reject` before returning their 4xx.
+    //
+    // Without it the operation settled zero steps and zero facts, so
+    // `concludeOperation`'s "read nothing back" rule turned a *rejected request* into
+    // `unverified` — and the ledger said "Resetting the world finished in 0s, but
+    // nothing could be read back to confirm it. Check the worlds list before relying
+    // on it." beside the route's own 400. The tool was already in use one screen down
+    // for the failed-tar case; it just wasn't applied here.
     let xml = await readFile(XML_PATH, "utf-8").catch(() => "");
-    if (!xml) return { value: NextResponse.json({ error: "Config not found" }, { status: 400 }) };
+    if (!xml) {
+      op.reject("Refused — sdtdserver.xml could not be read");
+      return { value: NextResponse.json({ error: "Config not found" }, { status: 400 }) };
+    }
 
     const world = getProp(xml, "GameWorld");
     // Step 3 rm -rf's Saves/<world>, so GameWorld has to be one plain directory
@@ -111,6 +122,7 @@ async function resetWorld(
     // world's save, and ".." would climb out of it. All settings will write
     // either value into the XML without complaint, so check it here.
     if (!world || world === "." || world === ".." || /[/\\]/.test(world)) {
+      op.reject(`Refused — sdtdserver.xml has no usable GameWorld (currently "${world}")`);
       return {
         value: NextResponse.json(
           {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -66,8 +66,34 @@ export function MissionControl({
   const headline =
     operations.find((o) => o.holdsPower) ?? operations.find((o) => o.synthetic);
 
-  // Locked out if this tab is working OR the server reports a power op in flight.
-  const busy = localBusy || serverBusy !== null;
+  /**
+   * Whatever holds the power slot, from the registry.
+   *
+   * `serverBusy` alone could not see it: `projectLock()` refuses to project an operation
+   * with no `action` (correctly — `busy.action` drives a rendered verb), and the 7 Days
+   * to Die update holds `POWER_RESOURCES` without one. So for ~20 minutes every card's
+   * Power button stayed live and returned a red 409.
+   */
+  const powerHolder = operations.find((o) => o.holdsPower && !o.endedAt);
+  // Locked out if this tab is working OR a power operation is in flight anywhere.
+  const busy = localBusy || serverBusy !== null || powerHolder !== undefined;
+
+  /**
+   * What the pre-empt dialog is about, computed here so `open` can be derived from the
+   * CONTENT. Gating `open` on the intent alone left the modal open with no title (and
+   * therefore no accessible name) and no buttons when the file operation finished
+   * mid-decision.
+   */
+  const preemptBlockerRaw = confirmPreempt ? powerBlocker(operations, confirmPreempt) : undefined;
+  const preemptBlocker =
+    preemptBlockerRaw && !preemptBlockerRaw.holdsPower ? preemptBlockerRaw : undefined;
+  useEffect(() => {
+    if (!preemptBlocker && confirmPreempt !== null) {
+      // Reacting to the poll, which is external state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConfirmPreempt(null);
+    }
+  }, [preemptBlocker, confirmPreempt]);
 
   const coreState: CoreState = busy && pending
     ? { kind: "handoff", from: activeGame && activeGame !== pending ? activeGame : null, to: pending }
@@ -91,14 +117,25 @@ export function MissionControl({
     // A file operation on this world (a backup, a modpack apply) does not disable the
     // button — Power off is the recovery path and must never be held hostage — but
     // cutting it short needs saying out loud first.
-    if (blocker && !blocker.holdsPower) return setConfirmPreempt(game);
+    const preempting = blocker && !blocker.holdsPower;
     if (isOnline) {
-      // Power OFF this game
+      // Power OFF: the pre-empt dialog alone is the whole story.
+      if (preempting) return setConfirmPreempt(game);
       void doControl(game, "stop");
       return;
     }
-    // Power ON — if another world is running, confirm the switch first
-    if (runningOthers(game).length > 0) {
+    /**
+     * Power ON always routes to the ONE `confirmFor` dialog, which renders both clauses.
+     *
+     * The pre-empt check used to `return` here, ahead of the hand-off confirm — so with
+     * Project Zomboid online and players on it, starting Minecraft while a Minecraft
+     * backup ran showed a dialog about the backup and never the "Switch servers? …
+     * Players on Project Zomboid will be disconnected." one, then evicted PZ anyway.
+     * `game-controls.tsx:99` already had this right (`if (blocking.length > 0 ||
+     * preemptable) setConfirm(true)`); the landing page — the one with the world cards
+     * on it — did not.
+     */
+    if (runningOthers(game).length > 0 || preempting) {
       setConfirmFor(game);
     } else {
       void doControl(game, "start");
@@ -255,41 +292,61 @@ export function MissionControl({
       {/* Hand-off confirm */}
       <Dialog open={confirmFor !== null} onOpenChange={(o) => !o && setConfirmFor(null)}>
         <DialogContent>
-          {confirmFor && (
+          {confirmFor &&
+            (() => {
+              const others = runningOthers(confirmFor);
+              const blocker = powerBlocker(operations, confirmFor);
+              const preempting = blocker && !blocker.holdsPower ? blocker : undefined;
+              return (
             <>
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <PowerGlyph className="h-4 w-4" style={{ color: GAMES[confirmFor].tint }} />
-                  Switch servers?
+                  {others.length > 0 ? "Switch servers?" : "Start anyway?"}
                 </DialogTitle>
+                {/* BOTH consequences, in one dialog. Whichever applies. */}
                 <DialogDescription>
-                  This will{" "}
-                  <strong>
-                    save and stop {runningOthers(confirmFor).map((g) => GAMES[g].name).join(" and ")}
-                  </strong>
-                  , then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing will
-                  be disconnected. Takes about a minute.
+                  {others.length > 0 && (
+                    <>
+                      This will{" "}
+                      <strong>save and stop {others.map((g) => GAMES[g].name).join(" and ")}</strong>,
+                      then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing
+                      will be disconnected. Takes about a minute.
+                    </>
+                  )}
+                  {preempting && (
+                    <>
+                      {others.length > 0 ? " " : ""}
+                      <strong>{GAMES[confirmFor].name}</strong> is also being worked on —{" "}
+                      {fileOperationLabel(preempting, elapsedMs(preempting))} — and starting now cuts
+                      that short. If it is a backup, the archive will be incomplete and is deleted.
+                    </>
+                  )}
                 </DialogDescription>
               </DialogHeader>
-              <div className="flex flex-wrap items-center justify-center gap-3 py-2 text-xs">
-                {runningOthers(confirmFor).map((g) => (
-                  <span key={g} className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 font-mono">
-                    <GameMark game={g} className="h-3.5 w-3.5" />
-                    {GAMES[g].short} off
+              {/* The switch diagram only makes sense when something is actually being
+                  switched away from. */}
+              {others.length > 0 && (
+                <div className="flex flex-wrap items-center justify-center gap-3 py-2 text-xs">
+                  {others.map((g) => (
+                    <span key={g} className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 font-mono">
+                      <GameMark game={g} className="h-3.5 w-3.5" />
+                      {GAMES[g].short} off
+                    </span>
+                  ))}
+                  <ArrowGlyph className="h-4 w-4 text-muted-foreground" />
+                  <span
+                    className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono"
+                    style={{
+                      background: `color-mix(in oklab, ${GAMES[confirmFor].tint} 15%, transparent)`,
+                      color: GAMES[confirmFor].tint,
+                    }}
+                  >
+                    <GameMark game={confirmFor} className="h-3.5 w-3.5" />
+                    {GAMES[confirmFor].short} on
                   </span>
-                ))}
-                <ArrowGlyph className="h-4 w-4 text-muted-foreground" />
-                <span
-                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono"
-                  style={{
-                    background: `color-mix(in oklab, ${GAMES[confirmFor].tint} 15%, transparent)`,
-                    color: GAMES[confirmFor].tint,
-                  }}
-                >
-                  <GameMark game={confirmFor} className="h-3.5 w-3.5" />
-                  {GAMES[confirmFor].short} on
-                </span>
-              </div>
+                </div>
+              )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => setConfirmFor(null)}>
                   Cancel
@@ -298,21 +355,25 @@ export function MissionControl({
                   onClick={() => doControl(confirmFor, "start")}
                   style={{ background: GAMES[confirmFor].tint, color: "var(--background)" }}
                 >
-                  Switch &amp; start
+                  {others.length > 0 ? "Switch & start" : "Start anyway"}
                 </Button>
               </DialogFooter>
             </>
-          )}
+              );
+            })()}
         </DialogContent>
       </Dialog>
 
-      {/* Cutting a file operation short. Same machinery as the switch dialog: the
-          consequence is stated, and agreeing to it is what "force" means here. */}
-      <Dialog open={confirmPreempt !== null} onOpenChange={(o) => !o && setConfirmPreempt(null)}>
+      {/* Cutting a file operation short — the POWER OFF path only; the start path goes
+          through the dialog above so the hand-off is never dropped on the floor. */}
+      <Dialog
+        open={confirmPreempt !== null && preemptBlocker !== undefined}
+        onOpenChange={(o) => !o && setConfirmPreempt(null)}
+      >
         <DialogContent>
           {confirmPreempt &&
             (() => {
-              const blocker = powerBlocker(operations, confirmPreempt);
+              const blocker = preemptBlocker;
               if (!blocker) return null;
               const online = games?.[confirmPreempt]?.containerRunning ?? false;
               return (
