@@ -483,11 +483,15 @@ The bare minimum for shared code that has to know PZ exists:
   mount at `/zomboid-workshop`.
 - **Control is RCON on 27015**, unpublished — the web container reaches it as
   `zomboid:27015`. `PZ_RCON_PASSWORD` must match the game's `RCONPASSWORD`.
-- **`stop_grace_period: 300s`**, and the driver stops with `-t 300` — but **every PZ
-  stop takes the full five minutes and ends in SIGKILL**, which is why a restart feels
-  hung. The save itself takes 433 ms; the process just never exits. Measured, and not
-  for the reason this file gave for months — see
-  [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md) before changing the timeout.
+- **The driver stops PZ by asking the game to `quit` over RCON — FIXED 2026-09-29.**
+  A PZ stop is now **~12 seconds, exit code 0**; it used to be a flat five minutes
+  ending in SIGKILL. `entry.sh` runs as PID 1 with no SIGTERM trap, and the kernel
+  *discards* uncaught signals for a namespace's PID 1, so `docker stop` could never
+  reach the game — the only thing that works is asking the game itself. The
+  `stop_grace_period: 300s` / `PZ_STOP_TIMEOUT` stays as the **fallback** for a server
+  too wedged to answer RCON; it is no longer the normal path. Before touching this read
+  [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md) — this file claimed for months
+  that the entrypoint trapped SIGTERM, which is what stopped three audits looking.
 - The web app also runs a **Workshop update watcher** (`src/lib/zomboid-updates.ts`,
   a 15s interval in `src/instrumentation.ts` that does a full check at most every
   5 min) which can restart the server by itself when it is empty. If PZ restarts
@@ -623,8 +627,10 @@ Still open:
   download — and `create` still snapshots a live world, so one taken while people play
   can be torn. An out-of-band safety set from before the fixes is on the box at
   `/root/pre-fix-backup-2026-09-28/` (all four archives verified with `tar -tzf`).
-- **PZ never exits on SIGTERM**, so every stop takes the full 300s and ends in SIGKILL
-  — see the Project Zomboid section. Five minutes of every restart is pure waiting.
+- ~~PZ never exits on SIGTERM~~ — **fixed 2026-09-29**: the driver asks the game to
+  `quit` over RCON and it exits in ~12s with code 0. Kept in this list only so nobody
+  re-reports it; `dockerd` logged 14 `failed to exit within 5m0s` events for PZ in the
+  three days before the fix and **0** since.
 - **`docker-compose.yml` is git-owned in practice** (the box's copy was byte-identical
   to git), but the app still writes it and `deploy.sh`'s `git checkout -f` discards
   that. `deploy.sh` now **refuses and prints the diff** instead of reverting silently

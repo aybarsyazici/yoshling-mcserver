@@ -553,18 +553,65 @@ real  5m1.012s        ExitCode=137   OOMKilled=false
 Minecraft, for contrast, stops in **0.719s with exit 0**. So PZ saves promptly and then
 sits until the timeout expires and Docker kills it. Two consequences:
 
-- **Every PZ stop costs the full five minutes and ends in SIGKILL.** That is most of
-  why a manual Restart reads as hung, and raising the timeout from 120s to 300s made
-  every stop slower without making a single one cleaner.
+- ~~Every PZ stop costs the full five minutes and ends in SIGKILL.~~ **FIXED
+  2026-09-29 — see the follow-up below.** It was true, and raising the timeout from 120s
+  to 300s made every stop slower without making a single one cleaner.
 - **The old explanation was measuring the wrong thing.** A save that takes 433 ms was
   never the reason for the SIGKILL at 120s; the failure to exit was, and it would have
   SIGKILLed at any timeout.
 
-**Not fixed, deliberately.** Lowering the timeout on the strength of the 433 ms alone
-would be repeating the original mistake in the other direction — the save completing is
-not the same as the process being safe to kill. The next step is finding out *why* it
-does not exit (the entrypoint's `wait`, or the JVM not being signalled), not tuning the
-number.
+**Was "not fixed, deliberately" — now FIXED, 2026-09-29.** The note here said lowering
+the timeout on the strength of the 433 ms alone would repeat the original mistake in the
+other direction, because the save completing is not the same as the process being safe to
+kill. That was right, and the timeout was never the answer.
+
+### Why `docker stop` could never work, and what does
+
+`entry.sh` runs as **PID 1** and has no signal handling at all:
+
+```
+$ docker exec yoshling-pz sh -c 'grep -c trap /server/scripts/entry.sh'
+0
+$ docker exec yoshling-pz sh -c 'grep SigCgt /proc/1/status'
+SigCgt: 0000000000010002        # SIGINT(2) + SIGCHLD(17) only — no SIGTERM(15)
+```
+
+That last line is the whole story, and it is stronger than "the shell does not forward
+the signal": **the kernel discards uncaught signals sent to a namespace's PID 1.** So
+`docker stop` was not being ignored by a middleman — SIGTERM was never delivered to
+anything. No timeout, no `init: true` and no amount of grace period could have fixed it.
+`dockerd` recorded the consequence 14 times in the three days before the fix:
+`failed to exit within 5m0s of signal 15 — using the force`.
+
+**The fix is to ask the game instead of the kernel.** PZ's own RCON advertises it:
+
+```
+$ ./scripts/pz-rcon.sh help
+...
+* quit : Save and quit the server
+```
+
+`zomboidDriver.gracefulStop()` now sends `save`, then `quit`, then waits for the
+container to exit, falling back to `docker stop -t 300` only if RCON cannot land — which
+is exactly the 2026-09-22 wedge, the one case where `quit` is the thing that cannot work.
+
+**Measured on production through the dashboard, 0 players:**
+
+| | before | after |
+|---|---|---|
+| request → container exited | 5m 02s | **11.4 s** |
+| exit code | 137 (SIGKILL) | **0** |
+| ledger outcome | `partial` | **`ok`** |
+| `failed to exit` events | 14 in 3 days | **0** |
+
+And the save is genuinely first, not skipped: 20 save files were rewritten, with
+`Saves/yoshling/map_t.bin` stamped one second after the request and **ten seconds before
+the exit**. A fast stop that lost the world would be far worse than the slow one; this
+one saves, then quits.
+
+**Do not lower `PZ_STOP_TIMEOUT` / `stop_grace_period` from 300s.** They are no longer
+the normal path — they are the fallback for a server too wedged to answer RCON, and that
+is precisely when a long grace period earns its keep.
 
 ### The update watcher could restart the server forever (fixed 2026-09-28)
 
