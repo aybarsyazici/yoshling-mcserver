@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
+import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
@@ -38,6 +39,13 @@ export async function POST(request: NextRequest) {
   if (!hasPermission(session.user.role, "settings.edit")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  // Refuse while an operation holds this world's files. This write is sub-second and
+  // needs no record of its own, but it does need the lane: a restore holds it for
+  // minutes and would silently overwrite whatever was saved through it, while the page
+  // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
+  const laneBusy = fileLaneBusy("zomboid");
+  if (laneBusy) return laneBusy;
 
   const body = await request.json().catch(() => ({}));
   const content = typeof body?.content === "string" ? body.content : "";

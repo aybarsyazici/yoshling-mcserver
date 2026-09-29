@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
-import { fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
+import { liveFileOperations, namedFileOperations } from "@/lib/operation-ui";
 import { formatElapsed, liveStep } from "@/lib/operations-types";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { RamBudget } from "@/components/ram-budget";
@@ -84,9 +84,9 @@ export function MissionControl({
    * therefore no accessible name) and no buttons when the file operation finished
    * mid-decision.
    */
-  const preemptBlockerRaw = confirmPreempt ? powerBlocker(operations, confirmPreempt) : undefined;
-  const preemptBlocker =
-    preemptBlockerRaw && !preemptBlockerRaw.holdsPower ? preemptBlockerRaw : undefined;
+  // The dialog's content, and therefore whether it may be open at all: any live file
+  // operation, because a power action cuts every one of them short.
+  const preemptBlocker = confirmPreempt ? liveFileOperations(operations)[0] : undefined;
   useEffect(() => {
     if (!preemptBlocker && confirmPreempt !== null) {
       // Reacting to the poll, which is external state.
@@ -113,11 +113,15 @@ export function MissionControl({
 
   function onPowerClick(game: GameId, isOnline: boolean) {
     if (busy) return;
-    const blocker = powerBlocker(operations, game);
-    // A file operation on this world (a backup, a modpack apply) does not disable the
-    // button — Power off is the recovery path and must never be held hostage — but
-    // cutting it short needs saying out loud first.
-    const preempting = blocker && !blocker.holdsPower;
+    // A file operation (a backup, a modpack apply) does not disable the button — Power
+    // off is the recovery path and must never be held hostage — but cutting it short
+    // needs saying out loud first.
+    //
+    // ANY live file operation, on any world: a power operation declares every `files:`
+    // lane, so it pre-empts all of them. Keyed on this world's lane, starting a world
+    // while another world's backup ran skipped the dialog entirely and deleted that
+    // backup with nothing said at all.
+    const preempting = liveFileOperations(operations).length > 0;
     if (isOnline) {
       // Power OFF: the pre-empt dialog alone is the whole story.
       if (preempting) return setConfirmPreempt(game);
@@ -295,8 +299,10 @@ export function MissionControl({
           {confirmFor &&
             (() => {
               const others = runningOthers(confirmFor);
-              const blocker = powerBlocker(operations, confirmFor);
-              const preempting = blocker && !blocker.holdsPower ? blocker : undefined;
+              // Every live file operation, not just this world's: starting a world
+              // pre-empts all of them, so a dialog that names one is a promise about the
+              // others it quietly breaks.
+              const cutShort = liveFileOperations(operations);
               return (
             <>
               <DialogHeader>
@@ -314,12 +320,13 @@ export function MissionControl({
                       will be disconnected. Takes about a minute.
                     </>
                   )}
-                  {preempting && (
+                  {cutShort.length > 0 && (
                     <>
                       {others.length > 0 ? " " : ""}
-                      <strong>{GAMES[confirmFor].name}</strong> is also being worked on —{" "}
-                      {fileOperationLabel(preempting, elapsedMs(preempting))} — and starting now cuts
-                      that short. If it is a backup, the archive will be incomplete and is deleted.
+                      Work is in progress and starting now cuts{" "}
+                      {cutShort.length > 1 ? "all of it" : "it"} short:{" "}
+                      <strong>{namedFileOperations(cutShort, elapsedMs)}</strong>. Any backup among
+                      them is deleted rather than kept as a restore point.
                     </>
                   )}
                 </DialogDescription>
@@ -375,6 +382,7 @@ export function MissionControl({
             (() => {
               const blocker = preemptBlocker;
               if (!blocker) return null;
+              const cutShort = liveFileOperations(operations);
               const online = games?.[confirmPreempt]?.containerRunning ?? false;
               return (
                 <>
@@ -387,9 +395,14 @@ export function MissionControl({
                       {online ? "Power off anyway?" : "Start anyway?"}
                     </DialogTitle>
                     <DialogDescription>
-                      <strong>{GAMES[confirmPreempt].name}</strong> is being worked on —{" "}
-                      {fileOperationLabel(blocker, elapsedMs(blocker))}. Going ahead cuts it short.
-                      If it is a backup, the archive will be incomplete and is deleted.
+                      Going ahead cuts {cutShort.length > 1 ? "all of this" : "this"} short:{" "}
+                      <strong>
+                        {namedFileOperations(
+                          cutShort.length > 0 ? cutShort : [blocker],
+                          elapsedMs
+                        )}
+                      </strong>
+                      . Any backup among them is deleted rather than kept as a restore point.
                     </DialogDescription>
                   </DialogHeader>
                   <DialogFooter>

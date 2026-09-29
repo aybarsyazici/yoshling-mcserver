@@ -33,10 +33,23 @@ export async function POST(request: NextRequest) {
   }
 
   let steps: { step: string; game?: string }[] = [];
+  /**
+   * Whether anything on the box actually changed.
+   *
+   * A stop of a world that is already down changes nothing, and the Activity row is the
+   * *durable* half of this feature — the registry forgets in 6 hours, `/activity` does
+   * not. Measured on production 2026-09-29: two no-op stops wrote permanent `server_stop`
+   * rows for two containers that had exited minutes and hours earlier, and `docker events`
+   * over that window is empty. A log of things that did not happen is worse than no log.
+   */
+  let changed = true;
   try {
     switch (action) {
       case "start":
         steps = await powerOn(game, session.user.name);
+        // No steps means the world was already running and answering — nothing happened,
+        // so nothing goes in the durable log.
+        changed = steps.length > 0;
         await db.gameState.upsert({
           where: { id: "main" },
           update: { activeGame: game },
@@ -44,12 +57,17 @@ export async function POST(request: NextRequest) {
         });
         break;
       case "stop":
-        await powerOff(game, session.user.name);
-        await db.gameState.upsert({
-          where: { id: "main" },
-          update: { activeGame: null },
-          create: { id: "main", activeGame: null },
-        });
+        changed = await powerOff(game, session.user.name);
+        // Only clear the active-game flag if this stop is what emptied the box. Nulling
+        // it for a world that was already down would wrongly claim the world that IS
+        // running has gone away.
+        if (changed) {
+          await db.gameState.upsert({
+            where: { id: "main" },
+            update: { activeGame: null },
+            create: { id: "main", activeGame: null },
+          });
+        }
         break;
       case "restart":
         await restartGame(game, session.user.name);
@@ -64,15 +82,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  try {
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: `server_${action}`,
-        details: JSON.stringify({ game, action, gameName: GAMES[game].name }),
-      },
-    });
-  } catch {}
+  if (changed) {
+    try {
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: `server_${action}`,
+          details: JSON.stringify({ game, action, gameName: GAMES[game].name }),
+        },
+      });
+    } catch {}
+  }
 
-  return NextResponse.json({ success: true, steps });
+  return NextResponse.json({ success: true, changed, steps });
 }

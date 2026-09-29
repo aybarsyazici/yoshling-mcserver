@@ -556,6 +556,33 @@ function admit(spec: OperationSpec): Entry {
   return entry;
 }
 
+/**
+ * Refuse a short write that would land on files an operation is already holding.
+ *
+ * For the config/settings writers, which are sub-second and legitimately have no
+ * record of their own — entering one would toast twice for a 17 ms write. What they do
+ * need is the *lane*: measured on production, `PUT /api/7dtd/config` returned 200 in
+ * 17 ms and rewrote `sdtdserver.xml` while a backup held `files:7dtd` and was
+ * mid-"Compressing the archive", and `PUT /api/zomboid/config` did the same through a
+ * "Copying the world". A second *backup* fired in the same window was correctly
+ * refused with a 409, so the lane works — only these callers never asked it.
+ *
+ * The dangerous direction is the one this covers: a restore holds the lane for minutes
+ * and would overwrite the config saved through it, while the page toasted "Saved".
+ */
+export function assertResourceFree(resource: OperationResource): void {
+  const now = Date.now();
+  const holder = [...LIVE.values()].find(
+    (o) => notStale(o, now) && o.resources.includes(resource)
+  );
+  if (!holder) return;
+  const conflict = trimForConflict(view(holder, false));
+  const message = conflictMessage(holder, now);
+  throw holder.action
+    ? new ControlBusyError(conflict, resource, message)
+    : new OperationConflictError(conflict, resource, message);
+}
+
 function conflictMessage(other: Entry, now: number): string {
   const name = other.game ? GAMES[other.game].name : "The server";
   const ago = formatElapsed(now - other.startedAt);
@@ -634,8 +661,39 @@ function warnFacts(entry: Entry): OperationFact[] {
 
 /** The value of a fact only if it actually carries a `warn`. */
 function warnValue(entry: Entry, label: string): string | undefined {
+  return warnFact(entry, label)?.value;
+}
+
+/** The whole fact, so a template can read the world it is about as well as its value. */
+function warnFact(entry: Entry, label: string): OperationFact | undefined {
   const f = entry.facts.find((x) => x.label === label);
-  return f?.verdict === "warn" ? f.value : undefined;
+  return f?.verdict === "warn" ? f : undefined;
+}
+
+/**
+ * The world this operation handed the box over FROM, if it did.
+ *
+ * Read off the recorded steps, which have always been tagged per world and have always
+ * been right — a hand-off's steps name the outgoing world for the save and the stop and
+ * the incoming one for the start. Only the derived sentence got it wrong.
+ */
+function handedOffFrom(entry: Entry): GameId | undefined {
+  return entry.steps.find((s) => s.game && s.game !== entry.game)?.game;
+}
+
+function nameOf(game: GameId | null | undefined): string {
+  return game ? GAMES[game].name : "The server";
+}
+
+/**
+ * Drop a trailing `.`/`!`/`?` before a template appends its own sentence.
+ *
+ * `entry.error` is an error message and ends in a period of its own, so the failure
+ * template produced "…Use Restart if it stays that way.. Project Zomboid is still
+ * running." — observed twice on the live box, and that string is also the toast.
+ */
+function trimSentence(s: string): string {
+  return s.replace(/[\s.!?]+$/, "");
 }
 
 /**
@@ -665,6 +723,8 @@ function warnValue(entry: Entry, label: string): string | undefined {
  */
 const WARN_CLAUSE: Record<string, (v: string) => string> = {
   Shutdown: (v) => `it had to be ${v}`,
+  // Already a whole clause: "the world was not saved — the server did not answer".
+  Save: (v) => v,
   Interrupted: (v) => v,
   Replaced: (v) => `it replaced ${v}`,
   "Rollback point": (v) => v,
@@ -716,16 +776,26 @@ function summarize(entry: Entry, outcome: Outcome): string {
       "the operation failed";
     // Only an operation that could have changed the power state says where it left it.
     // A modpack install does not touch power, and telling someone to check it is noise
-    // pointing at the wrong page.
+    // pointing at the wrong page. And a reason that ALREADY names the power state does
+    // not get it appended a second time: "…is already running — it just isn't responding
+    // yet. Use Restart if it stays that way. Project Zomboid is still running." says the
+    // same thing twice and reads as a contradiction.
     const touchesPower = entry.resources.includes("power");
-    const where = power
+    const statesPower = /\b(already running|still running|powered off|already stopped)\b/i.test(why);
+    const where = statesPower
+      ? ""
+      : power
       ? ` ${name} is ${power}.`
       : touchesPower
       ? ` Check ${name}'s power state on its page before trying again.`
       : ` Check ${describeTarget(entry)} before trying again.`;
-    return `${verbFor(entry)} failed after ${entry.steps.length} step${
-      entry.steps.length === 1 ? "" : "s"
-    }: ${why}.${where}`;
+    // "after 0 steps" is internal bookkeeping about an operation that was refused
+    // before it did anything, so it is dropped rather than printed.
+    const after =
+      entry.steps.length > 0
+        ? ` after ${entry.steps.length} step${entry.steps.length === 1 ? "" : "s"}`
+        : "";
+    return `${verbFor(entry)} failed${after}: ${trimSentence(why)}.${where}`;
   }
 
   if (outcome === "unverified") {
@@ -733,6 +803,15 @@ function summarize(entry: Entry, outcome: Outcome): string {
   }
 
   if (outcome === "nothing") {
+    // A power request against a world that is already in the state you asked for. It
+    // is not a failure and it is certainly not a success: nothing on the box moved, and
+    // saying so is the entire point. (Before the guard in `powerOff`, this case
+    // fabricated a save, a stop and a `Shutdown` verdict read off the PREVIOUS run's
+    // exit code — a 135 ms operation claiming "killed after 300s".)
+    if (entry.kind === "power") {
+      const state = factValue(entry, "Power");
+      return `Nothing to do — ${name} was already ${state ?? "in that state"}.`;
+    }
     // `count.total` is optional, so it has to be checked — "0 of undefined files" is
     // the kind of sentence that makes a reader distrust everything else on the row.
     const what =
@@ -748,12 +827,29 @@ function summarize(entry: Entry, outcome: Outcome): string {
     case "power": {
       const past =
         entry.action === "stop" ? "stopped" : entry.action === "restart" ? "restarted" : "started";
-      // `warnValue`, not `factValue`: a CLEAN stop also records a `Shutdown` fact
-      // ("exited cleanly (code 0)"), so reading it unconditionally produced "but it had
-      // to be exited cleanly (code 0)" whenever the partial came from somewhere else.
-      const shutdown = warnValue(entry, "Shutdown");
+      // `warnValue`/`warnFact`, not `factValue`: a CLEAN stop also records a `Shutdown`
+      // fact ("exited cleanly (code 0)"), so reading it unconditionally produced "but it
+      // had to be exited cleanly (code 0)" whenever the partial came from somewhere else.
+      const shutdown = warnFact(entry, "Shutdown");
+      /**
+       * The world the kill is about, which on a hand-off is NOT `entry.game`.
+       *
+       * `entry.game` is the world coming up. Attributing the outgoing world's SIGKILL to
+       * it produced, verbatim on production, "Minecraft — started in 5m 04s, but it had
+       * to be killed after 300s" for a Minecraft that `docker events` shows was only ever
+       * started, and booted in 450 ms. It also handed Minecraft the five minutes Project
+       * Zomboid spent refusing to exit. Both halves are fixed by naming the world the
+       * fact is about and hanging the duration on the *switch* rather than on the start.
+       */
+      const outgoing = handedOffFrom(entry);
       if (shutdown) {
-        return `${name} — ${past} in ${took}, but it had to be ${shutdown}. ${powerSentence(
+        const killedWorld = shutdown.game ?? outgoing ?? entry.game;
+        if (killedWorld && killedWorld !== entry.game) {
+          return `Switched to ${name} in ${took} — ${nameOf(killedWorld)} had to be ${
+            shutdown.value
+          }. ${powerSentence(entry)}${sideNote(entry, ["Shutdown", "Power"])}`;
+        }
+        return `${name} — ${past} in ${took}, but it had to be ${shutdown.value}. ${powerSentence(
           entry
         )}${sideNote(entry, ["Shutdown", "Power"])}`;
       }
@@ -761,6 +857,13 @@ function summarize(entry: Entry, outcome: Outcome): string {
         return `${name} — ${past} in ${took}, but ${
           warnText.toLowerCase() || "it did not go cleanly"
         }. ${powerSentence(entry)}`;
+      }
+      // A clean hand-off is two worlds' work, so the duration belongs to the switch and
+      // not to the incoming world's `docker start`.
+      if (outgoing) {
+        return `Switched to ${name} in ${took} — ${nameOf(outgoing)} stopped first. ${powerSentence(
+          entry
+        )}`;
       }
       return `${name} ${past} in ${took}. ${powerSentence(entry)}`;
     }
@@ -954,13 +1057,31 @@ function powerSentence(entry: Entry): string {
   return `Check ${name}'s power state on its page.`;
 }
 
+/**
+ * Two stages, and the order is the whole point.
+ *
+ * The old version was one head-only loop, so it stopped at the first unexpired entry
+ * and evicted strictly oldest-first when over `FINISHED_MAX`. Both halves failed on the
+ * live box, measured 2026-09-29: ordinary clean traffic (31 operations in 2.5 h) pushed
+ * the ring to 21 and deleted three `partial` records at 43m, 2h00m and 2h19m — all far
+ * inside their six hours — while **six of the twenty slots were held by `ok` records
+ * whose own TTL had already expired** and which therefore no reader could see. The head
+ * loop could not reclaim those, because `FINISHED[0]` was not yet expired.
+ *
+ * So: drop everything past its own TTL wherever it sits, which reclaims the invisible
+ * slots first; only then, if still over the cap, evict the oldest **clean** record and
+ * fall back to non-clean ones only when no clean one is left. A failure record is the
+ * one thing here with no other home — nothing writes an Activity row on the failure
+ * path — so it must be the last thing thrown away, not the first.
+ */
 function pruneFinished(): void {
   const now = Date.now();
-  while (
-    FINISHED.length &&
-    (FINISHED.length > FINISHED_MAX || now - (FINISHED[0].endedAt ?? 0) > finishedTtl(FINISHED[0]))
-  ) {
-    FINISHED.shift();
+  for (let i = FINISHED.length - 1; i >= 0; i--) {
+    if (now - (FINISHED[i].endedAt ?? 0) > finishedTtl(FINISHED[i])) FINISHED.splice(i, 1);
+  }
+  while (FINISHED.length > FINISHED_MAX) {
+    const oldestClean = FINISHED.findIndex((e) => e.outcome === "ok");
+    FINISHED.splice(oldestClean >= 0 ? oldestClean : 0, 1);
   }
 }
 
@@ -1222,19 +1343,30 @@ export function syntheticBoots(
  * this situation (see `/api/7dtd/reset`).
  */
 export async function operationsPayload(access: GameId[]): Promise<OperationsPayload> {
-  const operations = listOperations(access);
-  let boots: OperationView[] = [];
+  // The await happens FIRST, and every read of the registry happens after it in one
+  // synchronous tick — including `syntheticBoots`, which consults the registry itself to
+  // suppress a boot a power operation is already narrating.
+  //
+  // Reading either side of the await is what produced a payload listing the same id as
+  // both live and finished (measured on production: `backup-create-mumq305i-32` appeared
+  // in both lists of one response), which gave the ledger a duplicate React key and made
+  // it pick the stale running copy as `primary`.
+  let statuses: Awaited<ReturnType<typeof import("@/lib/game-manager").cachedAllStatus>> | null =
+    null;
   try {
     const { cachedAllStatus } = await import("@/lib/game-manager");
-    boots = syntheticBoots(await cachedAllStatus(), access);
+    statuses = await cachedAllStatus();
   } catch {
     // A docker hiccup must not take the ledger down with it: the real operations
     // are in memory and are the more important half.
   }
+  const operations = listOperations(access);
+  const finished = listFinished(access);
+  const boots = statuses ? syntheticBoots(statuses, access) : [];
   const now = Date.now();
   return {
     operations: [...operations, ...boots].sort((a, b) => orderKey(a, now) - orderKey(b, now)),
-    finished: listFinished(access),
+    finished,
     serverNow: now,
   };
 }

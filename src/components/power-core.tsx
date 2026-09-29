@@ -9,7 +9,15 @@ export type CoreState =
   | { kind: "idle" }
   | { kind: "holding"; game: GameId }
   | { kind: "handoff"; from: GameId | null; to: GameId }
-  | { kind: "booting"; game: GameId };
+  | { kind: "booting"; game: GameId }
+  /**
+   * This world is being worked on but is NOT coming up — it is being saved and shut down.
+   *
+   * Distinct from `booting`, which energises the core: a world on its way down must not
+   * animate as though it were arriving. Wears its own tint, because the page it renders on
+   * is that world's page.
+   */
+  | { kind: "working"; game: GameId };
 
 /**
  * The Power Core — the signature element.
@@ -31,13 +39,16 @@ export function PowerCore({
       ? state.game
       : state.kind === "booting"
       ? state.game
+      : state.kind === "working"
+      ? state.game
       : state.kind === "handoff"
       ? state.to
       : null;
 
   const tint = active ? GAMES[active].tint : "var(--muted-foreground)";
   const energized = state.kind === "holding" || state.kind === "booting";
-  const working = state.kind === "handoff" || state.kind === "booting";
+  const working =
+    state.kind === "handoff" || state.kind === "booting" || state.kind === "working";
 
   return (
     <div
@@ -111,6 +122,12 @@ export function PowerCore({
         {/* Core orb */}
         <motion.circle
           cx="60" cy="60"
+          /* The resting radius as a STATIC attribute as well as an animated one. Without
+             it Chrome logged `<circle> attribute r: Expected length, "undefined"` on every
+             page load in the app — the only always-on console error — and the orb was
+             absent from the server-rendered markup and the first paint, until
+             framer-motion's first frame supplied a value. */
+          r={16}
           fill={`url(#core-${uid})`}
           animate={
             reduced

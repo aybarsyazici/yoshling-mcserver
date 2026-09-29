@@ -62,7 +62,12 @@ export function OperationTape({
          is a region you go and read, not one that should announce itself. */
       tabIndex={0}
       role="group"
-      aria-label={`${op.title} — steps`}
+      /* The start time disambiguates concurrent operations of the same kind: four live
+         tapes all named "Changing Minecraft's memory setting — steps" were indistinguishable
+         to a keyboard or screen-reader user. Appended only after mount, because the box is
+         Europe/Berlin and formatting a wall clock during the server pass is a guaranteed
+         hydration mismatch — in an attribute, where it is invisible and still an error. */
+      aria-label={mounted ? `${op.title} — steps, started ${clock(op.startedAt)}` : `${op.title} — steps`}
       className="relative max-h-[min(50vh,340px)] overflow-y-auto pr-1 outline-none focus-visible:ring-1 focus-visible:ring-ring sm:max-h-[min(42vh,340px)]"
       style={{ overflowAnchor: "auto" }}
       aria-live="off"
@@ -156,7 +161,9 @@ function StepRow({
       ? "op-warn"
       : live
       ? "text-foreground"
-      : "text-muted-foreground";
+      : // A settled step label is the evidence, not chrome: `text-muted-foreground`
+        // measures 3.99:1 at 13px on the strip's Latte wash.
+        "op-chrome";
   const severity =
     step.kind === "failed" ? "failed" : step.kind === "noop" ? "no change" : undefined;
 
@@ -184,8 +191,11 @@ function StepRow({
                 background:
                   step.kind === "failed"
                     ? "var(--destructive)"
-                    : step.kind === "noop"
-                    ? "var(--chart-5)"
+                    : // `--op-warn`, not `--chart-5`: the raw amber measures 2.66:1 on the
+                      // strip's Latte wash, and a 3px mark needs 3:1 to be a graphical
+                      // object anyone can see.
+                      step.kind === "noop"
+                    ? "var(--op-warn)"
                     : `color-mix(in oklab, ${tint} 80%, transparent)`,
                 height: step.kind === "done" ? "2px" : "3px",
                 width: step.kind === "done" ? "9px" : "11px",
@@ -216,11 +226,11 @@ function StepRow({
               )}
             </span>
             {live && (
-              <span
-                className="flex-shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground"
-                aria-hidden
-              >
-                +{formatElapsed(durationMs)}
+              // Mount-gated for the same reason as the header counter: computed from the
+              // current clock on both passes, so a second ticking between them threw an
+              // uncaught #418 hydration error on the server-rendered seed.
+              <span className="op-chrome flex-shrink-0 font-mono text-[11px] tabular-nums" aria-hidden>
+                {mounted ? `+${formatElapsed(durationMs)}` : ""}
               </span>
             )}
             {/* Row height is the ONLY visual carrier of duration, so it has to be
@@ -235,14 +245,14 @@ function StepRow({
                 : `No response from the server for ${Math.round(quietMs / 1000)}s`}
             </p>
           ) : detail ? (
-            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</p>
+            <p className="op-chrome mt-0.5 truncate font-mono text-[11px]">{detail}</p>
           ) : null}
         </div>
 
         {/* Wall clock, not relative: the real task is lining this tape up against
             `docker logs`, and this project's own forensics are written in clock time. */}
         <time
-          className="w-[62px] flex-shrink-0 pt-px text-right font-mono text-[11px] tabular-nums text-muted-foreground"
+          className="op-chrome w-[62px] flex-shrink-0 pt-px text-right font-mono text-[11px] tabular-nums"
           dateTime={new Date(step.at).toISOString()}
           title={!live ? `took ${spellDuration(durationMs)}` : undefined}
         >

@@ -28,10 +28,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Attributed, like `/api/games/control`: without it every record entered through this
+  // route read `startedBy: null`, which the registry means as "automatic — the Workshop
+  // watcher did it", so a conflict caused here named nobody.
+  const by = session.user.name;
+  let changed = true;
   try {
     switch (action) {
       case "start":
-        await powerOn("minecraft");
+        await powerOn("minecraft", by);
         await db.gameState.upsert({
           where: { id: "main" },
           update: { activeGame: "minecraft" },
@@ -39,15 +44,17 @@ export async function POST(request: NextRequest) {
         });
         break;
       case "stop":
-        await powerOff("minecraft");
-        await db.gameState.upsert({
-          where: { id: "main" },
-          update: { activeGame: null },
-          create: { id: "main", activeGame: null },
-        });
+        changed = await powerOff("minecraft", by);
+        if (changed) {
+          await db.gameState.upsert({
+            where: { id: "main" },
+            update: { activeGame: null },
+            create: { id: "main", activeGame: null },
+          });
+        }
         break;
       case "restart":
-        await restartGame("minecraft");
+        await restartGame("minecraft", by);
         break;
     }
   } catch (e) {
@@ -56,13 +63,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  await db.activity.create({
-    data: {
-      userId: session.user.id,
-      action: `server_${action}`,
-      details: JSON.stringify({ game: "minecraft", action }),
-    },
-  });
+  // No durable row for a stop that stopped nothing — see `/api/games/control`.
+  if (changed) {
+    await db.activity.create({
+      data: {
+        userId: session.user.id,
+        action: `server_${action}`,
+        details: JSON.stringify({ game: "minecraft", action }),
+      },
+    });
+  }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, changed });
 }

@@ -15,6 +15,11 @@ export function RoadhogDrawer() {
           variant="ghost"
           size="sm"
           onClick={() => setOpen(!open)}
+          /* The visible label is a bare "?", so a screen reader announced this as
+             "▼ question mark, button" — and it sits directly above the operations strip,
+             where an unlabelled control reads as a rendering failure. */
+          aria-label={open ? "Hide the picture" : "Show a picture"}
+          aria-expanded={open}
           className="text-xs text-muted-foreground hover:text-primary gap-1.5"
         >
           <span className={cn("transition-transform inline-block", open && "rotate-180")}>
