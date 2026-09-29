@@ -6,14 +6,21 @@ import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
+import { isPathInside, looksBinary, readTextFile } from "@/lib/file-guard";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 
 const BLOCKED_PATTERNS = ["..", "~", "node_modules"];
 
 function isPathSafe(requestedPath: string): boolean {
-  const resolved = path.resolve(MC_DIR, requestedPath);
-  if (!resolved.startsWith(MC_DIR)) return false;
+  // `isPathInside`, not `resolved.startsWith(MC_DIR)`: the old form matched any sibling
+  // sharing the prefix (`/minecraft-old/…` passes `startsWith("/minecraft")` and has no
+  // `..` for BLOCKED_PATTERNS to catch). Of the three file routes this is the only one
+  // where that is currently unreachable -- the web container's mounts are `/minecraft`,
+  // `/sevendtd`, `/sevendtd-config`, `/zomboid`, `/zomboid-workshop` (verified
+  // 2026-09-29), and the other two routes each have a prefix-sibling among them. Fixed by
+  // shape in all three rather than by argument about which mounts exist.
+  if (!isPathInside(MC_DIR, path.resolve(MC_DIR, requestedPath))) return false;
   if (BLOCKED_PATTERNS.some((p) => requestedPath.includes(p))) return false;
   return true;
 }
@@ -48,14 +55,33 @@ export async function GET(request: NextRequest) {
   try {
     if (action === "read") {
       const stats = await stat(fullPath);
+      // A directory read used to reach `readFile` and come back as a 500 with a raw
+      // `EISDIR` in it. Say what happened instead.
+      if (stats.isDirectory()) {
+        return NextResponse.json({ error: "That's a folder, not a file." }, { status: 400 });
+      }
       if (stats.size > 512 * 1024) {
         return NextResponse.json(
           { error: "File too large (max 512KB)" },
           { status: 400 }
         );
       }
-      const content = await readFile(fullPath, "utf-8");
-      return NextResponse.json({ content, path: relativePath });
+      // Refuse rather than return mojibake. This route used to read with `"utf-8"`,
+      // which maps every non-UTF-8 byte to U+FFFD; the editor then submitted that
+      // string back and the PUT below wrote it, destroying the file while reporting
+      // success. `world/level.dat` (411-byte gzip NBT) became 752 bytes that way.
+      const text = await readTextFile(fullPath);
+      if (!text.ok) {
+        return NextResponse.json(
+          {
+            error:
+              "This file isn't text, so it can't be shown or edited here — editing it would corrupt it.",
+            binary: true,
+          },
+          { status: 415 }
+        );
+      }
+      return NextResponse.json({ content: text.content, path: relativePath });
     }
 
     const entries = await readdir(fullPath, { withFileTypes: true });
@@ -128,6 +154,21 @@ export async function PUT(request: NextRequest) {
   const fullPath = path.resolve(MC_DIR, relativePath);
 
   try {
+    // Never let the text editor write over a file that isn't text. The read side now
+    // refuses to hand one out, but this is the half that does the damage, and the two
+    // have to be able to fail independently -- a stale tab opened before this shipped
+    // still holds the mojibake and its Save button still works. A missing file is a
+    // legitimate create, so only an *existing* binary is refused.
+    const existing = await readFile(fullPath).catch(() => null);
+    if (existing && looksBinary(existing)) {
+      return NextResponse.json(
+        {
+          error: `${path.basename(relativePath)} isn't a text file. Saving it through the editor would corrupt it, so nothing was written.`,
+        },
+        { status: 415 }
+      );
+    }
+
     await writeFile(fullPath, content, "utf-8");
 
     await db.activity.create({

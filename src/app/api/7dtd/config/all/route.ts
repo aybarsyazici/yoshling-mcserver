@@ -6,6 +6,7 @@ import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
+import { escapeXml, unescapeXml } from "@/lib/sdtd-xml";
 
 // The full sdtdserver.xml, exposed generically: read every <property>, keep its
 // trailing comment as help text, and write back any subset the UI sends. This
@@ -27,18 +28,29 @@ export interface SdtdProperty {
 // Matches: <property name="X" value="Y"/>   <!-- help -->
 const PROP_RE = /<property\s+name="([^"]+)"\s+value="([^"]*)"\s*\/>(?:\s*<!--\s*([\s\S]*?)\s*-->)?/g;
 
+/**
+ * This route is the only one that *round-trips* values through the XML, and for months
+ * it only did half of it: the PUT escaped on the way in, and this parser handed the raw
+ * attribute text back out. So a value containing `& < > "` came back as `&amp;`/`&lt;`
+ * and the next Save escaped it again -- entities doubling on every edit, measured on
+ * disk. `unescapeXml` is the missing half. See `src/lib/sdtd-xml.ts` for the full
+ * reproduction and why `&amp;` must be substituted last.
+ *
+ * `help` is deliberately *not* unescaped: it is comment text, not attribute text, so it
+ * was never escaped on the way in and is never written back.
+ */
 function parseProperties(xml: string): SdtdProperty[] {
   const out: SdtdProperty[] = [];
   let m: RegExpExecArray | null;
   PROP_RE.lastIndex = 0;
   while ((m = PROP_RE.exec(xml)) !== null) {
-    out.push({ name: m[1], value: m[2], help: (m[3] || "").replace(/\s+/g, " ").trim() });
+    out.push({
+      name: m[1],
+      value: unescapeXml(m[2]),
+      help: (m[3] || "").replace(/\s+/g, " ").trim(),
+    });
   }
   return out;
-}
-
-function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 // Sensitive keys the UI must not expose/allow-edit through the generic editor
@@ -99,9 +111,18 @@ export async function PUT(request: NextRequest) {
 
   const body = await request.json();
   const updates: Record<string, string> = body?.updates ?? {};
+  // A locked key used to be dropped with no mention in the response: `PUT
+  // {"TelnetPassword":"x","ServerDescription":"y"}` answered
+  // `{"success":true,"applied":["ServerDescription"]}`. That is the same silent-drop the
+  // `ignored` array below was added to fix, so name them the same way. Not reachable from
+  // the UI (locked keys are never rendered), but this endpoint is the API too.
+  const locked = Object.keys(updates).filter((n) => LOCKED.has(n));
   const names = Object.keys(updates).filter((n) => !LOCKED.has(n));
   if (names.length === 0) {
-    return NextResponse.json({ error: "No editable settings provided" }, { status: 400 });
+    return NextResponse.json(
+      { error: "No editable settings provided", locked },
+      { status: 400 }
+    );
   }
 
   let xml: string;
@@ -196,5 +217,5 @@ export async function PUT(request: NextRequest) {
     });
   } catch {}
 
-  return NextResponse.json({ success: true, applied, ignored });
+  return NextResponse.json({ success: true, applied, ignored, locked });
 }

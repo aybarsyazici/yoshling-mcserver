@@ -6,6 +6,7 @@ import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
+import { isPathInside, looksBinary, readTextFile } from "@/lib/file-guard";
 
 // 7DTD exposes two useful trees, both mounted into the web container:
 //   config → serverfiles (sdtdserver.xml, serverconfig.xml, Mods, Data)
@@ -23,8 +24,14 @@ function resolveRoot(root: string | null): string | null {
 }
 
 function isPathSafe(baseDir: string, requestedPath: string): boolean {
-  const resolved = path.resolve(baseDir, requestedPath);
-  if (!resolved.startsWith(baseDir)) return false;
+  // `isPathInside`, not `resolved.startsWith(baseDir)`. The two roots here are siblings
+  // that share a prefix, which is what made the old form *live* rather than latent:
+  // measured on the box, `?root=saves&path=/sevendtd-config` returned a 200 listing of
+  // the whole config tree, because `path.resolve("/sevendtd", "/sevendtd-config")` is
+  // `/sevendtd-config` -- prefixed by `/sevendtd`, and with no `..` for BLOCKED_PATTERNS
+  // to catch. The same predicate gates PUT and DELETE, so `sdtdserver.xml` was writable
+  // "through" the saves root.
+  if (!isPathInside(baseDir, path.resolve(baseDir, requestedPath))) return false;
   if (BLOCKED_PATTERNS.some((p) => requestedPath.includes(p))) return false;
   return true;
 }
@@ -60,11 +67,31 @@ export async function GET(request: NextRequest) {
   try {
     if (action === "read") {
       const stats = await stat(fullPath);
+      // A directory read used to reach `readFile` and come back as a 500 carrying a raw
+      // `EISDIR`. Say what happened instead.
+      if (stats.isDirectory()) {
+        return NextResponse.json({ error: "That's a folder, not a file." }, { status: 400 });
+      }
       if (stats.size > 512 * 1024) {
         return NextResponse.json({ error: "File too large (max 512KB)" }, { status: 400 });
       }
-      const content = await readFile(fullPath, "utf-8");
-      return NextResponse.json({ content, path: relativePath });
+      // Refuse rather than hand back mojibake: a `"utf-8"` read maps every non-UTF-8 byte
+      // to U+FFFD, and the editor then submits that string back to the PUT below, which
+      // writes it over the original and reports success. See `looksBinary`. The saves tree
+      // here is nearly all binary -- `Saves/Reveo Valley/Fresh2` holds `main.ttw`,
+      // `decoration.7dt`, `drones.dat`, `Region/`, all listed and all one click away.
+      const text = await readTextFile(fullPath);
+      if (!text.ok) {
+        return NextResponse.json(
+          {
+            error:
+              "This file isn't text, so it can't be shown or edited here — editing it would corrupt it.",
+            binary: true,
+          },
+          { status: 415 }
+        );
+      }
+      return NextResponse.json({ content: text.content, path: relativePath });
     }
 
     const entries = await readdir(fullPath, { withFileTypes: true });
@@ -133,8 +160,25 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
+  const fullPath = path.resolve(baseDir, relativePath);
+
   try {
-    await writeFile(path.resolve(baseDir, relativePath), content, "utf-8");
+    // Never let the text editor write over a file that isn't text. The read side now
+    // refuses to hand one out, but this is the half that does the damage and the two have
+    // to fail independently -- a tab opened before this shipped still holds the mojibake
+    // and its Save button still works. A missing file is a legitimate create, so only an
+    // *existing* binary is refused.
+    const existing = await readFile(fullPath).catch(() => null);
+    if (existing && looksBinary(existing)) {
+      return NextResponse.json(
+        {
+          error: `${path.basename(relativePath)} isn't a text file. Saving it through the editor would corrupt it, so nothing was written.`,
+        },
+        { status: 415 }
+      );
+    }
+
+    await writeFile(fullPath, content, "utf-8");
     await db.activity.create({
       data: {
         userId: session.user.id,

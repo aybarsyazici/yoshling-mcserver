@@ -9,6 +9,7 @@ import { db } from "@/lib/db";
 import { verifyUploadToken } from "@/lib/upload-token";
 import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { isPathInside, unsafeZipPaths, zipMemberNames } from "@/lib/file-guard";
 
 // This route can be hit cross-origin from direct.yoshling.xyz (the non-Cloudflare
 // host used for large uploads). Allow that specific origin for CORS.
@@ -44,8 +45,23 @@ export const maxDuration = 300;
 const execFileAsync = promisify(execFile);
 const SAVES_DIR = process.env.SDTD_SERVER_DIR || "/sevendtd"; // = .local/share/7DaysToDie
 const WORLDS_DIR = path.join(SAVES_DIR, "GeneratedWorlds");
+const SAVES_ROOT = path.join(SAVES_DIR, "Saves");
+const SDTD_CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config";
 const TMP_DIR = "/app/data/tmp";
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB cap
+
+/**
+ * The uid/gid the 7DTD server runs as.
+ *
+ * This web container is Alpine and runs as **root**, so everything it unzips and moves
+ * lands root-owned — and the game does not. Verified on the box 2026-09-29: `/sevendtd`,
+ * `/sevendtd/Saves` and `/sevendtd/GeneratedWorlds/Reveo Valley` are all `1000:1000`
+ * (`vinanrra/7dtd-server` runs as its `sdtdserver` user), and neither `PUID` nor `PGID`
+ * is set on the web container, so the fallback is what is used in practice. The env vars
+ * exist only so an image change has one knob rather than a code edit.
+ */
+const SDTD_UID = process.env.SDTD_PUID || process.env.PUID || "1000";
+const SDTD_GID = process.env.SDTD_PGID || process.env.PGID || "1000";
 
 // A custom WORLD (map) has these signature files; a SAVE has main.ttw / region data.
 const WORLD_MARKERS = ["dtm.raw", "biomes.png", "prefabs.xml", "splat3.png", "world.json"];
@@ -53,6 +69,66 @@ const SAVE_MARKERS = ["main.ttw", "players.xml"];
 
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9 _.-]/g, "").replace(/\.+/g, ".").trim().slice(0, 60);
+}
+
+/**
+ * Was the placement actually usable **by the game**?
+ *
+ * The check this replaces was a root `stat()` on the destination, which answers "does a
+ * directory exist" and nothing else. It reported a green `On disk: found where the server
+ * will look for it` in both of the real failure modes, because root cannot see either of
+ * them: a tree left root-owned by `mv`, and a zip that stored 0600 modes. Worse, on the
+ * save branch it stat'd `Saves/` *itself*, which exists whatever the upload did — so that
+ * fact could not fail.
+ *
+ * Ask the two questions the game's uid would ask instead: do I own this, and can I read
+ * the file that makes it a world/save?
+ *
+ * `SDTD_UID`/`SDTD_GID` must be **numeric** — `chown` would accept a name, but `stat`
+ * reports numbers, so a name would make this comparison fail on every upload.
+ */
+async function verifyPlacement(
+  dir: string,
+  markers: string[]
+): Promise<{ ok: boolean; why: string }> {
+  const st = await stat(dir).catch(() => null);
+  if (!st || !st.isDirectory()) return { ok: false, why: "not found after the move" };
+  if (st.uid !== Number(SDTD_UID) || st.gid !== Number(SDTD_GID)) {
+    return { ok: false, why: `placed, but owned by ${st.uid}:${st.gid}, not by the game's user` };
+  }
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  const marker = entries.find((e) => markers.some((m) => m.toLowerCase() === e.toLowerCase()));
+  if (!marker) return { ok: false, why: "placed, but the file that identifies it is missing" };
+  const mst = await stat(path.join(dir, marker)).catch(() => null);
+  // Group + other read. `chmod -R go+rX` sets both; a zip storing 0600 sets neither, and
+  // that is a world the server silently cannot load.
+  if (!mst || (mst.mode & 0o044) !== 0o044) {
+    return { ok: false, why: "placed, but not readable by the game's user" };
+  }
+  return { ok: true, why: "owned by the game's user and readable" };
+}
+
+/**
+ * The world *and* game name the server is configured to load, i.e. the save directory
+ * `Saves/<GameWorld>/<GameName>` that holds the progress people actually played.
+ *
+ * Both halves matter and only one of them was ever read. `protectedWorldReason` checks
+ * `GameWorld` alone, which is the right question for a **map** under `GeneratedWorlds`
+ * and the wrong one for a **save** under `Saves/` -- a save upload named
+ * `Reveo Valley/Fresh2` is the live save, and the old save branch would have overwritten
+ * it without asking. Returns null when the file can't be read, in which case every
+ * caller treats "unknown" as "not protected" exactly as it did before.
+ */
+async function liveSaveIds(): Promise<{ world: string; game: string } | null> {
+  try {
+    const xml = await readFile(path.join(SDTD_CONFIG_DIR, "sdtdserver.xml"), "utf-8");
+    const world = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i)?.[1] ?? "";
+    const game = xml.match(/<property\s+name="GameName"\s+value="([^"]*)"/i)?.[1] ?? "";
+    if (!world && !game) return null;
+    return { world, game };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -76,11 +152,7 @@ async function protectedWorldReason(
 ): Promise<string | null> {
   // 1) the world the server is configured to load (sdtdserver.xml GameWorld).
   try {
-    const xml = await readFile(
-      path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml"),
-      "utf-8"
-    );
-    const cur = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i)?.[1];
+    const cur = (await liveSaveIds())?.world;
     if (cur && cur === name) {
       return `"${name}" is the server's current world. Switch Game World to something else first.`;
     }
@@ -102,7 +174,7 @@ async function protectedWorldReason(
 }
 
 // Stock worlds ship inside the server files (Navezgane, Pregen*, …).
-const STOCK_WORLDS_DIR = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "Data", "Worlds");
+const STOCK_WORLDS_DIR = path.join(SDTD_CONFIG_DIR, "Data", "Worlds");
 
 async function listDirs(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
@@ -218,8 +290,10 @@ async function placeUpload(
 
     // Validate + list contents (also rejects non-zips / zip bombs early).
     op.step("Checking the upload");
-    const { stdout: listing } = await execFileAsync("unzip", ["-l", zipPath], { maxBuffer: 16 * 1024 * 1024 });
-    if (/\.\.\//.test(listing)) {
+    const { stdout: listing, stderr: listErr } = await execFileAsync("unzip", ["-l", zipPath], {
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (unsafeZipPaths(listing, listErr)) {
       op.reject("Rejected the upload — it contains unsafe paths");
       return { value: json({ error: "Zip contains unsafe paths" }, 400) };
     }
@@ -236,7 +310,10 @@ async function placeUpload(
         ),
       };
     }
-    const entryCount = listing.split("\n").filter((l) => /^\s*\d+\s/.test(l)).length;
+    // `/^\s*\d+\s/` also matched `unzip -l`'s trailing "<total bytes>  <n> files" row, so
+    // every count this operation reported was one too many. Verified against the container's
+    // BusyBox unzip: a 3-file zip counted as 4. `zipMemberNames` parses the rows properly.
+    const entryCount = zipMemberNames(listing).length;
     op.settle(`Checked the upload — ${looksWorld ? "a world map" : "a save"}`, {
       count: { done: entryCount, noun: "files" },
     });
@@ -245,7 +322,17 @@ async function placeUpload(
     op.step("Unpacking the upload");
     await rm(workDir, { recursive: true, force: true });
     await mkdir(workDir, { recursive: true });
-    await execFileAsync("unzip", ["-o", "-q", zipPath, "-d", workDir], { maxBuffer: 16 * 1024 * 1024, timeout: 240000 });
+    const { stderr: unzipErr } = await execFileAsync("unzip", ["-o", "-q", zipPath, "-d", workDir], {
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 240000,
+    });
+    // The extraction is where Info-ZIP actually announces a strip, and it announces it on
+    // stderr. Nothing has been placed yet — the `finally` below removes `workDir` — so
+    // refusing here still leaves the box untouched.
+    if (unsafeZipPaths("", unzipErr)) {
+      op.reject("Rejected the upload — it contains unsafe paths");
+      return { value: json({ error: "Zip contains unsafe paths" }, 400) };
+    }
     op.settle(`Unpacked ${entryCount.toLocaleString()} files`, {
       count: { done: entryCount, noun: "files" },
     });
@@ -257,6 +344,12 @@ async function placeUpload(
     let installedAs: string;
     let kind: "world" | "save";
     let replacedExisting = false;
+    // The directory that actually got placed, so the chown/chmod and the read-back below
+    // both point at the same thing. The save branch used to verify `Saves/` itself, which
+    // exists no matter what the upload did.
+    let placedPath: string;
+    // For a save, the world folder it went under — needed for the response and the hint.
+    let installedUnder: string | null = null;
 
     if (looksWorld) {
       kind = "world";
@@ -296,6 +389,7 @@ async function placeUpload(
       await rm(dest, { recursive: true, force: true });
       await execFileAsync("mv", [rootDir, dest]);
       installedAs = worldName;
+      placedPath = dest;
       op.settle(
         replacedExisting
           ? `Placed the world "${worldName}", replacing the copy already on the box`
@@ -303,43 +397,143 @@ async function placeUpload(
       );
     } else {
       kind = "save";
+      /**
+       * A 7DTD save lives at `Saves/<GameWorld>/<GameName>`, so *both* names have to come
+       * out of the zip. `findContentRoot` returns the directory holding `main.ttw`, which
+       * is the `<GameName>` level; its parent is `<GameWorld>`.
+       *
+       * What this replaces was destructive and produced an unloadable save, while
+       * reporting a green success. Measured 2026-09-29 by the sweep that found it, with a
+       * zip containing `AgentTestSaveWorld/AgentTestSave/{main.ttw,players.xml}`:
+       *
+       *   await execFileAsync("cp", ["-a", `${rootDir}/.`, `${dest}/`]);   // dest = Saves/
+       *
+       * `main.ttw` and `players.xml` landed **directly in `/sevendtd/Saves/`** — no
+       * `AgentTestSaveWorld/AgentTestSave/` at all, so no `GameWorld`/`GameName` pair
+       * could ever point at them — and `cp -a` applied the *source* directory's owner to
+       * the destination, taking `/sevendtd/Saves` from `1000:1000` to `0:0` (it has since
+       * been put back; it reads `1000:1000` today). The server runs as uid 1000, so while
+       * that lasted it could not create save directories there at all: the next new game or
+       * reset would have failed. The route's own comment already said "Place the save under
+       * `Saves/<parent>/<name>` preserving its structure"; it did not, and nothing checked.
+       */
+      const gameName = safeName(path.basename(rootDir));
+      const parentDir = path.dirname(rootDir);
+      const worldName = safeName(path.basename(parentDir));
+      // `rootDir === workDir` means the markers sat at the zip root (no names at all);
+      // `parentDir === workDir` means there was one folder, so we have a game name and no
+      // world. Either way we cannot form `Saves/<world>/<game>` and must not guess — a
+      // guessed world name is a save the server will never find.
+      const noWorldFolder = rootDir === workDir || parentDir === workDir;
+      if (noWorldFolder || !/[a-zA-Z0-9]/.test(gameName) || !/[a-zA-Z0-9]/.test(worldName)) {
+        op.reject("Couldn't work out which world this save belongs to");
+        return {
+          value: json(
+            {
+              error:
+                "Couldn't work out which world this save belongs to. Zip it as <World>/<GameName>/main.ttw and upload again.",
+            },
+            400
+          ),
+        };
+      }
+
+      const dest = path.join(SAVES_ROOT, worldName, gameName);
+      // Re-check the path we are about to `rm -rf`, exactly as the world branch re-checks
+      // GeneratedWorlds. `safeName` collapses ".." to "." and a name with no ASCII
+      // alphanumerics to "", either of which would make `dest` `Saves/` itself — i.e. every
+      // save on the box, including the one being played. The alphanumeric test above
+      // already refuses those; this is the second lock on the same door, because the thing
+      // behind it is unrecoverable.
+      if (!isPathInside(SAVES_ROOT, dest) || path.dirname(dest) !== path.join(SAVES_ROOT, worldName)) {
+        op.reject("Couldn't work out where to put this save");
+        return {
+          value: json(
+            { error: "Couldn't work out a safe location for this save. Rename the folders inside the zip using plain letters and numbers." },
+            400
+          ),
+        };
+      }
+
+      // Refuse to overwrite the save the server is configured to play. `protectedWorldReason`
+      // guards `GameWorld` only, which is the right question for a map and the wrong one
+      // for a save: `Reveo Valley` is shared by `Fresh1` and `Fresh2`, so the world name
+      // alone cannot distinguish the live save from a sibling. Without this the branch
+      // above would `rm -rf` real player progress on a name collision.
+      const live = await liveSaveIds();
+      if (live && live.world === worldName && live.game === gameName) {
+        const why = `"${worldName}/${gameName}" is the save the server is configured to play, and uploading over it would delete that progress. Rename the folders in the zip, or change Game World / Game Name in Settings first — or restore from a backup instead.`;
+        op.reject(`Refused to place the save — it is the one the server is set to play`);
+        return { value: json({ error: why }, 409) };
+      }
+
       op.step("Placing the save");
-      // Place the save under Saves/<parent>/<name> preserving its structure.
-      const dest = path.join(SAVES_DIR, "Saves");
-      await mkdir(dest, { recursive: true });
-      // Copy contents of the extracted tree into Saves/ (merge).
-      await execFileAsync("cp", ["-a", `${rootDir}/.`, `${dest}/`]);
-      installedAs = path.basename(rootDir);
-      op.settle(`Placed the save "${installedAs}" under Saves`);
+      replacedExisting = await stat(dest).then(() => true).catch(() => false);
+      await mkdir(path.dirname(dest), { recursive: true });
+      await rm(dest, { recursive: true, force: true });
+      // `mv` the directory itself, not `cp -a <dir>/.` of its contents — that is what
+      // flattened the save into `Saves/` and chowned `Saves/` to root.
+      await execFileAsync("mv", [rootDir, dest]);
+      installedAs = gameName;
+      installedUnder = worldName;
+      placedPath = dest;
+      op.settle(
+        replacedExisting
+          ? `Placed the save "${gameName}" under "${worldName}", replacing the copy already on the box`
+          : `Placed the save "${gameName}" under "${worldName}"`
+      );
     }
+
+    // Hand the placed tree to the user the game runs as, in both branches. Nothing did
+    // this before, and neither branch could have got it right by accident.
+    //
+    // The web container runs as root, so `unzip` extracts root-owned. `/app/data` and
+    // `/sevendtd` are the **same filesystem** (dev 65028, verified 2026-09-29), so the `mv`
+    // is a rename: it moves the inode and therefore carries that root ownership into the
+    // game's tree unchanged. Everything the game itself created there is `1000:1000`. A
+    // root-owned world is one the server cannot read, and that surfaces minutes later as a
+    // boot that never finishes rather than as an upload error — which is the worst possible
+    // place for it to surface.
+    //
+    // `chmod` covers the other half: a zip is free to store 0600 modes and `unzip` honours
+    // them, so ownership alone is not enough. Both commands were run in this container
+    // against a scratch tree to confirm BusyBox accepts them and that `u+rwX,go+rX` turns
+    // 0600/0700 into 0644/0755.
+    op.step("Handing the files to the game's user");
+    await execFileAsync("chown", ["-R", `${SDTD_UID}:${SDTD_GID}`, placedPath]);
+    await execFileAsync("chmod", ["-R", "u+rwX,go+rX", placedPath]);
+    op.settle(`Set ownership to ${SDTD_UID}:${SDTD_GID}`);
 
     // Read it back. "We ran mv" is not evidence the files are where the server will
     // look for them, and the rule here is that a success rests on something observed
     // after the work — an operation that returns without a fact renders `unverified`.
-    const landed = await stat(
-      kind === "world" ? path.join(WORLDS_DIR, installedAs) : path.join(SAVES_DIR, "Saves")
-    ).then(
-      (st) => st.isDirectory(),
-      () => false
-    );
+    const landed = await verifyPlacement(placedPath, kind === "world" ? WORLD_MARKERS : SAVE_MARKERS);
 
     try {
       await db.activity.create({
         data: {
           userId,
           action: "edit_file",
-          details: JSON.stringify({ game: "7dtd", uploaded: kind, name: installedAs }),
+          details: JSON.stringify({
+            game: "7dtd",
+            uploaded: kind,
+            name: installedAs,
+            ...(installedUnder ? { world: installedUnder } : {}),
+          }),
         },
       });
     } catch {}
 
     return {
       facts: [
-        { label: "Installed as", value: installedAs },
+        {
+          label: "Installed as",
+          value: installedUnder ? `${installedUnder}/${installedAs}` : installedAs,
+        },
         {
           label: "On disk",
-          value: landed ? "found where the server will look for it" : "not found after the move",
-          verdict: landed ? undefined : "bad",
+          value: landed.why,
+          verdict: landed.ok ? undefined : ("bad" as const),
         },
         ...(replacedExisting
           ? [
@@ -355,11 +549,16 @@ async function placeUpload(
         success: true,
         kind,
         name: installedAs,
+        world: installedUnder,
         replacedExisting,
         hint:
           kind === "world"
             ? `World "${installedAs}" installed${replacedExisting ? ", replacing the copy that was already on the box" : ""}. In Settings → set Game World to "${installedAs}" and start a new game on it.`
-            : `Save "${installedAs}" installed under Saves. Set Game World / Game Name to match it, then start the server.`,
+            // Name what actually exists on disk. The old text said "installed under Saves"
+            // and told the admin to "set Game World / Game Name to match it" without
+            // saying what to match — which was apt, because the save had been flattened
+            // into `Saves/` and there was nothing to match.
+            : `Save "${installedAs}" installed under "${installedUnder}". In Settings → set Game World to "${installedUnder}" and Game Name to "${installedAs}".`,
       }),
     };
   } finally {
