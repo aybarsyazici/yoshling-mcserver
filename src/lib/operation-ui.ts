@@ -361,8 +361,13 @@ function powerReason(a: {
  * It must be fed `ownAction`, never the operation's own `action`: during a hand-off
  * those differ, and the global one relabels the *outgoing* world's button with the
  * incoming world's verb.
+ *
+ * Module-local for that reason — `powerState` is the only thing that may call it, and
+ * the label it produces is already on the returned surface. Exporting it would put a
+ * function that takes "an action" back within reach of a caller holding the wrong one,
+ * which is the bug this whole helper exists to close.
  */
-export function busyLabel(action?: "start" | "stop" | "restart"): string {
+function busyLabel(action?: "start" | "stop" | "restart"): string {
   switch (action) {
     case "restart":
       return "Restarting…";
