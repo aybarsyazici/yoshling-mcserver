@@ -116,9 +116,15 @@ export async function readManifestSidecar<T>(archivePath: string): Promise<T | n
 /**
  * Drop the sidecar.
  *
- * Called everywhere the archive itself is removed — the delete branch and both
- * failure `rm`s in create. A sidecar that outlived its archive would describe a world
- * that is no longer there, and `worldsUsedByBackups` would keep refusing to delete it.
+ * Called everywhere the archive itself is removed — the delete branch and both failure
+ * `rm`s in create.
+ *
+ * An orphan sidecar is not *read* by anything (every caller enumerates `.tar.gz` and a
+ * sidecar does not end in it), so this is not load-bearing today. What it prevents is
+ * the resurrection case: a later archive written to the same name would silently adopt
+ * the old file's manifest and report the wrong world. Names carry a
+ * second-resolution timestamp, so that is unlikely rather than impossible — which is
+ * exactly the kind of "unlikely" this codebase has been bitten by before.
  */
 export async function removeManifestSidecar(archivePath: string): Promise<void> {
   await rm(manifestSidecarPath(archivePath), { force: true }).catch(() => {});

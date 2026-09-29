@@ -252,9 +252,9 @@ export async function POST(request: NextRequest) {
           // below does the `rm`.
           refuseIfPreempted(op, "this backup");
 
-          // Only now: a sidecar for an archive the refusal above deleted would describe
-          // a file that is not there, and `worldsUsedByBackups`-style guards would keep
-          // trusting it.
+          // Only now, after the preemption refusal: a sidecar written earlier would
+          // outlive the archive that refusal deletes, and be adopted by the next archive
+          // to land on the same name.
           await writeManifestSidecar(target, manifest);
 
           const facts: OperationFact[] = [];
