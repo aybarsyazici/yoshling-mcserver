@@ -91,6 +91,39 @@ if [ -n "$SEEDS" ]; then
   exit 1
 fi
 
+# Refuse while a backup is mid-copy, and name an orphan if one is lying around.
+#
+# Paid for on 2026-09-30: a Project Zomboid `backup.create` was 4m14s into copying a
+# 1.9 GB save when a deploy recreated the web container. Everything about it was lost at
+# once — the copy is a child of the Next process so it died with it; the operation registry
+# is in-memory so the record vanished; and `logBackup` only writes an Activity row on
+# success, correctly, so nothing durable recorded that it had ever started. What was left
+# was a 937 MB orphaned `.work-*` staging directory that nothing prunes.
+#
+# This keys on the staging directory rather than on the registry, deliberately. The obvious
+# implementation — ask `/api/operations` — needs a session cookie that a deploy script has
+# no business holding, and the first draft of this guard invented an unauthenticated
+# endpoint that does not exist, which is the seed guard's never-fires bug reinvented one
+# commit after documenting it. A `.work-*` directory is a real artefact on a real volume,
+# and the growth check below is what distinguishes "in flight" from "someone's leftovers".
+WORK_DIRS=$(ls -d /var/lib/docker/volumes/yoshling_web-data/_data/backups-*/.work-* 2>/dev/null || true)
+if [ -n "$WORK_DIRS" ]; then
+  A=$(du -sb $WORK_DIRS 2>/dev/null | awk '{t+=$1} END {print t+0}')
+  sleep 3
+  B=$(du -sb $WORK_DIRS 2>/dev/null | awk '{t+=$1} END {print t+0}')
+  if [ "$B" -gt "$A" ]; then
+    echo "deploy: a backup is copying right now — recreating web kills it and loses the record:" >&2
+    echo "$WORK_DIRS" | sed 's/^/        /' >&2
+    echo "        grew $((B-A)) bytes in 3s. Wait for it, or FORCE_OPS=1 to accept losing it." >&2
+    [ "${FORCE_OPS:-0}" = "1" ] || exit 1
+    echo "        FORCE_OPS=1 set — proceeding." >&2
+  else
+    echo "deploy: note — orphaned backup staging left by an interrupted run (not growing):" >&2
+    du -sh $WORK_DIRS 2>/dev/null | sed 's/^/        /' >&2
+    echo "        Safe to delete; nothing prunes these." >&2
+  fi
+fi
+
 cd /opt/yoshling
 git fetch -q /root/y.bundle main
 
