@@ -5,6 +5,7 @@ import { motion } from "motion/react";
 import { SectionHeading } from "@/components/ui-bits";
 import { PowerGlyph } from "@/components/glyphs";
 import { GAMES, isGameId } from "@/lib/games";
+import { formatBytes } from "@/lib/format";
 import { Puzzle, FileEdit, Trash2, Users, Activity as ActivityIcon } from "lucide-react";
 
 interface Activity {
@@ -137,6 +138,19 @@ function formatAction(action: string, details: Record<string, unknown>): string 
       return `deleted ${details.path}${on}`;
     case "set_user_games":
       return `changed who can see which server`;
+    // Backups write a durable row as of 2026-09-30, and nothing rendered it: the `default`
+    // below turned `backup_restore` into the bare words "backup restore" with no world, no
+    // archive name and no size, sitting under a fully-formed "powered on the server ·
+    // Project Zomboid". Restoring a world is the most destructive thing the dashboard can
+    // do, so it is the last row that should be unreadable.
+    case "backup_create":
+      return `made a backup${on}${details.name ? ` (${details.name}${
+        typeof details.sizeBytes === "number" ? `, ${formatBytes(details.sizeBytes)}` : ""
+      })` : ""}`;
+    case "backup_restore":
+      return `restored the world from a backup${on}${details.name ? ` (${details.name})` : ""}`;
+    case "backup_delete":
+      return `deleted a backup${on}${details.name ? ` (${details.name})` : ""}`;
     default:
       return action.replace(/_/g, " ");
   }

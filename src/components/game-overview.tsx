@@ -490,6 +490,12 @@ function formatAction(action: string): string {
     server_restart: "restarted the server",
     edit_file: "edited a config file",
     delete_file: "deleted a file",
+    // This card is already per-world, so no world suffix here (unlike /activity's).
+    backup_create: "made a backup",
+    backup_restore: "restored the world from a backup",
+    backup_delete: "deleted a backup",
+    server_update: "updated the server",
+    server_reset: "reset the world",
   };
   return map[action] || action.replace(/_/g, " ");
 }

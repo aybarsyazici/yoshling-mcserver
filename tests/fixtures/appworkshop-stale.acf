@@ -1,0 +1,56 @@
+// Synthetic, and deliberately so. The real production manifest
+// (appworkshop_108600.acf, taken 2026-09-29) was fully up to date: for all 75 items
+// `WorkshopItemsInstalled.timeupdated` equalled `WorkshopItemDetails.latest_timeupdated`,
+// so it cannot tell a correct parser from the slice-to-end-of-file one that made
+// installed == published for every mod. This file is the same shape with the two
+// sections DISAGREEING for one item, which is the only state where the bug is visible.
+//
+// "2335368829" is stale: installed 1789340498, published 1799999999.
+// "2366717227" is current: both 1787109082.
+//
+// The leading `//` lines are not Valve KeyValues syntax; the parser is brace-driven and
+// starts at the first `"<SectionName>"` it is asked for, so they are inert.
+"AppWorkshop"
+{
+	"appid"		"108600"
+	"SizeOnDisk"		"3897274528"
+	"NeedsUpdate"		"0"
+	"NeedsDownload"		"0"
+	"TimeLastUpdated"		"0"
+	"TimeLastAppRan"		"0"
+	"LastBuildID"		"0"
+	"WorkshopItemsInstalled"
+	{
+		"2335368829"
+		{
+			"size"		"877956846"
+			"timeupdated"		"1789340498"
+			"manifest"		"2914114881058941615"
+		}
+		"2366717227"
+		{
+			"size"		"209762"
+			"timeupdated"		"1787109082"
+			"manifest"		"5670885748271101219"
+		}
+	}
+	"WorkshopItemDetails"
+	{
+		"2335368829"
+		{
+			"manifest"		"9914114881058941615"
+			"timeupdated"		"1799999999"
+			"timetouched"		"1800000000"
+			"latest_timeupdated"		"1799999999"
+			"latest_manifest"		"9914114881058941615"
+		}
+		"2366717227"
+		{
+			"manifest"		"5670885748271101219"
+			"timeupdated"		"1787109082"
+			"timetouched"		"1790714087"
+			"latest_timeupdated"		"1787109082"
+			"latest_manifest"		"5670885748271101219"
+		}
+	}
+}

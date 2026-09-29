@@ -80,7 +80,10 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--mc)",
     tintSoft: "var(--mc-soft)",
     connect: ["mc.yoshling.xyz"],
-    stopSeconds: 30,
+    // Measured 0.719s on production, exit code 0 (`time docker stop yoshling-mc`,
+    // 2026-09-29). 5 allows for a populated world flushing chunks; 30 was a guess that
+    // made the hand-off copy promise half a minute for something that takes under one.
+    stopSeconds: 5,
     detailLabel: "Uptime",
     api: {
       console: "/api/server/console",
@@ -100,8 +103,15 @@ export const GAMES: Record<GameId, GameMeta> = {
     // Show both: the hostname, and the raw IP (7DTD's direct-connect box only
     // reliably accepts a literal IP, so the IP is the sure thing).
     connect: ["7dtd.yoshling.xyz:26900", `${HOST_IP}:26900`],
-    // Its entrypoint really does `trap exit_handler SIGINT SIGTERM`, so it exits
-    // on its own: `docker inspect` reports `Exit=0`, not the 137 a SIGKILL leaves.
+    // Its entrypoint really does `trap exit_handler SIGINT SIGTERM` (unlike Project
+    // Zomboid's, which the docs claimed for months and does not), so it exits on its own:
+    // `docker inspect` reports `Exit=0`, not the 137 a SIGKILL leaves.
+    //
+    // **45 is an estimate, not a measurement** — the only 7DTD stop timed so far was
+    // inside a 33s hand-off that also started another world, which does not isolate it.
+    // Left deliberately generous and labelled rather than quietly changed to a
+    // better-looking number: writing an unmeasured figure as though it were measured is
+    // the habit this field has already been fixed for twice. Time one and replace this.
     stopSeconds: 45,
     detailLabel: "In-game day",
     api: {
@@ -124,10 +134,15 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--pz)",
     tintSoft: "var(--pz-soft)",
     connect: ["pz.yoshling.xyz:16261", `${HOST_IP}:16261`],
-    // Measured 9.0s on production, 0 players: RCON `quit` then a clean `exited` with
-    // code 0. 30 is that with headroom for a bigger save. NOT 300 — that is
-    // `PZ_STOP_TIMEOUT`, the fallback for a server too wedged to answer RCON.
-    stopSeconds: 30,
+    // Measured 11.4s through the dashboard on production, 0 players: RCON `quit`, then
+    // `exited` with code 0. NOT 300 — that is `PZ_STOP_TIMEOUT`, the fallback for a
+    // server too wedged to answer RCON.
+    //
+    // Was 30 ("that with headroom"), which rendered as "the stop takes about half a
+    // minute" for an 11-second operation. Padding a measurement is how this field went
+    // wrong the first two times, in both directions; put the number the box produced and
+    // let the copy say "about" if it wants to hedge.
+    stopSeconds: 12,
     detailLabel: "Uptime",
     api: {
       console: "/api/zomboid/console",
