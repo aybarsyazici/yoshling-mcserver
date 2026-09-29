@@ -25,7 +25,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
-export async function getRcon(target: RconTarget, timeoutMs = 3000): Promise<Rcon> {
+// `getRcon` and `disconnectRcon` are module-local on purpose. The cached socket is
+// the whole point of this file, and handing a raw `Rcon` out means a caller can
+// `send` on it without `rconCommand`'s failure handling — which is what evicts a
+// socket that died without emitting "end" (what a `docker stop` on the game
+// container looks like) and would otherwise make every later call time out.
+async function getRcon(target: RconTarget, timeoutMs = 3000): Promise<Rcon> {
   const key = targetKey(target);
   const existing = clients.get(key);
   if (existing && existing.authenticated) return existing;
@@ -52,7 +57,7 @@ export async function rconCommand(target: RconTarget, command: string, timeoutMs
   }
 }
 
-export async function disconnectRcon(target: RconTarget): Promise<void> {
+async function disconnectRcon(target: RconTarget): Promise<void> {
   const key = targetKey(target);
   const client = clients.get(key);
   if (!client) return;

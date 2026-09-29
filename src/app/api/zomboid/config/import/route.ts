@@ -100,7 +100,11 @@ export async function POST(request: NextRequest) {
 
   const changed: { name: string; from: string; to: string }[] = [];
   const added: string[] = [];
-  for (const [key, incomingValue] of incomingByName) {
+  // Keys, not entries: the uploaded value is deliberately not what we compare
+  // against. `effective(key)` is, because an infra key's incoming value is about to
+  // be overwritten by the preserved one — reading `incomingValue` here would report a
+  // change the file is never going to contain.
+  for (const key of incomingByName.keys()) {
     const to = effective(key)!;
     if (!currentByName.has(key)) {
       added.push(key);

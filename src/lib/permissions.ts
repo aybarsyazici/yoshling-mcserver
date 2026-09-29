@@ -12,18 +12,27 @@ type Role = "ADMIN" | "MOD" | "MEMBER";
  * The single exception is `users.manage`. If a MOD could edit world access they
  * could grant themselves the worlds they were deliberately kept out of, which
  * would make the whole gate decorative — so handing out access stays ADMIN-only.
+ *
+ * **Every key here is checked by at least one caller, and it is meant to stay that
+ * way.** Five keys used to sit in this table that nothing ever asked about —
+ * `server.version`, `server.loader`, `mods.update`, `mods.browse`, `mods.request` —
+ * so the table read like a policy while the code enforced something else. The
+ * settings route — the one that actually changes the version and the loader — gates
+ * on `settings.edit`, as does the Zomboid mod-update route; browsing mods is gated
+ * by world access alone; and `mods.request` guarded a request feature that exists in
+ * the Prisma schema and nowhere in the code. (`mods.update` is the easiest to
+ * mis-grep: every remaining match in the tree is the *`OperationKind`* of the same
+ * name, which is a different thing entirely.)
+ * Removing them narrows `Permission`, so a future `hasPermission(role, "mods.update")`
+ * fails to compile instead of silently returning a value nobody had reasoned about.
+ * If you need a new capability, add the key *and* its check in the same change.
  */
 const PERMISSIONS = {
   "server.start": ["ADMIN", "MOD"],
   "server.stop": ["ADMIN", "MOD"],
   "server.restart": ["ADMIN", "MOD"],
-  "server.version": ["ADMIN", "MOD"],
-  "server.loader": ["ADMIN", "MOD"],
   "mods.install": ["ADMIN", "MOD"],
   "mods.remove": ["ADMIN", "MOD"],
-  "mods.update": ["ADMIN", "MOD"],
-  "mods.browse": ["ADMIN", "MOD", "MEMBER"],
-  "mods.request": ["ADMIN", "MOD", "MEMBER"],
   "settings.edit": ["ADMIN", "MOD"],
   "users.manage": ["ADMIN"],
   "activity.view": ["ADMIN", "MOD", "MEMBER"],
@@ -33,10 +42,6 @@ export type Permission = keyof typeof PERMISSIONS;
 
 export function hasPermission(role: Role, permission: Permission): boolean {
   return (PERMISSIONS[permission] as readonly string[]).includes(role);
-}
-
-export function requireRole(...roles: Role[]) {
-  return (userRole: Role) => roles.includes(userRole);
 }
 
 // ── per-world access ────────────────────────────────────────────────────────

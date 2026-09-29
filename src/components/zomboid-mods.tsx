@@ -64,7 +64,6 @@ export function ZomboidMods({ tint }: { tint: string }) {
     if (pending === 0) return;
     const id = setInterval(load, 15000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending]);
 
   async function add(e: React.FormEvent) {

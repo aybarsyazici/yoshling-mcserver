@@ -10,7 +10,13 @@ import {
   getGameStatus,
   withGameStopped,
 } from "@/lib/game-manager";
-import { OperationConflictError, POWER_RESOURCES, listOperations, runOperation } from "@/lib/operations";
+import {
+  OperationConflictError,
+  POWER_RESOURCES,
+  listOperations,
+  runOperation,
+  type OpHandle,
+} from "@/lib/operations";
 
 const execAsync = promisify(exec);
 
@@ -158,6 +164,17 @@ const EMPTY_STATE: WatchState = {
  */
 const APPLY_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 
+/**
+ * The same wait for the stopped-server path, which costs no downtime.
+ *
+ * Shorter than the apply cooldown because the two failures cost different things: a
+ * failed *apply* spent the world's uptime, a failed *seed* spent CPU and Steam
+ * bandwidth with nobody waiting and the world already down. Long enough that a dead
+ * Workshop item costs four SteamCMD runs an hour instead of twelve, short enough
+ * that the files are ready well before anyone asks for the world back.
+ */
+const SEED_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
+
 let warnedStaleApply = false;
 
 /**
@@ -259,8 +276,14 @@ function kvSection(text: string, name: string): string | null {
   return null;
 }
 
+// The three version sources below are module-local on purpose: they are only
+// meaningful *compared against each other*, and `findStaleMods` is that comparison
+// — including the `latestKnownVersions` cross-check, which is stale whenever the
+// server has been stopped. A caller reaching for one alone would be reading a
+// number it cannot interpret.
+
 /** `timeupdated` per installed item — the version actually on disk. */
-export async function installedVersions(): Promise<Map<string, number>> {
+async function installedVersions(): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   let text: string;
   try {
@@ -288,7 +311,7 @@ export async function installedVersions(): Promise<Map<string, number>> {
  * client. Used only to cross-check the Steam API answer, because it goes stale
  * while the server is stopped and nothing refreshes it.
  */
-export async function latestKnownVersions(): Promise<Map<string, number>> {
+async function latestKnownVersions(): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   let text: string;
   try {
@@ -310,7 +333,7 @@ export async function latestKnownVersions(): Promise<Map<string, number>> {
 }
 
 /** Published `time_updated` + title per id, in ONE request for all of them. */
-export async function publishedVersions(
+async function publishedVersions(
   ids: string[]
 ): Promise<Map<string, { updated: number; title: string }>> {
   const out = new Map<string, { updated: number; title: string }>();
@@ -442,6 +465,30 @@ function announcement(stale: StaleMod[]): string {
   return `${label} ${shown}${rest}: the server will restart to update once all players leave.`;
 }
 
+// The download narration, shared by the two paths that do it.
+//
+// `runPoll` has two branches that call `seedMods` — one with the world already
+// stopped, one that stops it — and they carried byte-identical copies of these five
+// lines. Copies of narration drift the way copies of anything else do, and the two
+// would then describe the same SteamCMD run differently depending on why it started.
+
+function downloadStep(op: OpHandle, titles: string[]): void {
+  op.step("Downloading mods from Steam");
+  op.detail(titles.slice(0, 3).join(", ") + (titles.length > 3 ? `, +${titles.length - 3} more` : ""));
+}
+
+/**
+ * Only call this after `seedMods` has returned.
+ *
+ * `seedMods` throws unless SteamCMD reported every item downloaded, so reaching it IS
+ * the read-back — the count is Steam's own, not ours.
+ */
+function settleDownload(op: OpHandle, ids: string[]): void {
+  op.settle(`Downloaded ${ids.length} of ${ids.length} mods`, {
+    count: { done: ids.length, total: ids.length, noun: "mods" },
+  });
+}
+
 export type PollAction = "none" | "announced" | "applied" | "seeded" | "skipped";
 
 /**
@@ -453,29 +500,45 @@ export type PollAction = "none" | "announced" | "applied" | "seeded" | "skipped"
  */
 export async function pollModUpdates(): Promise<{ action: PollAction; stale: StaleMod[] }> {
   const state = await readWatchState();
+  // Fields `runPoll` needs to persist even when it throws, merged into BOTH exit
+  // paths below. It exists because `runPoll` writing them itself does not work, and
+  // silently did not: this function captures `state` *before* the poll, and the
+  // `catch` below re-persists `{ ...state, ... }` — so every `applyFailedAt` the
+  // inner catch recorded was reverted a moment later by the outer one. The
+  // documented one-hour cooldown therefore never engaged on a real failure, which is
+  // exactly the loop it was added to stop. (The other fields that catch writes,
+  // `applyingSince`/`applyingTitles`, happened to survive: they are set *inside*
+  // `runPoll`, so the pre-poll snapshot still carries the cleared value it wanted.)
+  const stamp: Partial<WatchState> = {};
   try {
-    const { action, stale, next } = await runPoll(state);
-    await writeWatchState({ ...state, ...next, checkedAt: Date.now(), lastError: "" });
+    const { action, stale, next } = await runPoll(state, stamp);
+    // `next` last: a success path clearing `applyFailedAt` must win over a stamp.
+    await writeWatchState({ ...state, ...stamp, ...next, checkedAt: Date.now(), lastError: "" });
     return { action, stale };
   } catch (e) {
     // A refusal is not a failure: the `seeded` branch now enters an operation, and a
     // second "Check now" (or a tick racing one) is *supposed* to be turned away rather
     // than start a second SteamCMD run on the same volume. Recording it as `lastError`
     // would put "Project Zomboid is busy — downloading mod updates" on the card as
-    // though the watcher had broken.
+    // though the watcher had broken. It sets no stamp either — nothing was attempted,
+    // so the next tick must be free to try.
     if (e instanceof OperationConflictError) {
       await writeWatchState({ ...state, checkedAt: Date.now(), lastError: "" });
       return { action: "skipped", stale: [] };
     }
     const message = e instanceof Error ? e.message : String(e);
-    await writeWatchState({ ...state, checkedAt: Date.now(), lastError: message });
+    await writeWatchState({ ...state, ...stamp, checkedAt: Date.now(), lastError: message });
     throw e;
   }
 }
 
-/** The decision itself. Returns the state changes it wants rather than writing. */
+/**
+ * The decision itself. Returns the state changes it wants rather than writing —
+ * except via `stamp`, which is for changes that must survive it throwing.
+ */
 async function runPoll(
-  state: WatchState
+  state: WatchState,
+  stamp: Partial<WatchState>
 ): Promise<{ action: PollAction; stale: StaleMod[]; next: Partial<WatchState> }> {
   const stale = await findStaleMods();
 
@@ -500,40 +563,73 @@ async function runPoll(
   // Zomboid is off whenever another world holds the box, this is the *normal* path, not
   // the edge case: a 45-minute download that entered no record, held no resource, wrote
   // no `applyingSince`, and left `powerOn("zomboid")` free to boot the game onto a
-  // half-written workshop volume. The `catch` in `pollModUpdates`'s caller already
-  // treats an `OperationConflictError` as "nothing was attempted".
+  // half-written workshop volume.
   if (snap.status !== "online") {
+    // ...and the failure cooldown, which this branch had no version of at all.
+    //
+    // The only cooldown lived below, guarding the restart-the-world path. This branch
+    // also had no try/catch, so it neither recorded a failure nor consulted one: a
+    // Workshop item that can never download (hidden, deleted, or Steam refusing)
+    // launched a SteamCMD container every POLL_MS — five minutes, forever, for a
+    // download with no reason to go differently the 300th time. And the route's own
+    // comment above calls this the *normal* path, so "forever" meant most of the time.
+    const sinceSeedFailure = Date.now() - state.applyFailedAt;
+    if (state.applyFailedAt && sinceSeedFailure < SEED_RETRY_COOLDOWN_MS) {
+      const mins = Math.ceil((SEED_RETRY_COOLDOWN_MS - sinceSeedFailure) / 60000);
+      console.log(`[pz-updates] download failed recently; not retrying for ~${mins} min`);
+      // Pending ids handed back so the card keeps naming the mods, exactly as the
+      // apply cooldown below does.
+      return {
+        action: "skipped",
+        stale,
+        next: { pendingIds: ids, pendingTitles: stale.map((s) => s.title) },
+      };
+    }
+
     const titles = stale.map((s) => s.title);
-    await runOperation(
-      {
-        kind: "mods.update",
-        game: "zomboid",
-        title: "Downloading mod updates",
-        // `POWER_RESOURCES`, not just `files:zomboid`: a boot landing mid-seed is the
-        // harmful case, and the world is already stopped so nothing is being held
-        // hostage that could not wait.
-        resources: POWER_RESOURCES,
-        // No `startedBy`: the watcher runs on a timer, and pinning it on whoever
-        // happened to press "Check now" would be a small lie in the record.
-        startedBy: null,
-      },
-      async (op) => {
-        op.step("Downloading mods from Steam");
-        op.detail(titles.slice(0, 3).join(", ") + (titles.length > 3 ? `, +${titles.length - 3} more` : ""));
-        await seedMods(ids);
-        // `seedMods` throws unless SteamCMD reported every item downloaded, so reaching
-        // here IS the read-back — the count is Steam's own, not ours.
-        op.settle(`Downloaded ${ids.length} of ${ids.length} mods`, {
-          count: { done: ids.length, total: ids.length, noun: "mods" },
-        });
-        op.fact({ label: "Power", value: "powered off" });
-        return { value: undefined as void };
-      }
-    );
+    try {
+      await runOperation(
+        {
+          kind: "mods.update",
+          game: "zomboid",
+          title: "Downloading mod updates",
+          // `POWER_RESOURCES`, not just `files:zomboid`: a boot landing mid-seed is the
+          // harmful case, and the world is already stopped so nothing is being held
+          // hostage that could not wait.
+          resources: POWER_RESOURCES,
+          // No `startedBy`: the watcher runs on a timer, and pinning it on whoever
+          // happened to press "Check now" would be a small lie in the record.
+          startedBy: null,
+        },
+        async (op) => {
+          downloadStep(op, titles);
+          await seedMods(ids);
+          settleDownload(op, ids);
+          op.fact({ label: "Power", value: "powered off" });
+          return { value: undefined as void };
+        }
+      );
+    } catch (e) {
+      // Same distinction the online path makes: a refusal means nothing was
+      // attempted, so it must not start the cooldown. `pollModUpdates`'s own catch
+      // already turns an `OperationConflictError` into `action: "skipped"` with no
+      // `lastError`; rethrowing here preserves that, while a real failure is
+      // recorded first so the next tick backs off instead of looping.
+      if (e instanceof OperationConflictError) throw e;
+      stamp.applyFailedAt = Date.now();
+      throw e;
+    }
     return {
       action: "seeded",
       stale,
-      next: { pendingIds: [], pendingTitles: [], appliedAt: Date.now() },
+      next: {
+        pendingIds: [],
+        pendingTitles: [],
+        appliedAt: Date.now(),
+        // Success clears the cooldown, so a transient Steam failure stops
+        // suppressing seeds the moment it stops being true.
+        applyFailedAt: 0,
+      },
     };
   }
 
@@ -551,6 +647,9 @@ async function runPoll(
   // Empty, but the last attempt failed recently. Retrying immediately restarts the
   // server for an attempt that has no reason to go differently — see
   // `applyFailedAt`. Report it as pending so the card keeps naming the mods.
+  //
+  // Below the announce branch on purpose: a cooldown must not stop telling the
+  // players still connected that a restart is coming.
   const sinceFailure = Date.now() - state.applyFailedAt;
   if (state.applyFailedAt && sinceFailure < APPLY_RETRY_COOLDOWN_MS) {
     const mins = Math.ceil((APPLY_RETRY_COOLDOWN_MS - sinceFailure) / 60000);
@@ -587,14 +686,9 @@ async function runPoll(
       "zomboid",
       "restart",
       async (op) => {
-        op.step("Downloading mods from Steam");
-        op.detail(titles.slice(0, 3).join(", ") + (titles.length > 3 ? `, +${titles.length - 3} more` : ""));
+        downloadStep(op, titles);
         await seedMods(ids);
-        // `seedMods` throws unless SteamCMD reported every item downloaded, so
-        // reaching here IS the read-back — the count is Steam's own, not ours.
-        op.settle(`Downloaded ${ids.length} of ${ids.length} mods`, {
-          count: { done: ids.length, total: ids.length, noun: "mods" },
-        });
+        settleDownload(op, ids);
       },
       {
         kind: "mods.update",
@@ -613,15 +707,13 @@ async function runPoll(
     // apply would start the one-hour `applyFailedAt` cooldown and suppress every apply
     // for an hour over a conflict that resolves in minutes.
     const busy = e instanceof OperationConflictError;
-    await writeWatchState({
-      ...state,
-      applyingSince: 0,
-      applyingTitles: [],
-      // A busy lock is not a failed apply — nothing was attempted, and the next
-      // tick should be free to try. Only a real failure starts the cooldown.
-      applyFailedAt: busy ? state.applyFailedAt : Date.now(),
-    });
+    await writeWatchState({ ...state, applyingSince: 0, applyingTitles: [] });
     if (busy) return { action: "skipped", stale, next: {} };
+    // A busy lock is not a failed apply — nothing was attempted, and the next tick
+    // should be free to try. Only a real failure starts the cooldown, and it goes on
+    // the `stamp` rather than in the write above: this frame throws, and the outer
+    // `catch` re-persists the pre-poll snapshot, which used to revert it.
+    stamp.applyFailedAt = Date.now();
     throw e;
   }
   return {

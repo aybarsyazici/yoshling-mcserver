@@ -135,20 +135,10 @@ export async function getProjectVersions(
   return res.json();
 }
 
-export async function getVersion(versionId: string): Promise<ModrinthVersion> {
-  const res = await fetch(`${MODRINTH_BASE}/version/${versionId}`, {
-    headers: {
-      "User-Agent": "minecraft-yoshling/1.0.0 (server-manager)",
-    },
-    next: { revalidate: 300 },
-  });
-
-  if (!res.ok) {
-    throw new Error(`Modrinth getVersion failed: ${res.status}`);
-  }
-
-  return res.json();
-}
+// `getVersion(versionId)` — GET /version/<id> — used to sit here with no caller.
+// Everything that needs a version picks one out of `getProjectVersions`, which is
+// already filtered by loader and game version, so a single-version fetch by id had
+// nowhere to be used: the id only ever comes *from* that list.
 
 export function buildFacets(params: {
   mcVersion?: string;

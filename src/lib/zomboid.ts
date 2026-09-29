@@ -161,7 +161,8 @@ function sanitizeValue(v: string): string {
   return String(v).replace(/[\r\n]+/g, " ").trim();
 }
 
-export async function readIni(): Promise<string> {
+/** Module-local on purpose: callers want `readIniProperties`, not raw text. */
+async function readIni(): Promise<string> {
   return readFile(await iniPath(), "utf-8");
 }
 
@@ -197,7 +198,7 @@ export function splitList(value: string): string[] {
  * (`Mods=\ModA;\ModB`); Build 41 wants the bare id. Mirror whatever the file
  * already uses, defaulting to B42 since that is the current stable build.
  */
-export function modIdPrefix(existingTokens: string[]): string {
+function modIdPrefix(existingTokens: string[]): string {
   if (existingTokens.length === 0) return "\\";
   return existingTokens.some((t) => t.startsWith("\\")) ? "\\" : "";
 }
