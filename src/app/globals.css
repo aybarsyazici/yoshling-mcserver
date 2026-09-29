@@ -44,13 +44,10 @@
   /* Per-world accent identities */
   --color-mc: var(--mc);
   --color-mc-soft: var(--mc-soft);
-  --color-mc-deep: var(--mc-deep);
   --color-sd: var(--sd);
   --color-sd-soft: var(--sd-soft);
-  --color-sd-deep: var(--sd-deep);
   --color-pz: var(--pz);
   --color-pz-soft: var(--pz-soft);
-  --color-pz-deep: var(--pz-deep);
 
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
@@ -111,13 +108,10 @@
   /* World accents — Latte */
   --mc: #40a02b;       /* green */
   --mc-soft: #179299;  /* teal */
-  --mc-deep: #dbf3d4;
   --sd: #fe640b;       /* peach/orange */
   --sd-soft: #d20f39;  /* red */
-  --sd-deep: #ffe2cf;
   --pz: #1e66f5;       /* blue */
   --pz-soft: #04a5e5;  /* sky */
-  --pz-deep: #d7e3fd;
 }
 
 /* Catppuccin Mocha (Dark) */
@@ -160,13 +154,10 @@
   /* World accents — Mocha */
   --mc: #a6e3a1;       /* green */
   --mc-soft: #94e2d5;  /* teal */
-  --mc-deep: #143d2b;
   --sd: #fab387;       /* peach */
   --sd-soft: #f38ba8;  /* red */
-  --sd-deep: #3d1f1a;
   --pz: #89b4fa;       /* blue */
   --pz-soft: #74c7ec;  /* sapphire */
-  --pz-deep: #182a4a;
 }
 
 @layer base {

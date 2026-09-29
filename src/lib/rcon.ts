@@ -79,8 +79,8 @@ function minecraftTarget(): RconTarget {
   };
 }
 
-export async function sendCommand(command: string): Promise<string> {
-  return rconCommand(minecraftTarget(), command);
+export async function sendCommand(command: string, timeoutMs?: number): Promise<string> {
+  return rconCommand(minecraftTarget(), command, timeoutMs);
 }
 
 export async function getPlayerList(): Promise<{

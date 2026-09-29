@@ -1181,7 +1181,7 @@ function orderKey(o: OperationView, now: number): number {
 }
 
 // `powerBlockedBy` / `fileOperationsFor` used to live here as a second, subtly
-// different copy of `operation-ui.ts`'s `powerBlocker` / `fileOperations` — they
+// different copy of `operation-ui.ts`'s `powerBlocker` / `liveFileOperations` — they
 // omitted the `!o.endedAt` guard, so a future server-side caller reaching for the
 // name a reader would expect would silently match finished records too. Deleted
 // rather than kept in sync; `operation-ui.ts` is the one definition of "blocked".

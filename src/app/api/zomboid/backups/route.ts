@@ -348,7 +348,10 @@ export async function POST(request: NextRequest) {
 async function flushWorld(op: OpHandle): Promise<boolean> {
   op.step("Flushing the world to disk");
   if (!(await containerIsRunning("zomboid").catch(() => false))) {
-    op.settle("The server is not running — nothing to flush", { kind: "noop" });
+    // `done`, NOT `noop`: a stopped server's files are already consistent, which is the
+    // best case for a backup. As `noop` this concluded `partial` and the summary read
+    // "but part of it is missing. This is not a restore point." for a flawless archive.
+    op.settle("The server is stopped — its files are already at rest");
     return false;
   }
   const t0 = Date.now();

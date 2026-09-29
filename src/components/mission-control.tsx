@@ -15,6 +15,7 @@ import {
   powerState,
   slowestStopSeconds,
   spellMinutes,
+  spellSeconds,
   type PowerSurface,
 } from "@/lib/operation-ui";
 import { formatElapsed, liveStep } from "@/lib/operations-types";
@@ -382,12 +383,17 @@ export function MissionControl({
                * How long this actually takes, from `GameMeta.stopSeconds`.
                *
                * This sentence used to end "Takes about a minute." for every hand-off, on
-               * a box where stopping Project Zomboid is a measured 5m 03s — it never
-               * exits on SIGTERM, so `docker stop` waits out the whole grace period. The
-               * owner clicked the button, read "about a minute", and watched it sit for
-               * five; the estimate was the defect, not the stop. Slow worlds get their
-               * own clause rather than an appended figure, because the reason it is slow
-               * is the part that stops it reading as broken.
+               * a box where Project Zomboid's stop was a measured 5m 03s. The owner
+               * clicked the button, read "about a minute", and watched it sit for five.
+               *
+               * Both of this sentence's previous versions were wrong, in opposite
+               * directions, and the second is the instructive one. "About a minute" for
+               * every world understated PZ by 5x. The fix then asserted PZ "does not shut
+               * down when asked, so this waits out its five minute timeout" — written in
+               * the same session that made PZ exit in 9s over RCON, so it overstated by
+               * ~30x and, worse, stated a *mechanism* that had just been removed. A
+               * duration is a measurement; a mechanism is a claim. Do not put either here
+               * without checking the driver still works that way.
                */
               const slowest = others.filter((g) => GAMES[g].stopSeconds >= 120);
               const stopSecs = slowestStopSeconds(others);
@@ -408,15 +414,17 @@ export function MissionControl({
                       then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing
                       will be disconnected.
                       {slowest.length === 0 ? (
-                        " Takes about a minute."
+                        <>
+                          {" "}
+                          The stop takes about {spellSeconds(stopSecs)}; {GAMES[confirmFor].name}{" "}
+                          then needs a few minutes to load before anyone can join.
+                        </>
                       ) : (
                         <>
                           {" "}
-                          {slowest.map((g) => GAMES[g].name).join(" and ")}{" "}
-                          {slowest.length > 1 ? "do" : "does"} not shut down when asked, so this
-                          waits out {slowest.length > 1 ? "their" : "its"}{" "}
-                          {spellMinutes(stopSecs)} timeout first — expect{" "}
-                          {spellMinutes(totalSecs)} before {GAMES[confirmFor].name} is up.
+                          Stopping {slowest.map((g) => GAMES[g].name).join(" and ")} can take up to{" "}
+                          {spellMinutes(stopSecs)} if {slowest.length > 1 ? "they do" : "it does"} not
+                          exit when asked.
                         </>
                       )}
                     </>

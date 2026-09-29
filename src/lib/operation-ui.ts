@@ -384,11 +384,26 @@ function busyLabel(action?: "start" | "stop" | "restart"): string {
  * How long stopping these worlds takes, worst case, in seconds.
  *
  * Exists so no surface writes "about a minute" again: that string was hardcoded in the
- * hand-off confirm and on the memory card, and Project Zomboid's stop is a measured
- * 5m 03s. See `GameMeta.stopSeconds`.
+ * hand-off confirm and on the memory card while Project Zomboid's stop measured 5m 03s.
+ *
+ * Reads `GameMeta.stopSeconds`, which is the measured TYPICAL stop and not the timeout —
+ * see the long note there about getting that distinction wrong in both directions.
  */
 export function slowestStopSeconds(games: GameId[]): number {
   return games.reduce((worst, g) => Math.max(worst, GAMES[g].stopSeconds), 0);
+}
+
+/**
+ * "half a minute" / "ten seconds" — a sub-minute duration in words.
+ *
+ * Needed once the stops got fast: `spellMinutes(9)` says "about a minute", which is a 6x
+ * overstatement of a 9-second Project Zomboid quit and exactly the kind of rounding that
+ * made the old copy untrustworthy.
+ */
+export function spellSeconds(seconds: number): string {
+  if (seconds <= 15) return "a few seconds";
+  if (seconds < 45) return "half a minute";
+  return "about a minute";
 }
 
 /** "five minutes" / "about a minute" — a duration in words, for prose. */

@@ -282,17 +282,27 @@ services:
     # made it the one process on the box able to take the whole host down, and it is
     # also the one that buffers uploads and forks `docker`/`tar`.
     #
-    # Sized against the 2 GB world-upload cap: `/api/7dtd/world` does not stream, and
-    # Caddy's `request_body { max_size 2GB }` on direct.yoshling.xyz is what it has to
-    # survive. Steady state is nothing like that -- measured 2026-09-29, `memory.current`
-    # was 195 MB with a 954 MB `memory.peak` -- so this is headroom for one upload, not a
-    # working-set estimate. **Do not lower this without streaming that upload first**, and
-    # once it streams this can come down to ~1g.
+    # Sized against the 2 GB world-upload cap, and the arithmetic is DOUBLE the cap
+    # because `/api/7dtd/world` holds the payload twice: `await request.formData()` keeps
+    # the 2 GB Blob alive while `Buffer.from(await file.arrayBuffer())` allocates a second
+    # copy (the Buffer itself is a view, so there is no third). Measured on a 50 MB file:
+    # `arrayBuffer()` raised `process.memoryUsage().arrayBuffers` by 104.9 MB, i.e. 2x.
+    # Add the measured 954 MB `memory.peak` baseline (steady state is only 195 MB) and a
+    # 2 GB upload needs ~5 GB, so 6g.
     #
-    # An unbounded web container is worse than an overcommitted ceiling: with a limit the
-    # kernel kills the dashboard, which restarts and loses nothing, instead of letting it
-    # push a live world into OOM.
-    mem_limit: 3g
+    # The first version of this limit was 3g with a comment claiming it was "headroom for
+    # one upload". It was not -- it would have OOM-killed the dashboard mid-upload, and
+    # before the limit existed that upload merely swapped and completed. Sizing a ceiling
+    # from the payload rather than from the peak is the mistake; measure, do not reason.
+    #
+    # **Do not lower this without streaming that upload first**; once it streams, ~1g.
+    # Ceilings may over-commit (PZ's 14g + this 6g exceeds the 16 GB box) because they are
+    # limits, not reservations, and only one world runs at a time.
+    #
+    # An unbounded web container is still worse than an over-committed ceiling: with a
+    # limit the kernel kills the dashboard, which restarts and loses nothing, instead of
+    # letting it push a live world into OOM.
+    mem_limit: 6g
     logging:
       driver: "json-file"
       options: { max-size: "20m", max-file: "3" }

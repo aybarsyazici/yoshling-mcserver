@@ -37,10 +37,17 @@ export interface GameMeta {
    * understated its own duration by 5×, which is how "I clicked Restart and it sat
    * there" became a bug report about something working as designed.
    *
-   * Project Zomboid is 300 because it never exits on SIGTERM: `docker stop` burns its
-   * whole `stop_grace_period` and ends in SIGKILL. **That is a floor, not a worst
-   * case** — it is the fallback budget, and shortening the copy needs a measured fast
-   * stop first, not an optimistic guess here.
+   * **This is the TYPICAL duration, not the timeout.** The distinction was got wrong
+   * once in this very file: Project Zomboid was set to 300 with a comment saying it
+   * "never exits on SIGTERM", which was true of the old stop path and stopped being true
+   * in the same change that wrote it down. The driver now asks the game to quit over
+   * RCON and it exits in ~9s; 300 survives only as `PZ_STOP_TIMEOUT`, the fallback for
+   * when RCON cannot land (a wedged server). Quoting the fallback as the expected wait
+   * overstated the most-pressed control on the box by ~30x — the same class of error,
+   * in the opposite direction, as the "about a minute" it replaced.
+   *
+   * So: put the measured normal case here, and let the UI say "up to" for the worst
+   * case if it needs to. Re-measure when a stop path changes.
    */
   stopSeconds: number;
   /** Label for the free-form `detail` metric (uptime, in-game day, …) */
@@ -117,9 +124,10 @@ export const GAMES: Record<GameId, GameMeta> = {
     tint: "var(--pz)",
     tintSoft: "var(--pz-soft)",
     connect: ["pz.yoshling.xyz:16261", `${HOST_IP}:16261`],
-    // PZ never exits on SIGTERM, so 300 is a floor, not a worst case: `docker stop`
-    // waits out the full `stop_grace_period` and then SIGKILLs. Measured 5m 03s.
-    stopSeconds: 300,
+    // Measured 9.0s on production, 0 players: RCON `quit` then a clean `exited` with
+    // code 0. 30 is that with headroom for a bigger save. NOT 300 — that is
+    // `PZ_STOP_TIMEOUT`, the fallback for a server too wedged to answer RCON.
+    stopSeconds: 30,
     detailLabel: "Uptime",
     api: {
       console: "/api/zomboid/console",

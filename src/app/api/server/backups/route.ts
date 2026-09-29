@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
           // still midway through writing. `flushed` is recorded either way, so a restore
           // can say whether the archive came from a quiesced world rather than leaving
           // that to be assumed.
-          const flushed = await flushMinecraft(op);
+          const { flushed, mustResume } = await flushMinecraft(op);
 
           op.step("Compressing the archive");
           try {
@@ -135,7 +135,10 @@ export async function POST(request: NextRequest) {
             // In a `finally`, and that is the load-bearing part: a failed `tar` that left
             // autosave switched off would lose every minute of play since the backup —
             // strictly worse than the torn archive this whole step exists to prevent.
-            if (flushed) await resumeMinecraftAutosave(op);
+            // `mustResume`, not `flushed`: the case they differ in is exactly the one
+            // that matters — `save-off` landed and the flush then failed, so autosave is
+            // off and the archive is torn.
+            if (mustResume) await resumeMinecraftAutosave(op);
           }
 
           // Read the size back off disk. Without this the operation has no evidence
@@ -163,8 +166,10 @@ export async function POST(request: NextRequest) {
           facts.push({
             label: "World flushed first",
             value: flushed
-              ? "yes — autosave was paused for the copy"
-              : "not needed — the server was not running",
+              ? mustResume
+                ? "yes — autosave was paused for the copy"
+                : "not needed — the server was stopped, so its files were already at rest"
+              : "no — the server did not answer, so the archive may be torn",
           });
           return {
             facts,
@@ -273,46 +278,82 @@ export async function POST(request: NextRequest) {
  * torn archive is much better than no archive, and the world being unreachable over RCON
  * is precisely a moment when someone wants a backup.
  */
-async function flushMinecraft(op: OpHandle): Promise<boolean> {
+/**
+ * Two separate facts, so they stop being carried by one boolean.
+ *
+ * `flushed` answers "is this archive consistent"; `mustResume` answers "did we disable
+ * something that has to be put back". They diverge in exactly the case that matters: if
+ * `save-off` lands and `save-all flush` then times out, the archive is NOT clean and
+ * autosave IS off. One boolean had to pick, it returned `true`, and the record then said
+ * "World flushed first: yes" directly above its own warn fact saying it could not flush.
+ */
+interface FlushResult {
+  flushed: boolean;
+  mustResume: boolean;
+}
+
+/**
+ * Long enough for a real flush.
+ *
+ * `sendCommand` defaults to 3s, which is the right budget for `list` and far too short
+ * for writing a 217 MB world — and the `tar` over the same directory was already raised
+ * from 60s to 300s for being too tight. A 3s flush would put the everyday path down the
+ * failure branch and stamp a warn fact on every backup.
+ */
+const FLUSH_RCON_TIMEOUT_MS = 120_000;
+
+async function flushMinecraft(op: OpHandle): Promise<FlushResult> {
   op.step("Flushing the world to disk");
   if (!(await containerIsRunning("minecraft").catch(() => false))) {
-    op.settle("The server is not running — nothing to flush", { kind: "noop" });
-    return false;
+    // `done`, NOT `noop`. A stopped server has nothing to flush, and its files on disk
+    // are already consistent — which is the best case for a backup, not a shortfall.
+    // As `noop` this settled to outcome `partial`, and with no warn fact to name the
+    // summary read "Backup created — 217 MB, but part of it is missing. This is not a
+    // restore point." in amber, for a flawless archive. Minecraft and 7 Days to Die are
+    // both normally stopped, so that was the common path, not an edge case.
+    op.settle("The server is stopped — its files are already at rest");
+    return { flushed: true, mustResume: false };
   }
   const t0 = Date.now();
+  let offLanded = false;
   try {
     // `save-off` first: it stops the autosave thread, so the `save-all flush` that
     // follows is the last write before the copy.
-    await sendCommand("save-off");
-    await sendCommand("save-all flush");
+    await sendCommand("save-off", FLUSH_RCON_TIMEOUT_MS);
+    offLanded = true;
+    await sendCommand("save-all flush", FLUSH_RCON_TIMEOUT_MS);
     op.settle(`Flushed the world and paused autosave — ${Date.now() - t0} ms`);
-    return true;
+    return { flushed: true, mustResume: true };
   } catch (e) {
-    // `save-off` may have landed even though a later call threw, so report `true` and
-    // let the caller's `finally` re-enable autosave regardless. Re-enabling something
-    // that was never disabled is a harmless no-op; the reverse loses progress.
     op.settle("Could not flush the world — the server did not answer over RCON");
     op.fact({
       label: "World flush",
       value: `failed (${(e as Error).message}) — the archive may be torn`,
       verdict: "warn",
     });
-    return true;
+    // `mustResume` tracks whether `save-off` actually landed, rather than assuming it
+    // did: re-enabling something never disabled is harmless, but claiming autosave was
+    // paused when it was not is the lie this function already told once.
+    return { flushed: false, mustResume: offLanded };
   }
 }
 
 async function resumeMinecraftAutosave(op: OpHandle): Promise<void> {
   try {
-    await sendCommand("save-on");
+    await sendCommand("save-on", FLUSH_RCON_TIMEOUT_MS);
   } catch (e) {
-    // The one outcome worth shouting about: the world is running with autosave off and
-    // nothing else will turn it back on.
+    // `warn`, not `bad`. This is only reached when `save-off` landed, so autosave really
+    // is off and it really does need attention — but a `bad` fact makes
+    // `concludeOperation` return `failed`, and the archive itself is complete and
+    // verified. Reporting a good backup as failed is the defect class this whole feature
+    // exists to prevent; the sentence carries the urgency instead of the colour.
     op.fact({
       label: "Autosave",
       value:
-        `could not be re-enabled (${(e as Error).message}) — run \`save-on\` in the ` +
-        `console, or restart the server, or progress since this backup will be lost`,
-      verdict: "bad",
+        `still paused (${(e as Error).message}) — the backup is fine, but run ` +
+        `\`save-on\` in the console or restart Minecraft, or progress since this ` +
+        `backup will be lost`,
+      verdict: "warn",
     });
   }
 }

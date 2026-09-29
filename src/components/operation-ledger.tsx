@@ -399,8 +399,8 @@ export function OperationLedger({
           This is the founding complaint of this pass. On 2026-09-29 the owner pressed
           Restart on Project Zomboid and watched it sit for five minutes with no
           explanation — and the explanation was on the wire the entire time.
-          `narratedStop` sets `op.detail("Saved in 1052 ms — waiting up to 300s for the
-          process to exit")` before it calls `docker stop`, but `lede()` returns only
+          `narratedStop` sets `op.detail("Asked the server to quit over RCON — waiting for it
+          * to exit")` before it calls `docker stop`, but `lede()` returns only
           `liveStep(op)?.label` and the panel defaults collapsed, so the one sentence that
           would have made the wait a non-event was one un-hinted click away for 300
           seconds.
@@ -670,8 +670,8 @@ function lede(op: OperationView, now: number): string {
  * The second collapsed line: the most concrete thing known about the live step.
  *
  * In preference order, because each is strictly more specific than the next: the step's
- * own `detail` (set by `op.detail()` — "Saved in 1052 ms — waiting up to 300s for the
- * process to exit"), then a recorded `count`, then a `fraction`.
+ * own `detail` (set by `op.detail()` — "Asked the server to quit over RCON — waiting for it
+ * to exit"), then a recorded `count`, then a `fraction`.
  *
  * Both progress branches are skipped for a redacted record. `redact()` blanks
  * `step.label`, `step.detail` and `step.count` but deliberately leaves `progress` alone,
@@ -681,12 +681,17 @@ function lede(op: OperationView, now: number): string {
  * that `step.count` already gets. The `detail` branch needs no guard: it is already blank.
  */
 function collapsedDetail(op: OperationView): string | undefined {
-  const d = liveStep(op)?.detail;
-  if (d) return d;
   if (op.redacted) return undefined;
+  // A real count outranks the newest log line, matching `operation-tape.tsx:201`. The
+  // reverse order made the whole point of wiring `progress` up unreachable from the
+  // collapsed strip: `install-modpack` sets a per-mod `detail` on every single mod, so
+  // `detail` is never empty during the one operation that HAS a count, and "42 of 166
+  // mods" lost every time to a churning jar filename.
   if (op.progress.kind === "count") {
     return `${op.progress.done} of ${op.progress.total} ${op.progress.noun}`;
   }
+  const d = liveStep(op)?.detail;
+  if (d) return d;
   if (op.progress.kind === "fraction") return `${op.progress.percent}%`;
   return undefined;
 }
