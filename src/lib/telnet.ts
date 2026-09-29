@@ -140,7 +140,8 @@ export interface SdtdStatus {
   version: string | null;
 }
 
-function parsePlayers(out: string, maxPlayers: number): SdtdPlayers {
+/** Exported for the status test; the parse is pure and the transport is not. */
+export function parsePlayers(out: string, maxPlayers: number): SdtdPlayers {
   const names: string[] = [];
   for (const line of out.split("\n")) {
     const m = line.match(/^\s*\d+\.\s+id=\d+,\s*([^,]+),/);
@@ -152,13 +153,40 @@ function parsePlayers(out: string, maxPlayers: number): SdtdPlayers {
 }
 
 /**
+ * Whether a status session's output means the **game** is up, not merely that the
+ * telnet listener is.
+ *
+ * 7 Days to Die binds telnet minutes before the world has loaded, and `reachable` used
+ * to be `true` for any non-empty session output at all. Measured over three fresh boots
+ * by two independent sweeps: status flipped to `online` 37-41 s after container start
+ * while `listplayers`, `gettime` and `say` all replied
+ * `*** ERROR: Command 'x' can only be executed when a game is started.` and the
+ * container log was still at `GenWorldFromRaw`. The world was actually ready at 74-78 s.
+ * So the dashboard read **Running · 0/8 players** for ~40 s of every single 7DTD start —
+ * and because `game-manager` also gates `snap.boot` on this same flag, the boot progress
+ * bar vanished at the same moment, on the one game that has never had an observed
+ * in-game join.
+ *
+ * The marker is the game's own error string, deliberately. Readiness must NOT be made to
+ * depend on `gettime`'s output *format* (`time !== null`): a future change to how 7DTD
+ * prints the day would then pin the server at "Starting…" forever, which is a worse
+ * failure than the one being fixed.
+ */
+export function sdtdSessionIsGameReady(out: string): boolean {
+  if (!out) return false;
+  return !/can only be executed when a game is started/i.test(out);
+}
+
+/**
  * Single-connection status probe: runs listplayers + gettime + version in ONE
  * telnet session. Replaces the old two-connection approach.
  */
 export async function getSdtdStatus(maxPlayers = 8): Promise<SdtdStatus> {
   try {
     const out = await telnetSession(["listplayers", "gettime", "version"], { timeoutMs: 6000, idleMs: 450 });
-    if (!out) return { reachable: false, players: { online: 0, max: maxPlayers, players: [] }, time: null, version: null };
+    if (!sdtdSessionIsGameReady(out)) {
+      return { reachable: false, players: { online: 0, max: maxPlayers, players: [] }, time: null, version: null };
+    }
     const timeM = out.match(/Day\s+(\d+),\s*([\d:]+)/i);
     const verM = out.match(/Game version:\s*(V[^\n,]+)/i);
     return {
