@@ -380,8 +380,21 @@ function ModSummary({ mods, tint }: { mods: ZomboidMod[]; tint: string }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs">
+        {/*
+         * "they load in the order listed" — which this list is not.
+         *
+         * The endpoint builds this array from `WorkshopItems=`, the order Steam
+         * *downloads* in. Load order is `Mods=`, a different list in a different
+         * order: verified on the live .ini 2026-09-29, `WorkshopItems=` starts
+         * 3787530735;2799152995;3171184800 while `Mods=` starts
+         * \MoodleFramework;\StarlitLibrary;\TrueSmoking — libraries first, which is the
+         * whole point, since PZ loads `Mods=` in order and a library has to precede its
+         * consumers. One Workshop item can also provide five mod ids, so the two lists
+         * are not even the same length. No screen shows the real load order; naming what
+         * this one *is* beats asserting what it isn't.
+         */}
         <span className="text-muted-foreground">
-          {mods.length} mod{mods.length === 1 ? "" : "s"} · they load in the order listed
+          {mods.length} mod{mods.length === 1 ? "" : "s"} · listed in install order
         </span>
         <span className="font-mono" style={{ color: pending > 0 ? tint : undefined }}>
           {onDisk} of {mods.length} downloaded
@@ -389,6 +402,9 @@ function ModSummary({ mods, tint }: { mods: ZomboidMod[]; tint: string }) {
           {noId > 0 ? ` · ${noId} without a mod id` : ""}
         </span>
       </div>
+      <p className="text-[11px] text-muted-foreground">
+        Load order is set by <span className="font-mono">Mods=</span> in the server config.
+      </p>
       {pending > 0 && (
         <div className="h-1 overflow-hidden rounded-full bg-muted">
           <div

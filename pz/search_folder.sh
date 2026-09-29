@@ -16,8 +16,22 @@
 # their own author marked deprecated, and orders bigger maps first so they win
 # where two overlap. entry.sh appends `Muldraugh, KY`, which must stay last.
 #
+# ## The order saved in the dashboard is the input, not the casualty
+#
+# Because entry.sh's `sed` is unconditional, whatever this script emits IS the load
+# order — the `Map=` a human (or `/api/zomboid/maps`) wrote survived exactly zero
+# restarts, and the dashboard's own toast told the user to restart to apply it.
+# Verified 2026-09-29: a reorder was written to the .ini, and after one boot `Map=`
+# was back to this script's output byte for byte.
+#
+# So this script now *reads* the existing `Map=` first and emits those maps in that
+# order, then appends anything newly installed by cell count as before. Nothing about
+# the fix lives in the web app: we own the generator, so the generator is where the
+# saved order has to be honoured.
+#
 # Contract with entry.sh, do not change: append a trailing-semicolon list to
-# ${HOMEDIR}/maps.txt, and copy map folders into pz-dedicated/media/maps.
+# ${HOMEDIR}/maps.txt, and copy map folders into pz-dedicated/media/maps. entry.sh
+# `source`s this file, so ${HOMEDIR} and ${SERVERNAME} are in scope here.
 
 # Maps to leave out of `Map=`, semicolon-separated, set on the zomboid service in
 # docker-compose.yml. Needed because a mod can keep shipping a map its author has
@@ -85,16 +99,47 @@ search_folder() {
         fi
     done
 
-    # Bigger maps first: where two claim a cell, the earlier entry in `Map=`
-    # wins, and a 22-cell base should not lose to a 4-cell checkpoint.
+    # The order already in the .ini comes first, so a reorder saved in the dashboard
+    # survives this regeneration instead of being overwritten by it. Skipped entries:
+    #   - `Muldraugh, KY` — entry.sh appends it, and it must stay last.
+    #   - anything not in `cells` — a map that was uninstalled, or a stock map that
+    #     ships with the game and is not ours to place.
+    local ini="${HOMEDIR}/Zomboid/Server/${SERVERNAME}.ini"
+    local existing=""
+    [ -f "$ini" ] && existing=$(grep -m1 '^Map=' "$ini" | cut -d= -f2-)
+
+    local -A emitted=()
     local list=""
+    local kept=0
+    local name
     while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        [ "$name" != "Muldraugh, KY" ] || continue
+        # Key existence, not value: a spawn-point map has a cell count of 0 and still
+        # has to be listed, or it does nothing in game.
+        [ -n "${cells[$name]+x}" ] || continue
+        [ -z "${emitted[$name]}" ] || continue
+        emitted["$name"]=1
         list+="$name;"
+        kept=$((kept + 1))
+    done < <(printf '%s\n' "$existing" | tr ';' '\n')
+
+    # Everything the saved order did not mention — a map installed since the last boot.
+    # Bigger maps first: where two claim a cell, the earlier entry in `Map=` wins, and a
+    # 22-cell base should not lose to a 4-cell checkpoint.
+    local added=0
+    while IFS= read -r name; do
+        [ -z "${emitted[$name]}" ] || continue
+        emitted["$name"]=1
+        list+="$name;"
+        added=$((added + 1))
     done < <(for name in "${!cells[@]}"; do
                  printf '%s\t%s\n' "${cells[$name]}" "$name"
              done | sort -k1,1nr -k2,2 | cut -f2)
 
-    echo "Found ${#cells[@]} map(s)"
+    # Printed so the boot log is the oracle for "did the saved order survive":
+    # `docker logs yoshling-pz | grep "map(s)"`.
+    echo "Found ${#cells[@]} map(s): $kept kept in the saved order, $added newly found"
     printf '%s' "$list" >> "${HOMEDIR}/maps.txt"
 }
 

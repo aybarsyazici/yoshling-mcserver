@@ -5,11 +5,20 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, writeFile, mkdir, cp } from "fs/promises";
 import path from "path";
+import { db } from "@/lib/db";
 import { PZ_DIR, pzSave, savePaths } from "@/lib/zomboid";
 import { containerIsRunning, withGameStopped } from "@/lib/game-manager";
 import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
 import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
+import {
+  BadArchiveError,
+  readManifestSidecar,
+  refuseIfPreemptedEarly,
+  removeManifestSidecar,
+  safeBackupName,
+  writeManifestSidecar,
+} from "@/lib/backup-archive";
 
 export const maxDuration = 300;
 
@@ -39,24 +48,6 @@ interface Manifest {
   flushed?: boolean;
 }
 
-/**
- * `backupName` arrives straight off the request body and is used both as a
- * filesystem path and as an argument to `tar`, so it has to be closed off before
- * either. `path.basename` + `JSON.stringify` — what this route used to do — is
- * not enough: basename stops traversal but leaves shell metacharacters intact,
- * and JSON quoting produces *double* quotes, inside which `sh` still runs `$(…)`
- * and backticks. So: an allowlist, and `execFile` (argv array, no shell) for
- * every command below. A space is admitted because `/api/7dtd/reset` names its
- * pre-reset archive after the world ("Reveo Valley") without sanitising it, and
- * with no shell in the picture a space is just a character.
- */
-function safeBackupName(name: unknown): string | null {
-  if (typeof name !== "string") return null;
-  if (name !== path.basename(name)) return null; // no directory part at all
-  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*\.tar\.gz$/.test(name)) return null;
-  return name;
-}
-
 async function exists(p: string): Promise<boolean> {
   return stat(p).then(
     () => true,
@@ -64,9 +55,19 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
-/** Read the manifest out of a backup tar without extracting the whole thing. */
+/**
+ * Read a backup's manifest.
+ *
+ * The sidecar first, because reading the copy inside the tar means decompressing the
+ * whole gzip stream to get ~100 bytes — the listing calls this once per archive, so
+ * that cost lands on the backups page's first paint. The in-tar copy stays as the
+ * fallback for every archive written before the sidecar existed, and as the thing that
+ * keeps an archive self-describing once it has been copied off the box.
+ */
 async function backupManifest(file: string): Promise<Manifest | null> {
   const target = path.join(BACKUP_DIR, file);
+  const sidecar = await readManifestSidecar<Manifest>(target);
+  if (sidecar) return sidecar;
   // tar stores members as "./manifest.json" when created with `-C <dir> .`;
   // try both spellings to be safe across tar versions.
   for (const member of ["./manifest.json", "manifest.json"]) {
@@ -152,6 +153,14 @@ export async function POST(request: NextRequest) {
           // cleaned up.
           const flushed = await flushWorld(op);
 
+          // Preemption is checked at EVERY step boundary from here on, not only after
+          // the tar. Measured on production 2026-09-29: `op.preempted` was set 94 s into
+          // a 9m 43s backup and the only check ran last, so the app spent a further
+          // ~7m 55s copying 291 MiB it had already decided to throw away — competing for
+          // disk with the power operation that condemned it — and then handed the user an
+          // error. Refusing here costs nothing and leaves nothing behind.
+          refuseIfPreemptedEarly(op, "this backup");
+
           // Stage the pieces in a work dir, then tar them together.
           await rm(work, { recursive: true, force: true });
           await mkdir(work, { recursive: true });
@@ -172,6 +181,10 @@ export async function POST(request: NextRequest) {
             op.settle("No world on disk yet — nothing to copy", { kind: "noop" });
           }
 
+          // The world copy is the long one (4m 20s for 1.9 GB), so this boundary is the
+          // one that saves the most.
+          refuseIfPreemptedEarly(op, "this backup");
+
           // 2) the player database
           op.step("Copying the player database");
           let includesDb = false;
@@ -183,6 +196,8 @@ export async function POST(request: NextRequest) {
           } else {
             op.settle("No player database yet");
           }
+
+          refuseIfPreemptedEarly(op, "this backup");
 
           // 3) the server config trio (.ini + SandboxVars + spawnregions)
           op.step("Copying the server config");
@@ -208,6 +223,10 @@ export async function POST(request: NextRequest) {
 
           const filename = `zomboid-${name}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
           target = path.join(BACKUP_DIR, filename);
+
+          // The last boundary before ~10 minutes of `tar` that cannot be interrupted.
+          refuseIfPreemptedEarly(op, "this backup");
+
           op.step("Compressing the archive");
           await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
 
@@ -226,6 +245,11 @@ export async function POST(request: NextRequest) {
           // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
           // below does the `rm`.
           refuseIfPreempted(op, "this backup");
+
+          // Only now: a sidecar for an archive the refusal above deleted would describe
+          // a file that is not there, and `worldsUsedByBackups`-style guards would keep
+          // trusting it.
+          await writeManifestSidecar(target, manifest);
 
           const facts: OperationFact[] = [];
           if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
@@ -252,12 +276,22 @@ export async function POST(request: NextRequest) {
           };
         }
       );
+      await logBackup(gate.session.user.id, "backup_create", {
+        name: backup.name,
+        sizeBytes: backup.size,
+        world: backup.world,
+        includesWorldMap: backup.includesWorldMap,
+      });
       return NextResponse.json({ success: true, backup });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
       // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
-      // that the listing would offer as restorable.
-      if (target) await rm(target, { force: true }).catch(() => {});
+      // that the listing would offer as restorable — and its sidecar has to go with
+      // it, or the manifest outlives the archive it describes.
+      if (target) {
+        await rm(target, { force: true }).catch(() => {});
+        await removeManifestSidecar(target);
+      }
       return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: 500 });
     } finally {
       await rm(work, { recursive: true, force: true }).catch(() => {});
@@ -301,9 +335,18 @@ export async function POST(request: NextRequest) {
           restartOnFailure: false,
         }
       );
+      await logBackup(gate.session.user.id, "backup_restore", {
+        name,
+        world: serverName,
+        restartedAfter: restarted,
+      });
       return NextResponse.json({ success: true, restoredWorld: serverName, restarted });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
+      // The archive is wrong about itself — the user's own file, not a broken server.
+      if (e instanceof BadArchiveError) {
+        return NextResponse.json({ error: e.message }, { status: 400 });
+      }
       return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
     }
   }
@@ -319,8 +362,17 @@ export async function POST(request: NextRequest) {
     const laneBusy = fileLaneBusy("zomboid");
     if (laneBusy) return laneBusy;
 
+    const target = path.join(BACKUP_DIR, name);
     try {
-      await rm(path.join(BACKUP_DIR, name));
+      await stat(target);
+    } catch {
+      return NextResponse.json({ error: "No such backup" }, { status: 404 });
+    }
+
+    try {
+      await rm(target);
+      await removeManifestSidecar(target);
+      await logBackup(gate.session.user.id, "backup_delete", { name });
       return NextResponse.json({ success: true });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
@@ -328,6 +380,41 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+/**
+ * The durable half of this feature.
+ *
+ * The operation registry forgets a clean record in 10 minutes; `/activity` does not.
+ * Until 2026-09-29 **no backup action of any kind had ever written a row** — verified
+ * against the production DB, which held 182 rows across ten action types and not one
+ * `backup_*`. A restore replaces the world people play, and ten minutes afterwards
+ * nothing anywhere recorded that it happened or who did it. Every neighbouring
+ * feature (file edits, mod installs, `set_memory`, power) already wrote one.
+ *
+ * `game` has to be in `details`: `/api/activity` selects each world's panel with
+ * `contains "<game>"`, and an untagged row is shown to everyone.
+ *
+ * Logged rather than swallowed, following `mc-whitelist`'s precedent — "who restored
+ * the world" is precisely the question this row exists to answer, so a row that failed
+ * to write is worth a line in the container log.
+ *
+ * Only ever called after the work succeeded. A refused backup (bad archive, no world
+ * member, preempted) writes nothing: a log of things that did not happen is worse than
+ * no log.
+ */
+async function logBackup(
+  userId: string,
+  action: "backup_create" | "backup_restore" | "backup_delete",
+  details: Record<string, unknown>
+): Promise<void> {
+  try {
+    await db.activity.create({
+      data: { userId, action, details: JSON.stringify({ game: "zomboid", ...details }) },
+    });
+  } catch (e) {
+    console.error(`[zomboid/backups] could not write the ${action} activity row:`, e);
+  }
 }
 
 /**
@@ -407,7 +494,9 @@ async function restoreBundle(
       await own(worldDest);
     } else if (m?.includesWorld !== false) {
       // Only a backup that recorded "no world" (server never started) may skip it.
-      throw new Error(
+      // `BadArchiveError`, so the route answers 400: this is the user's archive being
+      // wrong, not the server breaking, and the sentence already reads like advice.
+      throw new BadArchiveError(
         `This backup has no world for "${serverName}" in it — nothing was changed.`
       );
     }
@@ -420,7 +509,7 @@ async function restoreBundle(
       await cp(dbSrc, dbDest, { force: true });
       await own(dbDest);
     } else if (m?.includesDb) {
-      throw new Error(
+      throw new BadArchiveError(
         `This backup says it carries the player database but does not — ` +
           `the world was restored, the accounts were left alone.`
       );

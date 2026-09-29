@@ -196,10 +196,29 @@ export interface MapConflict {
   cells: string[];
 }
 
-/** Every pair of installed maps that claim any of the same cells. */
-export function findConflicts(maps: PzMap[]): MapConflict[] {
+/**
+ * Every pair of installed maps that claim any of the same cells.
+ *
+ * `listed` is the effective `Map=` order. Pass it and a pair is only a conflict when
+ * **both** participants are actually in it, because a map absent from `Map=` claims
+ * nothing in game — see the "Every installed map must be in `Map=`" note above.
+ *
+ * That filter is not cosmetic. Measured on production 2026-09-29: the card reported
+ * `SZ_Checkpoint6` vs `SZ_Riverside_Checkpoint_2` over four cells (22_22, 22_23,
+ * 23_22, 23_23) as the top conflict, while `SZ_Checkpoint6` is named in
+ * `MAP_EXCLUDE` and is not in `Map=` at all — `pz/search_folder.sh` logs
+ * `Excluding map SZ_Checkpoint6 (MAP_EXCLUDE)` on every boot. So the one conflict the
+ * card put first was the one that had already been settled, on purpose.
+ *
+ * Omit `listed` (the config has not been written yet, so there is no order to judge
+ * against) and nothing is filtered — reporting every overlap is better than reporting
+ * none, and the card's copy already handles "neither is listed".
+ */
+export function findConflicts(maps: PzMap[], listed?: Iterable<string>): MapConflict[] {
+  const effective = listed ? new Set(listed) : null;
   const byCell = new Map<string, string[]>();
   for (const m of maps) {
+    if (effective && !effective.has(m.name)) continue;
     for (const cell of m.cells) {
       const list = byCell.get(cell);
       if (list) list.push(m.name);

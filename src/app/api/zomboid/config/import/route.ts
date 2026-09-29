@@ -87,6 +87,9 @@ export async function POST(request: NextRequest) {
 
   // Infra keys keep this box's values. Where we have none yet (fresh install),
   // whatever the upload says is as good a starting point as any.
+  //
+  // The values stay INTERNAL — see the `preview` response below. `INFRA_KEYS[0]` is
+  // `RCONPassword`.
   const preserved: { name: string; value: string }[] = [];
   for (const key of INFRA_KEYS) {
     const mine = currentByName.get(key);
@@ -131,7 +134,19 @@ export async function POST(request: NextRequest) {
       changed,
       added,
       dropped,
-      preserved,
+      // Names only. This used to send `{name, value}`, so a preview handed the caller
+      // the live `RCONPassword` — verified on production 2026-09-29, the response
+      // contained the game's actual RCON password in cleartext, and it lands in any
+      // proxy or request log on the way. `settings.edit` is a MOD capability, not just
+      // ADMIN, so this was not even limited to owners. The one consumer
+      // (`zomboid-config-import.tsx`) renders `p.name` and never `p.value`, so the
+      // field was pure leak with no reader.
+      //
+      // Kept as objects rather than a bare `string[]` **on purpose**: that consumer does
+      // `preview.preserved.map((p) => p.name)`, and on strings that renders
+      // "undefined, undefined, undefined". Same defect class one layer over — and the
+      // component is not this stream's to change.
+      preserved: preserved.map((p) => ({ name: p.name })),
       mods,
     });
   }
