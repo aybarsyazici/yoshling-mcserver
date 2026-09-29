@@ -196,3 +196,71 @@ Driven locally against a real build with a fixture operation
 toast**, by design: the client never saw it live, and replaying history as toasts was a
 bug that was fixed during the build. Short operations get their toast from the route's
 own response instead.
+
+---
+
+# The test suite — added 2026-09-30
+
+`npm test` → **199 tests, ~430 ms, no Docker, no network, no running server.** That last
+constraint is the point: a suite that needs the box up is a suite nobody runs on a laptop,
+and every fix in this repo had until now been verified by hand against production exactly
+once and then never again.
+
+## Why it exists
+
+Two regressions that one assertion each would have caught:
+
+- The power control drifted into **three copies** (`game-controls.tsx`,
+  `mission-control.tsx`, `game-overview.tsx`). The running-but-unreachable recovery fix
+  and the `can:` permission projection were each applied to only some of them, so the
+  per-world landing pages kept offering "Power on" for a container that was already up and
+  hid the Restart that is the documented way out.
+- A `noop` step added to the backup routes mapped to outcome `partial`, so every clean
+  Minecraft and 7DTD backup summarised as *"but part of it is missing. This is not a
+  restore point."* — in amber, on the normal path, since both are usually stopped.
+
+## Two load-bearing details
+
+- **The config must stay `vitest.config.mts`.** As `vitest.config.ts` it is loaded through
+  `vitest/dist/config.cjs`, which `require()`s Vite — and Vite is ESM-only, so on Node
+  20.12 (this project's default `node`) every run dies with `ERR_REQUIRE_ESM` before
+  collecting a single test. Same trap `CLAUDE.md` records for the Prisma CLI.
+- **vitest stays on major 3.** vitest 4 requires Node ≥ 20.19, and would fail in exactly
+  that same confusing way.
+
+A second config briefly existed — `vitest.config.ts` with a mutually exclusive glob. There
+was no textual conflict between them because the extensions differ, vitest prefers `.ts`,
+and `npm test` therefore reported a green **80 passed** while running **zero** of the other
+117. One config, one glob, both trees.
+
+## A test that encodes behaviour instead of a property is worse than no test
+
+The suite shipped with one, and it is worth keeping as the worked example. It asserted
+that a **Minecraft** power operation pre-empts a **Project Zomboid** backup. That passed
+only because `DEFAULT_RESOURCES.power` claimed every file lane on the box — i.e. starting
+one world destroyed another world's backup. That really happened during the exercise run:
+a `power start zomboid` holding all three lanes, and 105 s earlier the `backup.create 7dtd`
+it killed, four `done` steps including "Wrote the archive — 290 MiB", deleted.
+
+Narrowing that default was the fix, and the test turned red — so the test made a correct
+change look like a break. It now exercises a genuine hand-off (PZ as the *outgoing* world,
+whose lane really is taken), and a complement case pins the guarantee nothing covered: a
+power operation on one world leaves another world's backup alone.
+
+The same shape applies to `stopSeconds`. The old assertion was `< 60` — a bound, which
+cannot catch staleness. `zomboid` sat at 300 (the timeout, not the stop) rendering "five
+minutes", then at 30 after the RCON `quit` fix made it 11.4 s, rendering "half a minute".
+Both were inside the bound and both were wrong by 3–25×. The measured values are now pinned
+by equality, and `7dtd` is deliberately **not** pinned because it has never been timed in
+isolation — pinning an estimate would dress a guess as a measurement.
+
+## What it does not cover
+
+`game-manager.ts` entirely — `powerOn` / `powerOff` / `restartGame` / `withGameStopped` /
+`setMemory` / `applyServiceEnv`. Every one shells out to Docker. **The eviction logic and
+the `wasRunning` gating are the highest-value untested code left**, and both have caused
+real incidents. Testing them needs the Docker calls behind an injectable seam.
+
+Also uncovered: the three backup routes' flush helpers (module-private, they call
+`containerIsRunning`), which is why the honesty guarantee was moved into `summarize()`
+instead — the sentence no longer depends on each route author choosing `done` over `noop`.

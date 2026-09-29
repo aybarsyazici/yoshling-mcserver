@@ -324,7 +324,14 @@ npm run dev      # dev server (needs .env — see below)
 npm run build    # production build (also the deploy build)
 npm run lint     # eslint (not run during build; pre-existing `any` warnings exist)
 npx tsc --noEmit # typecheck
+npm test         # vitest, 199 pure-logic tests, ~430ms, no Docker/network needed
 ```
+
+**Run `npm test` before you ship.** It exists because the same classes of defect kept
+coming back: the power control drifted into three copies where two missed a fix, and a
+`noop` step turned every clean backup into an amber "this is not a restore point". Both
+were one assertion away from being caught. Details, and what it deliberately does *not*
+cover, are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 `.env` (gitignored) needs at least: `DATABASE_URL`, `DISCORD_CLIENT_ID`,
 `DISCORD_CLIENT_SECRET`, `AUTH_SECRET`, `AUTH_URL`, `RCON_*`,
@@ -564,15 +571,16 @@ connect **directly to the box IP `89.58.50.155`**:
 **Live** at `https://yoshling.xyz` on **netcup `89.58.50.155`** (Cloudflare Full
 (strict), verified end-to-end). Migrated off Hetzner 2026-09-13 — see MIGRATION.md.
 
-- **Minecraft: has never started on netcup, and its first start will probably
-  crash-loop — reconcile it before pressing Power on.** `ServerConfig.mcVersion` says
-  **26.1.2**; compose and the container say `VERSION=1.21.4`; `/data` holds a 26.1.2
-  Fabric launcher plus three jars declaring a 26.1.2 dependency. Fabric aborts on
-  those before opening `level.dat`, so it's a boot failure rather than world
-  corruption — and under `restart: unless-stopped` it repeats while the probe shows a
-  permanent "Starting…". Make compose and the DB agree and check the jars match
-  first. (`yoshling-mc` sits in `created`, never started, which is why this went
-  unnoticed.) The MC layer is also the oldest and least-audited code here.
+- **Minecraft: boots and has been exercised end to end** (2026-09-29/30). The old
+  version mismatch is gone — compose, `ServerConfig.mcVersion` and the jars on disk all
+  say **26.1.2**, and it starts in `Done (1.661s)!`. Power on, off, restart, backups
+  (including a real restore), mods, modpack refusals, `server.properties`, the file
+  browser and the console have all been run against the live container.
+  **Its in-game whitelist and ops never worked until 2026-09-30** — both files were
+  written with `uuid: ""`, which matches nobody, so enabling the whitelist and adding
+  yourself locked *everyone* out with a green success toast. `src/lib/mc-identity.ts`
+  now derives the offline UUID the way the server does
+  (`md5("OfflinePlayer:" + name)`, v3). The MC layer is still the oldest code here.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
@@ -636,14 +644,15 @@ Still open:
   that. `deploy.sh` now **refuses and prints the diff** instead of reverting silently
   (`FORCE_COMPOSE=1` overrides). The real fix — have those features write to git, or
   drop compose from the checkout — is still open, so don't add another writer.
-- **There is no test suite.** Every fix is verified by hand against a live server.
-  (`error.tsx` and `global-error.tsx` now exist, so a render throw no longer
-  white-screens the whole app.)
-- **The 7DTD Difficulty and Day length quick settings still render** for XML properties
-  that do not exist. The API now reports them as `ignored`; the controls should be
-  deleted from `src/app/7dtd/settings/page.tsx`.
-- **Ops/whitelist entries are written with `uuid: ""`**, and Minecraft matches by UUID,
-  so that feature may never have worked. Unverified.
+- ~~There is no test suite~~ — **there is now: `npm test`, 199 tests, ~430 ms, no Docker
+  or network.** Added 2026-09-30. It covers the pure logic where regressions have
+  actually happened (`concludeOperation`/`summarize`, the PZ `.ini` parser,
+  `patchServiceEnv`, path containment, the `.acf` two-section trap, `operation-ui`).
+  **Run it before you ship.** Two things about it are load-bearing: the config must stay
+  `vitest.config.mts` (as `.ts` it loads via a CJS shim that `require()`s ESM-only Vite
+  and dies on Node 20.12 — the Prisma trap again), and vitest stays on major 3 because 4
+  needs Node ≥ 20.19. A test that merely encodes current behaviour is worse than none —
+  one here pinned a bug instead of the property and turned a correct fix red.
 - **224 legacy `ModpackMod` rows** have no download source. The apply now refuses
   rather than wiping your mods for nothing, but three packs (COBBLEVERSE, Fabulously
   Optimized, Hoplite) need re-importing to be usable.
