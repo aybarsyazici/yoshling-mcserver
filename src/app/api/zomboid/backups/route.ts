@@ -5,10 +5,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, writeFile, mkdir, cp } from "fs/promises";
 import path from "path";
-import { PZ_DIR, savePaths } from "@/lib/zomboid";
-import { withGameStopped } from "@/lib/game-manager";
-import { refuseIfPreempted, runOperation, type OperationFact } from "@/lib/operations";
-import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { PZ_DIR, pzSave, savePaths } from "@/lib/zomboid";
+import { containerIsRunning, withGameStopped } from "@/lib/game-manager";
+import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
+import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
 
 export const maxDuration = 300;
@@ -29,6 +29,14 @@ interface Manifest {
   serverName: string;
   includesWorld: boolean;
   includesDb: boolean;
+  /**
+   * Whether the server was asked to write the world out before the copy.
+   *
+   * `false` = the server was stopped, so there was nothing to flush and the files were
+   * already at rest. `undefined` = an archive from before this was recorded, i.e.
+   * genuinely unknown rather than "no".
+   */
+  flushed?: boolean;
 }
 
 /**
@@ -133,6 +141,17 @@ export async function POST(request: NextRequest) {
           await mkdir(BACKUP_DIR, { recursive: true });
           const { name, world, db: dbFile, serverDir } = await savePaths();
 
+          // Ask the game to write the world out before we copy it. No `create` path used
+          // to do this, though every driver exposes a save and the *restore* paths all use
+          // one, so a backup taken while people played copied files the server was still
+          // midway through writing — and the copy here takes 4m 20s, which is a lot of
+          // wall-clock for the world to be moving underneath.
+          //
+          // Flush only — deliberately no `save-off` equivalent, because Project Zomboid
+          // has none. Inventing a command that silently fails is the defect class being
+          // cleaned up.
+          const flushed = await flushWorld(op);
+
           // Stage the pieces in a work dir, then tar them together.
           await rm(work, { recursive: true, force: true });
           await mkdir(work, { recursive: true });
@@ -183,6 +202,7 @@ export async function POST(request: NextRequest) {
             serverName: name,
             includesWorld,
             includesDb,
+            flushed,
           };
           await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
 
@@ -216,6 +236,10 @@ export async function POST(request: NextRequest) {
             verdict: includesWorld ? undefined : "warn",
           });
           facts.push({ label: "Player database", value: includesDb ? "included" : "not included" });
+          facts.push({
+            label: "World flushed first",
+            value: flushed ? "yes" : "not needed — the server was not running",
+          });
           return {
             facts,
             value: {
@@ -287,6 +311,14 @@ export async function POST(request: NextRequest) {
   if (action === "delete") {
     const name = safeBackupName(backupName);
     if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
+
+    // The lane, for the same reason the config endpoints take it: deleting an archive
+    // while a restore reads it, or while a create writes into this directory, is the
+    // case worth refusing. An `rm` is sub-second, so it gets the lane rather than a
+    // `runOperation` record — a strip row and a completion toast for it would be noise.
+    const laneBusy = fileLaneBusy("zomboid");
+    if (laneBusy) return laneBusy;
+
     try {
       await rm(path.join(BACKUP_DIR, name));
       return NextResponse.json({ success: true });
@@ -296,6 +328,43 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+/**
+ * Ask Project Zomboid to write the world to disk before the copy, over RCON.
+ *
+ * Returns whether the flush was asked for at all — `false` means the container is not
+ * running, which is a `noop` step rather than a failure. An RCON failure is recorded as a
+ * warn and does NOT abort: a torn archive beats no archive, and an unreachable server is
+ * exactly when someone wants a backup. (PZ wedging its game loop while the container
+ * stays up is a state this box has actually been in — 2026-09-22.)
+ *
+ * The save itself is fast — ten consecutive `SaveAll` calls measured 94–156 ms on
+ * 2026-09-29 — so this adds nothing meaningful to the 4m 20s copy.
+ *
+ * No `save-off`: Project Zomboid has no such command, so there is nothing to pause and
+ * nothing to re-enable in a `finally`.
+ */
+async function flushWorld(op: OpHandle): Promise<boolean> {
+  op.step("Flushing the world to disk");
+  if (!(await containerIsRunning("zomboid").catch(() => false))) {
+    op.settle("The server is not running — nothing to flush", { kind: "noop" });
+    return false;
+  }
+  const t0 = Date.now();
+  try {
+    await pzSave();
+    op.settle(`Flushed the world — ${Date.now() - t0} ms`);
+    return true;
+  } catch (e) {
+    op.settle("Could not flush the world — the server did not answer over RCON");
+    op.fact({
+      label: "World flush",
+      value: `failed (${(e as Error).message}) — the archive may be torn`,
+      verdict: "warn",
+    });
+    return true;
+  }
 }
 
 /**

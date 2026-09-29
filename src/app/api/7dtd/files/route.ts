@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
+import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
@@ -112,6 +113,15 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Take this world's file lane, for the same reason every *config* endpoint already
+  // does: a restore holds it for minutes and would silently overwrite whatever was saved
+  // through it, while the page toasted "Saved". Sharper here than in the config routes —
+  // they guard one curated file each, this can write any file in the same tree,
+  // including `sdtdserver.xml` itself. Never on GET: browsing during a backup is
+  // harmless, and refusing it would be worse than allowing it.
+  const laneBusy = fileLaneBusy("7dtd");
+  if (laneBusy) return laneBusy;
+
   const { path: relativePath, content, root } = await request.json();
   const baseDir = resolveRoot(root);
   if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });
@@ -148,6 +158,9 @@ export async function DELETE(request: NextRequest) {
   if (session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Admin only" }, { status: 403 });
   }
+
+  const laneBusy = fileLaneBusy("7dtd");
+  if (laneBusy) return laneBusy;
 
   const { searchParams } = new URL(request.url);
   const baseDir = resolveRoot(searchParams.get("root"));

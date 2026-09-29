@@ -6,9 +6,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, mkdir, rename } from "fs/promises";
 import path from "path";
-import { withGameStopped } from "@/lib/game-manager";
-import { refuseIfPreempted, runOperation } from "@/lib/operations";
-import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { containerIsRunning, withGameStopped } from "@/lib/game-manager";
+import { sendCommand } from "@/lib/rcon";
+import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
+import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
 
 // A restore now saves + stops the world, swaps the files and starts it again, so
@@ -116,10 +117,26 @@ export async function POST(request: NextRequest) {
         },
         async (op) => {
           await mkdir(BACKUP_DIR, { recursive: true });
+
+          // Quiesce the world before reading it off disk. No `create` path used to do
+          // this, though every driver exposes a save and the *restore* paths all use one,
+          // so a backup taken while people played copied chunk files the server was
+          // still midway through writing. `flushed` is recorded either way, so a restore
+          // can say whether the archive came from a quiesced world rather than leaving
+          // that to be assumed.
+          const flushed = await flushMinecraft(op);
+
           op.step("Compressing the archive");
-          await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
-            timeout: TAR_TIMEOUT_MS,
-          });
+          try {
+            await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
+              timeout: TAR_TIMEOUT_MS,
+            });
+          } finally {
+            // In a `finally`, and that is the load-bearing part: a failed `tar` that left
+            // autosave switched off would lose every minute of play since the backup —
+            // strictly worse than the torn archive this whole step exists to prevent.
+            if (flushed) await resumeMinecraftAutosave(op);
+          }
 
           // Read the size back off disk. Without this the operation has no evidence
           // and renders `unverified` — which is the correct, visible price for
@@ -140,14 +157,17 @@ export async function POST(request: NextRequest) {
           // below does the `rm`.
           refuseIfPreempted(op, "this backup");
 
+          const facts: OperationFact[] = [];
+          if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
+          facts.push({ label: "World map", value: "included" });
+          facts.push({
+            label: "World flushed first",
+            value: flushed
+              ? "yes — autosave was paused for the copy"
+              : "not needed — the server was not running",
+          });
           return {
-            facts:
-              size != null
-                ? [
-                    { label: "Size", value: formatBytes(size) },
-                    { label: "World map", value: "included" },
-                  ]
-                : [],
+            facts,
             value: { name: filename, size: size ?? 0, createdAt: mtime.toISOString() },
           };
         }
@@ -215,6 +235,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
     }
 
+    // Delete was the one backup mutation outside the registry entirely — no lane, no
+    // record, and the client wrote its own `toast.success("Backup deleted")`, which is
+    // the single thing every other path here is structurally forbidden from doing.
+    //
+    // It gets the lane rather than a full `runOperation`: an `rm` is sub-second, so a
+    // strip row and a completion toast for it would be noise, and that is exactly the
+    // case `fileLaneBusy` exists for (the seven config endpoints use it for the same
+    // reason). What the lane buys is the case that matters — deleting an archive while a
+    // restore is reading it, or while a create is writing into the same directory.
+    const laneBusy = fileLaneBusy("minecraft");
+    if (laneBusy) return laneBusy;
+
     try {
       await rm(path.join(BACKUP_DIR, name));
       return NextResponse.json({ success: true });
@@ -224,6 +256,65 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+/**
+ * Ask Minecraft to write the world out and stop writing to it, so `tar` reads a
+ * consistent tree. Returns whether autosave was actually paused — the caller must
+ * resume it in a `finally` if so.
+ *
+ * Minecraft is the only one of the three that can do the full dance, because
+ * `save-off` genuinely exists in its command set. **Do not add a `save-off`
+ * equivalent to 7DTD or Project Zomboid** — neither has one, and inventing a command
+ * that silently fails is the defect class this pass is cleaning up. Those two get the
+ * flush alone.
+ *
+ * Failure here is deliberately non-fatal and recorded as a warn rather than thrown: a
+ * torn archive is much better than no archive, and the world being unreachable over RCON
+ * is precisely a moment when someone wants a backup.
+ */
+async function flushMinecraft(op: OpHandle): Promise<boolean> {
+  op.step("Flushing the world to disk");
+  if (!(await containerIsRunning("minecraft").catch(() => false))) {
+    op.settle("The server is not running — nothing to flush", { kind: "noop" });
+    return false;
+  }
+  const t0 = Date.now();
+  try {
+    // `save-off` first: it stops the autosave thread, so the `save-all flush` that
+    // follows is the last write before the copy.
+    await sendCommand("save-off");
+    await sendCommand("save-all flush");
+    op.settle(`Flushed the world and paused autosave — ${Date.now() - t0} ms`);
+    return true;
+  } catch (e) {
+    // `save-off` may have landed even though a later call threw, so report `true` and
+    // let the caller's `finally` re-enable autosave regardless. Re-enabling something
+    // that was never disabled is a harmless no-op; the reverse loses progress.
+    op.settle("Could not flush the world — the server did not answer over RCON");
+    op.fact({
+      label: "World flush",
+      value: `failed (${(e as Error).message}) — the archive may be torn`,
+      verdict: "warn",
+    });
+    return true;
+  }
+}
+
+async function resumeMinecraftAutosave(op: OpHandle): Promise<void> {
+  try {
+    await sendCommand("save-on");
+  } catch (e) {
+    // The one outcome worth shouting about: the world is running with autosave off and
+    // nothing else will turn it back on.
+    op.fact({
+      label: "Autosave",
+      value:
+        `could not be re-enabled (${(e as Error).message}) — run \`save-on\` in the ` +
+        `console, or restart the server, or progress since this backup will be lost`,
+      verdict: "bad",
+    });
+  }
 }
 
 /**

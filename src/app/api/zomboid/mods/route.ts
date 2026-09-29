@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
+import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { installedModIds, readModState, splitList, writeModState } from "@/lib/zomboid";
 
@@ -245,6 +246,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // `writeModState` rewrites `Mods=` and `WorkshopItems=` in the very .ini that
+  // `/api/zomboid/config` takes this same lane to protect, so the two have to agree
+  // about who holds it. Without this, a restore could replace the .ini from an archive
+  // halfway through a mod install and the page would still toast "added".
+  const laneBusy = fileLaneBusy("zomboid");
+  if (laneBusy) return laneBusy;
+
   const body = await request.json();
   const workshopId = parseWorkshopId(body?.workshopId ?? body?.url ?? "");
   if (!workshopId) {
@@ -394,6 +402,9 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const laneBusy = fileLaneBusy("zomboid");
+  if (laneBusy) return laneBusy;
+
   const body = await request.json();
   const workshopId = parseWorkshopId(body?.workshopId ?? "");
   const modIds = dedupe((Array.isArray(body?.modIds) ? body.modIds : []).map(String));
@@ -440,6 +451,9 @@ export async function DELETE(request: NextRequest) {
   if (!hasPermission(session.user.role, "mods.remove")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  const laneBusy = fileLaneBusy("zomboid");
+  if (laneBusy) return laneBusy;
 
   const workshopId = parseWorkshopId(new URL(request.url).searchParams.get("workshopId") ?? "");
   if (!workshopId) return NextResponse.json({ error: "workshopId required" }, { status: 400 });

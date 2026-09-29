@@ -6,9 +6,8 @@ import {
   configuredMemoryGb,
   hostTotalGb,
 } from "@/lib/game-manager";
-import { GAME_LIST } from "@/lib/games";
+import { GAME_LIST, type GameId } from "@/lib/games";
 import { hasPermission } from "@/lib/permissions";
-import { db } from "@/lib/db";
 
 export async function GET() {
   const session = await auth();
@@ -32,23 +31,43 @@ export async function GET() {
     games[g.id] = { ...games[g.id], players: { online: 0, max: 0, players: [] }, detail: undefined };
   }
 
-  let activeGame: string | null = null;
-  try {
-    const state = await db.gameState.findUnique({ where: { id: "main" } });
-    activeGame = state?.activeGame ?? null;
-  } catch {}
-
-  // Reconcile intent with reality: whichever is actually online wins.
-  const onlineGame =
+  // Whichever world is actually up, from this poll's own probe. Nothing else.
+  //
+  // This used to fall back to `GameState.activeGame` from the database whenever no world
+  // answered — i.e. in exactly the case where the correct answer is `null`. That column
+  // is written only by `/api/games/control`, so **every other way a world goes down
+  // leaves it stale**: the eviction inside `powerOn`, `withGameStopped`, `setMemory`,
+  // the Workshop watcher, a crash, a host reboot. The landing page then lit that world's
+  // power-bus branch and said it was running with nothing running at all. The live row
+  // reads `{"activeGame":"zomboid"}` and has since 14:44, regardless of what happens to
+  // the container.
+  //
+  // The write sites stay: the column is a write-only audit trail of intent, and nothing
+  // now reads it. `containerRunning` per world already carries every fact a UI needs.
+  const activeGame =
     GAME_LIST.find((g) => games[g.id].status === "online" || games[g.id].status === "starting")?.id ??
     null;
+
+  // Which worlds have a running container, plural on purpose.
+  //
+  // Only one world fits on this box, and the oldest open item in CLAUDE.md is that
+  // nothing *detects* two running at once — `powerOn` evicts, but the other start paths
+  // do not, and no code path reports co-residency. These flags are computed on every
+  // poll anyway, so exposing them costs nothing. `activeGame` keeps its exact wire shape
+  // for existing readers.
+  //
+  // Nothing consumes this yet: rendering a warning needs `use-games.ts` and
+  // `dash-shell.tsx`, and *refusing* co-residency needs `game-manager.ts`. Both are
+  // one-file changes away, with the data already on the wire.
+  const running: GameId[] = GAME_LIST.filter((g) => games[g.id].containerRunning).map((g) => g.id);
 
   // Real values, so the UI never shows a stale hardcoded number.
   const [memoryGb, hostGb] = await Promise.all([configuredMemoryGb(), hostTotalGb()]);
 
   return NextResponse.json({
     games,
-    activeGame: onlineGame ?? activeGame,
+    activeGame,
+    running,
     busy: currentControlLock(),
     access,
     // Which power controls this user may actually use. The buttons used to be

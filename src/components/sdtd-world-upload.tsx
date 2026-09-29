@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { UploadCloud, Globe, Loader2, CheckCircle2, Trash2 } from "lucide-react";
 
@@ -151,8 +152,11 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
           onChange={(e) => pick(e.target.files?.[0] ?? null)}
         />
         <UploadCloud className="h-7 w-7" style={{ color: tint }} />
+        {/* The size below uses `formatBytes`, not a local `/1048576 … "MB"`: that divided
+            by 1024² and labelled the result MB, so this readout disagreed with the same
+            file's size everywhere else in the app by ~5%. One formatter, one unit. */}
         {file ? (
-          <span className="font-mono text-sm">{file.name} <span className="text-muted-foreground">({(file.size / 1048576).toFixed(1)} MB)</span></span>
+          <span className="font-mono text-sm">{file.name} <span className="text-muted-foreground">({formatBytes(file.size)})</span></span>
         ) : (
           <>
             <span className="text-sm font-medium">Drop a .zip here or click to browse</span>

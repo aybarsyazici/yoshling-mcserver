@@ -6,11 +6,18 @@ import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
-import { RUNTIME } from "@/lib/game-manager";
 
 // sdtdserver.xml lives in the ServerFiles mount. The docker image reads it on
 // boot; we edit the curated subset of <property name=".." value=".."/> lines.
-const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || RUNTIME["7dtd"].dir, "sdtdserver.xml");
+//
+// The fallback is `/sevendtd-config`, matching the five other readers of this variable
+// (`7dtd/reset`, `7dtd/world` ×2, `7dtd/files`, `7dtd/backups`). It used to fall back to
+// `RUNTIME["7dtd"].dir`, which is `/sevendtd` — the **saves** volume, where there is no
+// `sdtdserver.xml` at all (verified on the box 2026-09-29: `/sevendtd/sdtdserver.xml`
+// does not exist, `/sevendtd-config/sdtdserver.xml` does). Latent only because
+// SDTD_CONFIG_DIR happens to be set in production; without it every read here would
+// ENOENT and the route would report "the server config file isn't present yet".
+const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml");
 
 // Maps our friendly config keys → the sdtdserver.xml property names.
 const XML_KEYS: Record<string, string> = {
@@ -74,16 +81,32 @@ export async function PUT(request: NextRequest) {
   if (laneBusy) return laneBusy;
 
   const body = await request.json();
+
+  // The existing row, so a key the client omits keeps its stored value instead of
+  // snapping back to `DEFAULTS`.
+  //
+  // This matters now that the Settings page no longer submits `gameDifficulty`,
+  // `dayLength`, `version` or `maxMemory` (their controls were deleted — the two XML
+  // properties do not exist on this server, and the other two are read by nothing).
+  // With `?? DEFAULTS.x` as the only fallback, renaming the server would have quietly
+  // reset the stored difficulty to 2 and the day length to 60 — and this row is the only
+  // config that survives a fresh SteamCMD install, so that is the copy a recovery reads.
+  // Silently rewriting the recovery source is exactly the defect class this is cleaning up.
+  const existing = await db.sevenDaysConfig.findUnique({ where: { id: "main" } }).catch(() => null);
+  const prev = { ...DEFAULTS, ...(existing ?? {}) };
+
   const data = {
-    serverName: String(body.serverName ?? DEFAULTS.serverName).slice(0, 80),
-    password: String(body.password ?? ""),
-    maxPlayers: clampInt(body.maxPlayers, 1, 16, DEFAULTS.maxPlayers),
-    gameDifficulty: clampInt(body.gameDifficulty, 1, 5, DEFAULTS.gameDifficulty),
-    dayLength: clampInt(body.dayLength, 10, 120, DEFAULTS.dayLength),
-    version: String(body.version ?? DEFAULTS.version),
-    maxMemory: String(body.maxMemory ?? DEFAULTS.maxMemory),
+    serverName: String(body.serverName ?? prev.serverName).slice(0, 80),
+    password: String(body.password ?? prev.password),
+    maxPlayers: clampInt(body.maxPlayers, 1, 16, prev.maxPlayers),
+    gameDifficulty: clampInt(body.gameDifficulty, 1, 5, prev.gameDifficulty),
+    dayLength: clampInt(body.dayLength, 10, 120, prev.dayLength),
+    version: String(body.version ?? prev.version),
+    maxMemory: String(body.maxMemory ?? prev.maxMemory),
     // Sandbox code is an encoded A-Z preset string; strip anything else.
-    sandboxCode: String(body.sandboxCode ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 4000),
+    sandboxCode: String(body.sandboxCode ?? prev.sandboxCode)
+      .replace(/[^A-Za-z0-9]/g, "")
+      .slice(0, 4000),
   };
 
   await db.sevenDaysConfig.upsert({
@@ -94,12 +117,19 @@ export async function PUT(request: NextRequest) {
 
   // Best-effort sync to the XML on disk (may not exist until first install).
   let xmlWarning: string | undefined;
-  // Keys whose property this server's config doesn't have. We store them in the
-  // DB regardless (that row is the only thing that survives a fresh install), so
-  // without reporting them the page toasts "Settings saved" for a value that
-  // changed nothing in-game. As of V3.3 b14 the live sdtdserver.xml has 69
-  // properties and neither GameDifficulty nor DayNightLength is among them —
-  // both moved into the sandbox preset, i.e. into SandboxCode.
+  // Keys whose property this server's config doesn't have **and whose value this
+  // request actually changed**. We store them in the DB regardless (that row is the
+  // only thing that survives a fresh install), so without reporting them the page
+  // toasts "Settings saved" for a value that changed nothing in-game. As of V3.3 b14
+  // the live sdtdserver.xml has 69 properties and neither GameDifficulty nor
+  // DayNightLength is among them — both moved into the sandbox preset, i.e. into
+  // SandboxCode.
+  //
+  // The "actually changed" half is the fix. This used to report every missing property
+  // on every PUT, so renaming the server raised an amber "Difficulty had no effect
+  // in-game" warning about a field the user never touched — and this page's warning
+  // toast is its *only* honesty channel, so firing it on every save trains people to
+  // dismiss it unread. A warning nobody reads is worth less than no warning.
   const skipped: string[] = [];
   try {
     let xml = await readFile(XML_PATH, "utf-8");
@@ -111,7 +141,7 @@ export async function PUT(request: NextRequest) {
       );
       if (re.test(xml)) {
         xml = xml.replace(re, `$1${escapeXml(value)}$2`);
-      } else {
+      } else if (value !== String((prev as Record<string, unknown>)[key])) {
         skipped.push(xmlName);
       }
     }

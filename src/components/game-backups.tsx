@@ -10,6 +10,14 @@ import { useOperations } from "@/components/operations-provider";
 import { blockedReason, powerBlocker } from "@/lib/operation-ui";
 import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Archive, RotateCcw, Trash2, Plus, AlertTriangle } from "lucide-react";
 
 interface Backup {
@@ -45,6 +53,13 @@ export function GameBackups({ game }: { game: GameId }) {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  // Both confirms are Dialogs rather than `window.confirm`, matching the pre-empt
+  // confirm on the landing page. `window.confirm` cannot render the consequence with
+  // any emphasis, is unstyled, and on a destructive action that is the one place the
+  // wording has to be readable.
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // A restore is a power operation — it saves + stops the server, swaps the files and
   // starts it back up, all inside one operation. So it has to know whether the server
@@ -106,12 +121,7 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function restore(name: string) {
-    const consequence = running
-      ? `${meta.name} will be saved and stopped, the ${noun} replaced, then started again. ` +
-        `This can take several minutes, and the browser may give up waiting before it finishes — ` +
-        `the bar at the top of the page is what to watch, not this dialog.`
-      : `This replaces the current ${noun}. The server stays powered down.`;
-    if (!confirm(`Restore "${name}"?\n\n${consequence}`)) return;
+    setConfirmRestore(null);
     setRestoring(name);
     try {
       const res = await fetch(endpoint, {
@@ -131,9 +141,13 @@ export function GameBackups({ game }: { game: GameId }) {
       // timeout, so the *successful* path routinely ends with a dead connection.
       // Reporting that as "Restore failed" on a destructive operation is the worst
       // available answer — it invites someone to run it a second time.
+      // "strip", not "bar". Ten other user-facing strings say strip, and both
+      // `operation-tape.tsx` and `operation-ledger.tsx` record that a progress *bar* was
+      // removed on purpose — so pointing someone at "the bar" sends them looking for a
+      // thing that does not exist, in the middle of a destructive operation.
       toast.info(
         `Still restoring "${name}". The connection timed out before it finished, which is normal ` +
-          `for a large ${noun} — watch the bar at the top of the page, and don't start it again.`
+          `for a large ${noun} — watch the strip at the top of the page, and don't start it again.`
       );
     } finally {
       setRestoring(null);
@@ -142,20 +156,33 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function del(name: string) {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete", backupName: name }),
-    });
-    if (res.ok) {
-      setBackups((prev) => prev.filter((b) => b.name !== name));
-      toast.success("Backup deleted");
-    } else {
-      // Say so. A failed delete used to leave the row in place and no message at
-      // all, which reads as the button not working.
-      const d = await res.json().catch(() => ({}));
-      toast.error(d.error || "Delete failed");
+    setConfirmDelete(null);
+    setDeleting(name);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", backupName: name }),
+      });
+      if (res.ok) {
+        // The row leaving IS the report. There used to be a `toast.success("Backup
+        // deleted")` here, written by the client off nothing but a 2xx — the one thing
+        // every other path on this page is structurally forbidden from doing, and on the
+        // only irreversible action of the three. The server now takes the file lane, so a
+        // refusal arrives as a 409 with a readable message instead.
+        setBackups((prev) => prev.filter((b) => b.name !== name));
+      } else {
+        // Say so. A failed delete used to leave the row in place and no message at
+        // all, which reads as the button not working. A 409 from the file lane lands
+        // here too and carries the reason ("a restore is in progress…").
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || "Delete failed");
+      }
+    } catch {
+      toast.error("Delete failed — the request did not reach the server.");
+    } finally {
+      setDeleting(null);
+      void fetchBackups();
     }
   }
 
@@ -238,14 +265,27 @@ export function GameBackups({ game }: { game: GameId }) {
                     size="sm"
                     variant="outline"
                     className="disabled:cursor-not-allowed"
-                    onClick={() => restore(b.name)}
+                    onClick={() => setConfirmRestore(b.name)}
                     disabled={restoring !== null || locked}
                   >
                     <RotateCcw className={cn("h-3.5 w-3.5", restoring === b.name && "animate-spin")} />{" "}
                     {restoring === b.name ? "Restoring…" : "Restore"}
                   </Button>
-                  <Button size="sm" variant="destructive" onClick={() => del(b.name)}>
-                    <Trash2 className="h-3.5 w-3.5" />
+                  {/* `disabled` and `aria-label` were both missing. Delete was the only
+                      backup mutation with no gate at all, while Restore right next to it
+                      carried `disabled={restoring !== null || locked}` — so an archive
+                      could be removed out from under a restore that was reading it. And
+                      the button is icon-only, so with no label a screen reader announced
+                      it as "button" with no indication of what it deletes. */}
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="disabled:cursor-not-allowed"
+                    aria-label={`Delete backup ${b.name}`}
+                    onClick={() => setConfirmDelete(b.name)}
+                    disabled={deleting !== null || restoring !== null || locked}
+                  >
+                    <Trash2 className={cn("h-3.5 w-3.5", deleting === b.name && "animate-pulse")} />
                   </Button>
                 </div>
               </motion.div>
@@ -253,6 +293,63 @@ export function GameBackups({ game }: { game: GameId }) {
           </AnimatePresence>
         </div>
       )}
+
+      {/* Restore confirm */}
+      <Dialog open={confirmRestore !== null} onOpenChange={(o) => !o && setConfirmRestore(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore this backup?</DialogTitle>
+            <DialogDescription>
+              <span className="font-mono">{confirmRestore}</span> replaces the live {noun}, and
+              there is no undo.{" "}
+              {running ? (
+                <>
+                  <strong>
+                    {meta.name} will be saved and stopped, the {noun} replaced, then started again.
+                  </strong>{" "}
+                  This can take several minutes, and the browser may give up waiting before it
+                  finishes — the strip at the top of the page is what to watch, not this dialog.
+                </>
+              ) : (
+                <>The server is down and stays down afterwards.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmRestore(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => confirmRestore && restore(confirmRestore)}
+            >
+              <RotateCcw className="h-4 w-4" /> Restore
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this backup?</DialogTitle>
+            <DialogDescription>
+              <span className="font-mono">{confirmDelete}</span> is removed from disk. This cannot
+              be undone, and it is not a copy of anything else — once it is gone, the state it held
+              is gone with it.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => confirmDelete && del(confirmDelete)}>
+              <Trash2 className="h-4 w-4" /> Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

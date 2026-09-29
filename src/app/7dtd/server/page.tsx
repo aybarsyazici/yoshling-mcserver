@@ -17,14 +17,14 @@ const TABS = [
   { value: "files", label: "Files" },
 ];
 
-const FILE_ROOTS = [
-  { key: "config", label: "Config" },
-  { key: "saves", label: "Saves" },
-];
-
 export default function SevenDtdServerPage() {
   const [tab, setTab] = useState("controls");
-  const tint = GAMES["7dtd"].tint;
+  // `games.ts` is the single source of truth for a world's identity, and this page kept
+  // a second copy of its file-roots table plus a literal `/api/7dtd/files`. The two
+  // copies were byte-identical (verified), which is the only reason nothing broke — and
+  // also why a drift would have gone unnoticed. The PZ page already reads `meta`.
+  const meta = GAMES["7dtd"];
+  const tint = meta.tint;
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: tint }}>
@@ -41,7 +41,9 @@ export default function SevenDtdServerPage() {
         {tab === "controls" && <GameControls game="7dtd" />}
         {tab === "monitor" && <ServerMonitor game="7dtd" />}
         {tab === "console" && <GameConsole game="7dtd" />}
-        {tab === "files" && <FileBrowser endpoint="/api/7dtd/files" roots={FILE_ROOTS} tint={tint} />}
+        {tab === "files" && (
+          <FileBrowser endpoint={meta.api.files} roots={meta.fileRoots} tint={tint} />
+        )}
       </div>
 
       <PhotoFooter src="/the-stare.jpg" />

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
+import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
@@ -104,6 +105,16 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Take this world's file lane, for the same reason every *config* endpoint already
+  // does: a restore holds it for minutes and would silently overwrite whatever was
+  // saved through it, while the page toasted "Saved". The file browser is the sharper
+  // case of the two — the config routes guard one curated file each, while this can
+  // write *any* file in the same tree, including the very files they guard.
+  // Deliberately NOT on GET: browsing during a backup is harmless, and blocking it is
+  // worse than allowing it.
+  const laneBusy = fileLaneBusy("minecraft");
+  if (laneBusy) return laneBusy;
+
   const { path: relativePath, content } = await request.json();
 
   if (!relativePath || typeof content !== "string") {
@@ -123,7 +134,11 @@ export async function PUT(request: NextRequest) {
       data: {
         userId: session.user.id,
         action: "edit_file",
-        details: JSON.stringify({ path: relativePath }),
+        // `game` matches the wording 7DTD's and PZ's file routes use. Without it
+        // `/api/activity` (which keeps untagged rows visible on purpose) leaked this row
+        // to anyone, and `/minecraft`'s own panel — which selects on `contains
+        // "minecraft"` — could never show it.
+        details: JSON.stringify({ game: "minecraft", path: relativePath }),
       },
     });
 
@@ -145,6 +160,9 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Admin only" }, { status: 403 });
   }
 
+  const laneBusy = fileLaneBusy("minecraft");
+  if (laneBusy) return laneBusy;
+
   const { searchParams } = new URL(request.url);
   const relativePath = searchParams.get("path") || "";
 
@@ -161,7 +179,7 @@ export async function DELETE(request: NextRequest) {
       data: {
         userId: session.user.id,
         action: "delete_file",
-        details: JSON.stringify({ path: relativePath }),
+        details: JSON.stringify({ game: "minecraft", path: relativePath }),
       },
     });
 
