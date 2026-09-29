@@ -6,7 +6,14 @@ import { toast } from "sonner";
 import { GAMES, otherGames, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
-import { blockedReason, fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
+import {
+  blockedReason,
+  fileOperationLabel,
+  liveFileOperations,
+  namedFileOperations,
+  powerBlocker,
+} from "@/lib/operation-ui";
+import { liveStep } from "@/lib/operations-types";
 import { StatusPill } from "@/components/ui-bits";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { PowerGlyph } from "@/components/glyphs";
@@ -50,6 +57,15 @@ export function GameControls({ game }: { game: GameId }) {
    */
   const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
   /**
+   * Everything a power action here would cut short — on every world, not just this one.
+   *
+   * A power operation declares every `files:` lane, so it pre-empts all of them. Keyed on
+   * this world's lane, pressing Power off while ANOTHER world's backup ran skipped the
+   * confirm entirely and destroyed that backup with nothing said. `preemptable` stays
+   * per-world for the disabled-control reason text, which is a claim about this world.
+   */
+  const cutShort = liveFileOperations(operations);
+  /**
    * Whatever holds the box's power slot, from the REGISTRY — not from the projected
    * `busy`.
    *
@@ -84,7 +100,31 @@ export function GameControls({ game }: { game: GameId }) {
    * registry only made it legible, by naming the other world in the reason text and
    * so putting the contradiction on screen in one glance.
    */
-  const ownBusy = localBusy || serverBusy?.game === game || powerHeld?.game === game;
+  /**
+   * The live step of the blocking power operation, when that step is about THIS world.
+   *
+   * A hand-off is one operation whose `game` is the world coming **up**, and its steps are
+   * tagged per world — so the world being saved and shut down appears only in the steps.
+   * Keying ownership on `op.game` alone therefore left the outgoing world's own page
+   * claiming nothing was happening to it: measured on production 2m 35s into Project
+   * Zomboid's save+stop, `/zomboid/server` read "Running / Online / 0h 14m" with its uptime
+   * still counting up, and the only mention of its shutdown was inside a sentence about
+   * Minecraft. That is a five-minute window on every hand-off, and it is the mirror image
+   * of the bug 8760454 fixed.
+   */
+  const ownStep = powerHeld && liveStep(powerHeld)?.game === game ? liveStep(powerHeld) : undefined;
+  const ownBusy =
+    localBusy || serverBusy?.game === game || powerHeld?.game === game || ownStep !== undefined;
+  /**
+   * What is being done to THIS world, which is not always the operation's own action.
+   *
+   * On a hand-off away from us the operation's action is `start` (of the other world) while
+   * what is happening here is a stop — so the pill must not say "Booting" and the Power
+   * Core must not animate as though we were coming up.
+   */
+  const ownAction: "start" | "stop" | "restart" | undefined =
+    powerHeld?.game === game ? powerHeld.action : ownStep ? "stop" : serverBusy?.action;
+  const ownStopping = ownAction === "stop";
 
   // Only one world can hold the box at a time, but check every other one
   // rather than assume which — a stale container would otherwise be missed.
@@ -97,7 +137,15 @@ export function GameControls({ game }: { game: GameId }) {
   const blockingThem = blocking.length > 1 ? "them" : "it";
 
   const coreState: CoreState =
-    ownBusy && !isOnline ? { kind: "booting", game } : isOnline ? { kind: "holding", game } : { kind: "idle" };
+    ownBusy && !isOnline
+      ? // "booting" energises the core, which is a claim about coming up. A world being
+        // shut down gets the working-but-not-held state instead.
+        ownStopping
+        ? { kind: "working", game }
+        : { kind: "booting", game }
+      : isOnline
+      ? { kind: "holding", game }
+      : { kind: "idle" };
 
   /**
    * The container is up but the game is not answering.
@@ -122,34 +170,35 @@ export function GameControls({ game }: { game: GameId }) {
   // and Restart, below, becomes the recommended way out.
   const canPower = containerUp ? can.stop : can.start;
 
-  // Only *this* world's operation should describe itself here — a hand-off that
-  // is stopping another world shouldn't caption this card.
-  const busyStage = serverBusy?.game === game ? serverBusy.stage : undefined;
+  // Only *this* world's work should caption this card — but a hand-off's save-and-stop of
+  // this world IS this world's work, and it lives in the step rather than in `busy.stage`.
+  const busyStage =
+    ownStep?.label ?? (serverBusy?.game === game ? serverBusy.stage : undefined);
 
   // Drop the pending intent once the thing it was about is gone, so a later file
   // operation on this world cannot re-open a dialog nobody asked for.
   useEffect(() => {
-    if (!preemptable && confirmPreempt !== null) {
+    if (cutShort.length === 0 && confirmPreempt !== null) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setConfirmPreempt(null);
     }
-  }, [preemptable, confirmPreempt]);
+  }, [cutShort.length, confirmPreempt]);
 
   function onPower() {
     if (busy) return;
     // `containerUp`, not `isOnline`: a wedged server is still running, so the only
     // meaningful power action is to stop it.
     if (containerUp) {
-      if (preemptable) return setConfirmPreempt("stop");
+      if (cutShort.length > 0) return setConfirmPreempt("stop");
       return void control("stop");
     }
-    if (blocking.length > 0 || preemptable) setConfirm(true);
+    if (blocking.length > 0 || cutShort.length > 0) setConfirm(true);
     else void control("start");
   }
 
   function onRestart() {
     if (busy) return;
-    if (preemptable) return setConfirmPreempt("restart");
+    if (cutShort.length > 0) return setConfirmPreempt("restart");
     void control("restart");
   }
 
@@ -216,7 +265,10 @@ export function GameControls({ game }: { game: GameId }) {
                 : "Stopped"}
             </p>
           </div>
-          <StatusPill status={ownBusy && !isOnline ? "starting" : status} tint={meta.tint} />
+          <StatusPill
+            status={ownBusy && !isOnline ? (ownStopping ? "stopping" : "starting") : status}
+            tint={meta.tint}
+          />
         </div>
 
         <div className="my-4 flex justify-center">
@@ -376,12 +428,15 @@ export function GameControls({ game }: { game: GameId }) {
                   <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
                 </>
               )}
-              {preemptable && (
+              {/* Every live file operation, on every world: a power operation pre-empts
+                  all of them, and naming only this world's made the dialog's promise true
+                  same-world and false everywhere else. */}
+              {cutShort.length > 0 && (
                 <>
                   {blocking.length > 0 ? " " : ""}
-                  <strong>{meta.name}</strong> is also being worked on —{" "}
-                  {fileOperationLabel(preemptable, elapsedMs(preemptable))} — and starting now cuts
-                  that short. If it is a backup, the archive will be incomplete.
+                  Work is in progress and starting now cuts it short:{" "}
+                  <strong>{namedFileOperations(cutShort, elapsedMs)}</strong>.
+                  Any backup among them is deleted rather than kept as a restore point.
                 </>
               )}
             </DialogDescription>
@@ -406,11 +461,11 @@ export function GameControls({ game }: { game: GameId }) {
           containing only its X button — no title, so no accessible name, and the
           decision the user was mid-way through making had silently vanished. */}
       <Dialog
-        open={confirmPreempt !== null && preemptable !== undefined}
+        open={confirmPreempt !== null && cutShort.length > 0}
         onOpenChange={(o) => !o && setConfirmPreempt(null)}
       >
         <DialogContent>
-          {preemptable && confirmPreempt && (
+          {cutShort.length > 0 && confirmPreempt && (
             <>
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
@@ -418,10 +473,12 @@ export function GameControls({ game }: { game: GameId }) {
                   {confirmPreempt === "stop" ? "Power off anyway?" : "Restart anyway?"}
                 </DialogTitle>
                 <DialogDescription>
-                  <strong>{meta.name}</strong> is being worked on —{" "}
-                  {fileOperationLabel(preemptable, elapsedMs(preemptable))}. Going ahead cuts it
-                  short. If it is a backup, the archive will be incomplete and is deleted; if it is
-                  a mod install, some mods will be missing.
+                  Going ahead cuts this short:{" "}
+                  <strong>
+                    {namedFileOperations(cutShort, elapsedMs)}
+                  </strong>
+                  . If it is a backup, the archive is deleted rather than kept as a restore
+                  point; if it is a mod install, some mods will be missing.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>

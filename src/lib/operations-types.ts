@@ -62,6 +62,18 @@ export interface OperationFact {
   label: string;
   value: string;
   verdict?: Verdict;
+  /**
+   * Which world this fact is about, when that is not the operation's own world.
+   *
+   * A hand-off is ONE operation whose `game` is the world coming **up**, and it
+   * records a `Shutdown` fact about the world going **down**. Without this the
+   * summary took the name from `entry.game` and said "Minecraft — started in 5m 04s,
+   * but it had to be killed after 300s" — measured on production 2026-09-29, while
+   * `docker events` showed Minecraft had only ever been *started* and it was Project
+   * Zomboid that was SIGKILLed. The step list had it right all along; only the derived
+   * sentence (which is also the toast, and the toast shows nothing else) was wrong.
+   */
+  game?: GameId;
 }
 
 /**

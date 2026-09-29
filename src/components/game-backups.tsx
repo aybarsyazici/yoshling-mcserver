@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
 import { blockedReason, powerBlocker } from "@/lib/operation-ui";
+import { formatBytes } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Archive, RotateCcw, Trash2, Plus, AlertTriangle } from "lucide-react";
 
@@ -256,9 +257,9 @@ export function GameBackups({ game }: { game: GameId }) {
   );
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
+/**
+ * The list and the ledger's "Backup created — 165 MiB" have to be the same number in
+ * the same unit, so both come from one helper. This was a second copy with the same
+ * MiB-arithmetic-labelled-MB bug, in the one view an admin compares the summary against.
+ */
+const formatSize = formatBytes;

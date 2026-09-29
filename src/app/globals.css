@@ -96,6 +96,8 @@
   --chart-3: #179299;
   --chart-4: #40a02b;
   --chart-5: #df8e1d;
+  /* Amber, dark enough to read as text on the ledger's wash — see `.op-warn`. */
+  --op-warn: #7c4d02;
   --radius: 0.75rem;
   --sidebar: #e6e9ef;
   --sidebar-foreground: #4c4f69;
@@ -143,6 +145,9 @@
   --chart-3: #94e2d5;
   --chart-4: #a6e3a1;
   --chart-5: #f9e2af;
+  /* Mocha needs no adjustment: the mixed value already measures 12.19:1 on the strip.
+     Kept as the same expression the old `.op-warn` used, so Mocha is byte-identical. */
+  --op-warn: color-mix(in oklab, var(--chart-5) 78%, var(--foreground));
   --sidebar: #181825;
   --sidebar-foreground: #cdd6f4;
   --sidebar-primary: #cba6f7;
@@ -246,17 +251,40 @@
   to { transform: scaleY(1); opacity: 1; }
 }
 
-/* Operation severity text.
+/* Operation severity text. Use these wherever an outcome is stated as text.
+
    `text-chart-5` in Latte is #df8e1d, which on the ledger's wash measures 2.15:1 at
-   13px — below AA — and `--destructive` (#d20f39) is 4.49:1, also short. Mixing the
-   tone toward `--foreground` clears 4.5:1 in Latte and is automatically correct in
-   Mocha, where `--foreground` is light, so neither theme needs a second value and no
-   colour is added to the palette. Use these wherever an outcome is stated as text. */
+   13px — below AA — and `--destructive` (#d20f39) is 4.49:1, also short.
+
+   **Mixing an amber toward `--foreground` cannot reach AA in Latte, and the first
+   version of this comment claimed it did.** Measured twice on the live box against the
+   strip's composited background (rgb(216,225,241)), by resolved `getComputedStyle` and
+   by pixel-sampling a screenshot: `chart-5 78%` renders rgb(189,129,66) = **2.50–2.66:1**,
+   i.e. the mix moved 2.15 → 2.5 and stopped. Sweeping the ramp does not help — 50% is
+   3.40:1, 30% is 4.24:1, and the first passing value (20%) is a grey-mauve that no longer
+   reads as a warning. So Latte gets its own token (#7c4d02, 5.47:1 on the same wash, still
+   legibly amber) and Mocha keeps the mix, where it measures 12.19:1.
+
+   This matters more than its size suggests: every Project Zomboid stop ends in SIGKILL,
+   so `partial` is the most common outcome on this box and amber is the sentence an
+   operator reads most often. `.op-bad` measures 4.43–4.70:1 in Latte and stays as it is. */
 .op-warn {
-  color: color-mix(in oklab, var(--chart-5) 78%, var(--foreground));
+  color: var(--op-warn);
 }
 .op-bad {
   color: color-mix(in oklab, var(--destructive) 82%, var(--foreground));
+}
+/* The strip's secondary text: the "Started 15:36:42, 2m 26s ago" sub-line, the step
+   detail lines, the clock column.
+
+   `text-muted-foreground` is marginal in Latte app-wide (4.37:1 on `--background`) and
+   the strip's own tinted wash pushes it under: measured live, 3.99:1 for the 12px summary
+   and 3.78:1 for the 11px sub-line. These are the most informative lines in a five-minute
+   Project Zomboid stop, so they get a tone mixed toward `--foreground` (≈4.8:1 in Latte)
+   rather than a change to the app-wide token. Mocha is unaffected in practice — muted is
+   already 6.98:1 there and this only lightens it further. */
+.op-chrome {
+  color: color-mix(in oklab, var(--muted-foreground) 60%, var(--foreground));
 }
 
 /* Toasts.
@@ -296,7 +324,7 @@
   --normal-border: color-mix(in oklab, var(--chart-5) 55%, transparent);
 }
 .cn-toast[data-type="warning"] [data-icon] {
-  color: color-mix(in oklab, var(--chart-5) 78%, var(--foreground));
+  color: var(--op-warn);
 }
 .cn-toast[data-type="success"] [data-icon] {
   color: var(--primary);

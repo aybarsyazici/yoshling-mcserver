@@ -210,8 +210,14 @@ interface GameDriver {
    * narrated separately: for Project Zomboid the save takes 433 ms and the stop
    * takes the full 300 s, and one combined "Saving and stopping" step spends five
    * minutes implying the save is what's slow.
+   *
+   * **Returns whether the game actually answered.** It used to swallow every error in a
+   * bare `catch {}` and return `void`, so `narratedStop` settled "Saved Project Zomboid"
+   * on a thrown RCON call — and a stop of a *wedged* server (the documented 2026-09-22
+   * state, where RCON is exactly what stops answering) claimed the one thing a player's
+   * data depends on without having done it.
    */
-  save(): Promise<void>;
+  save(): Promise<boolean>;
   /** Stop the container, with this game's own grace period. */
   stop(): Promise<void>;
   /** Graceful: `save()` then `stop()`. */
@@ -229,6 +235,18 @@ function offlineStatus(game: GameId): GameStatus {
 }
 
 /**
+ * `--since` for "this run only", as a `docker logs` argument.
+ *
+ * Every reader of a booting container's log needs it, and each one computing it costs a
+ * `docker inspect` fork — so a probe that needs both the marker counts and the last
+ * matching line works it out once and passes it to both.
+ */
+async function logSince(container: string): Promise<string> {
+  const started = await containerStartedAt(container);
+  return started ? new Date(started).toISOString() : "15m";
+}
+
+/**
  * Count log markers for a booting container in one `docker logs | awk` pass.
  *
  * One subprocess per probe rather than one per pattern, because the status
@@ -237,10 +255,10 @@ function offlineStatus(game: GameId): GameStatus {
  */
 async function bootMarkers(
   container: string,
-  awkProgram: string
+  awkProgram: string,
+  sinceArg?: string
 ): Promise<Record<string, number>> {
-  const started = await containerStartedAt(container);
-  const since = started ? new Date(started).toISOString() : "15m";
+  const since = sinceArg ?? (await logSince(container));
   const { stdout } = await execAsync(
     `docker logs --since '${since}' ${container} 2>&1 | awk '${awkProgram}'`,
     { maxBuffer: 4 * 1024 * 1024 }
@@ -253,11 +271,29 @@ async function bootMarkers(
   return out;
 }
 
-/** Last line matching `grep -E pattern`, trimmed — the "what just happened" line. */
-async function lastLogLine(container: string, pattern: string): Promise<string | undefined> {
+/**
+ * Last line matching `grep -E pattern`, trimmed — the "what just happened" line.
+ *
+ * **Scoped to the current run**, exactly as `bootMarkers` is. Without `--since` it read
+ * the whole container log, so for the first ~20 s of every boot the row's detail line was
+ * the PREVIOUS run's last match. Measured on production 2026-09-29: a fresh Project
+ * Zomboid boot rendered "Scanning maps / 5%" with the detail "RCON: listening on port
+ * 27015" from the run that had just been SIGKILLed — a line that, had it belonged to this
+ * run, would have made the stage "Ready / 100%" by the probe's own branch order. The
+ * stage and the detail contradicted each other on the one surface this whole feature
+ * exists to make trustworthy.
+ */
+async function lastLogLine(
+  container: string,
+  pattern: string,
+  sinceArg?: string
+): Promise<string | undefined> {
   try {
+    const since = sinceArg ?? (await logSince(container));
     const { stdout } = await execAsync(
-      `docker logs --tail 4000 ${container} 2>&1 | grep -E ${JSON.stringify(pattern)} | tail -1`,
+      `docker logs --since '${since}' --tail 4000 ${container} 2>&1 | grep -E ${JSON.stringify(
+        pattern
+      )} | tail -1`,
       { maxBuffer: 4 * 1024 * 1024 }
     );
     const line = stdout.trim();
@@ -304,13 +340,26 @@ const cachedMcBoot = cachedProbe(
   3000,
   async (): Promise<{ stage: string; percent: number | null; detail?: string }> => {
     const c = RUNTIME.minecraft.container;
+    // One `docker inspect` for both reads below, so scoping them to this run costs
+    // nothing extra on a status poll.
+    const since = await logSince(c);
     let m: Record<string, number>;
     try {
       m = await bootMarkers(
         c,
-        "/Starting minecraft server/{a=1} /Preparing level/{b=1} " +
+        // The first three markers are the ones that make this ladder observable at all.
+        // Measured on production 2026-09-29: `yoshling-mc` spends 26 of its 28 boot
+        // seconds inside the image's `[init]` phase, and the four original markers all
+        // land in the last two — so every sample of a real Minecraft boot returned the 5%
+        // floor and the ladder never moved. `[init]` starts at t+0, the Fabric line at
+        // t+12s and the mod count immediately after it.
+        "/\\[init\\]/{i=1} /Loading Minecraft .* with Fabric Loader/{f=1} " +
+          "/Loading [0-9]+ mods/{md=1} " +
+          "/Starting minecraft server/{a=1} /Preparing level/{b=1} " +
           "/Preparing spawn area/{c=1} /Done \\(/{d=1} " +
-          'END{printf "start=%d level=%d spawn=%d done=%d", a+0, b+0, c+0, d+0}'
+          'END{printf "init=%d fabric=%d mods=%d start=%d level=%d spawn=%d done=%d", ' +
+          "i+0, f+0, md+0, a+0, b+0, c+0, d+0}",
+        since
       );
     } catch {
       return { stage: "Starting up", percent: null };
@@ -318,7 +367,9 @@ const cachedMcBoot = cachedProbe(
 
     const detail = await lastLogLine(
       c,
-      "Done \\(|Preparing spawn area|Preparing level|Starting minecraft server"
+      "Done \\(|Preparing spawn area|Preparing level|Starting minecraft server|" +
+        "Loading [0-9]+ mods|Loading Minecraft .* with Fabric Loader|\\[init\\]",
+      since
     );
 
     if (m.done) return { stage: "Ready", percent: 100, detail };
@@ -332,7 +383,18 @@ const cachedMcBoot = cachedProbe(
       };
     }
     if (m.level) return { stage: "Preparing the world", percent: 45, detail };
-    if (m.start) return { stage: "Starting the server", percent: 20, detail };
+    if (m.start) return { stage: "Starting the server", percent: 35, detail };
+    if (m.mods) {
+      // "Loading 44 mods:" — the count is real, so it is shown rather than a spinner.
+      const n = detail ? Number(/Loading (\d+) mods/.exec(detail)?.[1] ?? NaN) : NaN;
+      return {
+        stage: Number.isFinite(n) ? `Loading mods (${n})` : "Loading mods",
+        percent: 20,
+        detail,
+      };
+    }
+    if (m.fabric) return { stage: "Loading the mod loader", percent: 12, detail };
+    if (m.init) return { stage: "Preparing the container", percent: 6, detail };
     return { stage: "Starting container", percent: 5, detail };
   }
 );
@@ -380,7 +442,10 @@ const minecraftDriver: GameDriver = {
     try {
       await rconSend("save-all flush");
       await new Promise((r) => setTimeout(r, 1500));
-    } catch {}
+      return true;
+    } catch {
+      return false;
+    }
   },
   async stop() {
     await execAsync(`docker stop ${RUNTIME.minecraft.container}`);
@@ -408,6 +473,7 @@ const cachedSdtdBoot = cachedProbe(
   3000,
   async (): Promise<{ stage: string; percent: number | null; detail?: string }> => {
     const c = RUNTIME["7dtd"].container;
+    const since = await logSince(c);
     let m: Record<string, number>;
     try {
       m = await bootMarkers(
@@ -417,7 +483,8 @@ const cachedSdtdBoot = cachedProbe(
           // "StartGame done" too is harmless, because `done` is checked first below.
           "/INF StartGame/{sg=1} /Loading players.xml/{pl=1} " +
           "/Calculating world hashes/{wh=1} /chunk groups/{ch=1} /StartGame done/{dn=1} " +
-          'END{printf "dl=%d vf=%d sg=%d pl=%d wh=%d ch=%d done=%d", dl+0, vf+0, sg+0, pl+0, wh+0, ch+0, dn+0}'
+          'END{printf "dl=%d vf=%d sg=%d pl=%d wh=%d ch=%d done=%d", dl+0, vf+0, sg+0, pl+0, wh+0, ch+0, dn+0}',
+        since
       );
     } catch {
       return { stage: "Starting up", percent: null };
@@ -425,7 +492,8 @@ const cachedSdtdBoot = cachedProbe(
 
     const detail = await lastLogLine(
       c,
-      "StartGame done|chunk groups|Calculating world hashes|Loading players.xml|INF StartGame|Update state|Validating"
+      "StartGame done|chunk groups|Calculating world hashes|Loading players.xml|INF StartGame|Update state|Validating",
+      since
     );
 
     if (m.done) return { stage: "Opening the server to players", percent: 97, detail };
@@ -482,7 +550,10 @@ const sevenDtdDriver: GameDriver = {
     try {
       await sdtdSaveWorld();
       await new Promise((r) => setTimeout(r, 1000));
-    } catch {}
+      return true;
+    } catch {
+      return false;
+    }
   },
   async stop() {
     await execAsync(`docker stop ${RUNTIME["7dtd"].container}`);
@@ -519,8 +590,7 @@ const PZ_STOP_TIMEOUT = 300;
 const cachedPzBoot = cachedProbe(
   3000,
   async (): Promise<{ stage: string; percent: number | null; detail?: string }> => {
-  const started = await containerStartedAt(RUNTIME.zomboid.container);
-  const since = started ? new Date(started).toISOString() : "10m";
+  const since = await logSince(RUNTIME.zomboid.container);
   let counts = { loading: 0, started: 0, rcon: 0, maps: 0, workshop: 0, jvm: 0 };
   try {
     const { stdout } = await execAsync(
@@ -546,7 +616,8 @@ const cachedPzBoot = cachedProbe(
   // for a minute, so naming the mod currently loading is what shows it is moving.
   const detail = await lastLogLine(
     RUNTIME.zomboid.container,
-    "> loading |Workshop: |SERVER STARTED|RCON: listening"
+    "> loading |Workshop: |SERVER STARTED|RCON: listening",
+    since
   );
 
   if (counts.rcon) return { stage: "Ready", percent: 100, detail };
@@ -595,7 +666,10 @@ const zomboidDriver: GameDriver = {
     try {
       await pzSave();
       await new Promise((r) => setTimeout(r, 1000));
-    } catch {}
+      return true;
+    } catch {
+      return false;
+    }
   },
   async stop() {
     await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${RUNTIME.zomboid.container}`);
@@ -742,21 +816,57 @@ async function containerExit(container: string): Promise<{ state: string; exitCo
  * at the end of the grace period — and **Project Zomboid never exits on SIGTERM**,
  * so every PZ stop reported a clean success and hid the kill. `.State.ExitCode` is
  * the only place that fact exists; 137 is 128 + SIGKILL.
+ *
+ * ## Why it reads the container first
+ *
+ * `.State.ExitCode` **persists across runs**, so reading it without having observed
+ * this operation stop something attributes the previous run's death to this one.
+ * Measured on production 2026-09-29: a 135 ms stop of an already-exited Project Zomboid
+ * reported `Shutdown: killed after 300s` (verdict warn → amber `partial`) and summarised
+ * as "stopped in 0s, but it had to be killed after 300s" — a sentence that refutes
+ * itself, built from a 137 left by an operation that had ended 2m 47s earlier. The same
+ * path reported "Saved Minecraft" and "exited cleanly (code 0)" for `yoshling-mc` in
+ * state `created`, which had never run at all: code 0 is docker's zero value.
+ *
+ * So: observe `running` first, or claim nothing. Having observed it, the exit code that
+ * follows our own `docker stop` cannot belong to another run.
+ *
+ * Returns whether a running container was actually stopped, so callers can avoid
+ * recording durable side effects (an Activity row) for a no-op.
  */
-async function narratedStop(op: OpHandle, game: GameId): Promise<void> {
+async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
   const name = GAMES[game].name;
+  if ((await containerState(RUNTIME[game].container)) !== "running") {
+    op.step(`Checking ${name}`, { game });
+    op.settle(`${name} was already stopped — nothing to save or stop`, { kind: "noop" });
+    return false;
+  }
+
   op.step(`Saving ${name}`, { game });
   const t0 = Date.now();
-  await DRIVERS[game].save();
+  const saved = await DRIVERS[game].save();
   const savedMs = Date.now() - t0;
-  op.settle(`Saved ${name}`);
+  if (saved) {
+    op.settle(`Saved ${name}`);
+  } else {
+    // The game did not answer, so the world was NOT written out. This is the one claim
+    // in a stop that a player's data depends on, and it is exactly the claim a wedged
+    // server cannot honour.
+    op.settle(`Could not save ${name} — it did not answer`, { kind: "noop" });
+    op.fact({
+      label: "Save",
+      value: "the world was not saved — the server did not answer",
+      verdict: "warn",
+      game,
+    });
+  }
 
   const grace = game === "zomboid" ? PZ_STOP_TIMEOUT : null;
   op.step(`Stopping ${name}`, { game });
   op.detail(
     grace
-      ? `Saved in ${savedMs} ms — waiting up to ${grace}s for the process to exit`
-      : `Saved in ${savedMs} ms — waiting for the process to exit`
+      ? `${saved ? `Saved in ${savedMs} ms` : "Not saved"} — waiting up to ${grace}s for the process to exit`
+      : `${saved ? `Saved in ${savedMs} ms` : "Not saved"} — waiting for the process to exit`
   );
   await DRIVERS[game].stop();
 
@@ -769,16 +879,24 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<void> {
         `Check the server before trying again.`
     );
   }
+  // `game` on the fact, always: on a hand-off the operation's own world is the one
+  // coming UP, and the summary used to blame it for this world's SIGKILL.
   if (exitCode === 137 && grace) {
     op.settle(`Stopped ${name} — killed after ${grace}s`);
-    op.fact({ label: "Shutdown", value: `killed after ${grace}s`, verdict: "warn" });
+    op.fact({ label: "Shutdown", value: `killed after ${grace}s`, verdict: "warn", game });
   } else if (exitCode === 137) {
     op.settle(`Stopped ${name} — killed at the end of the grace period`);
-    op.fact({ label: "Shutdown", value: "killed at the end of the grace period", verdict: "warn" });
+    op.fact({
+      label: "Shutdown",
+      value: "killed at the end of the grace period",
+      verdict: "warn",
+      game,
+    });
   } else {
     op.settle(`Stopped ${name}`);
-    op.fact({ label: "Shutdown", value: `exited cleanly (code ${exitCode ?? "?"})` });
+    op.fact({ label: "Shutdown", value: `exited cleanly (code ${exitCode ?? "?"})`, game });
   }
+  return true;
 }
 
 /**
@@ -790,7 +908,7 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<void> {
  * releasing the lock twice — which left two unlocked windows in the middle of a
  * destructive operation for a Power on to interleave with.
  */
-export async function stopGameForOperation(op: OpHandle, game: GameId): Promise<void> {
+export async function stopGameForOperation(op: OpHandle, game: GameId): Promise<boolean> {
   return narratedStop(op, game);
 }
 
@@ -847,7 +965,24 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
       // is a no-op, so a wedged server used to report "powering on" and then do
       // nothing at all — which reads as the dashboard being broken. Say what is true
       // and name the action that would help.
+      //
+      // Two cases, and they are not the same claim. If the game ANSWERS, "it just isn't
+      // responding yet. Use Restart" is false twice over and pinned a red FAILED card to
+      // every page for six hours recommending a pointless restart of a healthy server
+      // (observed on production against a PZ reporting 0/32 players over RCON); that is a
+      // no-op, not a failure. If the container is up and the game is silent, the original
+      // sentence is exactly right and stays.
       if ((await containerState(RUNTIME[game].container)) === "running") {
+        const answering = await DRIVERS[game]
+          .status()
+          .then((s) => s.status === "online")
+          .catch(() => false);
+        if (answering) {
+          op.step(`Checking ${GAMES[game].name}`, { game });
+          op.settle(`${GAMES[game].name} was already running and answering`, { kind: "noop" });
+          op.fact({ label: "Power", value: "running and answering", game });
+          return { value: steps };
+        }
         throw new Error(
           `${GAMES[game].name} is already running — it just isn't responding yet. ` +
             `Use Restart if it stays that way.`
@@ -868,7 +1003,43 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
   );
 }
 
-export async function powerOff(game: GameId, startedBy?: string | null): Promise<void> {
+/**
+ * Power `game` off. Returns whether a running container was actually stopped, so the
+ * caller can skip the durable Activity row when nothing happened.
+ *
+ * ## The already-stopped case is answered BEFORE admission, on purpose
+ *
+ * A stop of a world that is already down must not be admitted as a power operation at
+ * all, because admission is what marks every in-flight file operation `preempted`.
+ * Measured on production 2026-09-29: two 135 ms / 89 ms no-op stops invalidated and
+ * **deleted** a 7 Days to Die backup that had already written a 290 MB archive, on the
+ * grounds that it had been "taken across a save-and-shutdown boundary". There was no
+ * boundary; nothing on the box moved in that window (`docker events` over it is empty).
+ * A record that holds no resources cannot pre-empt anything, and the mirror of
+ * `powerOn`'s own guard is what this always should have been.
+ */
+export async function powerOff(game: GameId, startedBy?: string | null): Promise<boolean> {
+  if ((await containerState(RUNTIME[game].container)) !== "running") {
+    return runOperation(
+      {
+        kind: "power",
+        game,
+        action: "stop",
+        title: `Saving and stopping ${GAMES[game].name}`,
+        // Deliberately empty: nothing is going to be touched, so nothing may be held
+        // and nothing may be pre-empted.
+        resources: [],
+        startedBy: startedBy ? { name: startedBy } : null,
+      },
+      async (op) => {
+        op.step(`Checking ${GAMES[game].name}`, { game });
+        op.settle(`${GAMES[game].name} was already powered off`, { kind: "noop" });
+        op.fact({ label: "Power", value: "powered off", game });
+        return { value: false };
+      }
+    );
+  }
+
   return withPowerOperation(
     {
       kind: "power",
@@ -878,9 +1049,9 @@ export async function powerOff(game: GameId, startedBy?: string | null): Promise
       startedBy,
     },
     async (op) => {
-      await narratedStop(op, game);
+      const stopped = await narratedStop(op, game);
       op.fact({ label: "Power", value: "powered off" });
-      return { value: undefined as void };
+      return { value: stopped };
     }
   );
 }
@@ -1005,8 +1176,16 @@ export async function restartGame(game: GameId, startedBy?: string | null): Prom
       startedBy,
     },
     async (op) => {
-      await narratedStop(op, game);
+      // Checked here rather than inside `narratedStop`, so a restart of a world that is
+      // already down records "nothing to stop" as evidence instead of a `noop` step —
+      // which would drag the whole record to `partial` and a "but it did not go cleanly"
+      // sentence about an operation that did exactly what was asked.
+      const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
+      if (wasRunning) await narratedStop(op, game);
       await narratedStart(op, game);
+      if (!wasRunning) {
+        op.fact({ label: "Shutdown", value: "nothing to stop — it was already off", game });
+      }
       return { value: undefined as void };
     }
   );

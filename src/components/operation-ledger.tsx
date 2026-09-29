@@ -14,6 +14,7 @@ import {
   OPERATION_STALE_MS,
   formatElapsed,
   liveStep,
+  lowerFirst,
   type OperationView,
 } from "@/lib/operations-types";
 
@@ -85,26 +86,21 @@ export function OperationLedger({
   const now = browserNow + skewMs;
 
   const beats = useBeats(live);
+  /**
+   * Collapsed is the live state, and expanding is always a deliberate click.
+   *
+   * It used to auto-open on every newly-seen operation id, which measured badly on the
+   * live box: on a 375×667 phone the panel came up **683px tall — taller than the
+   * viewport** — so the first screen of `/home` contained zero product content and the
+   * Power buttons the operator had come for sat at y=1485/1856/2249. At 1440px it moved
+   * the page's own `<h1>` from y=225 to y=602, pushing the power row below the fold on any
+   * 900px-tall laptop, and it has no ceiling: it grows with the retained record count.
+   *
+   * The collapsed bar already carries world, live step, elapsed and a step count, which is
+   * the whole point of it, so nothing is lost. `#operation-tapes` is also capped at 45vh
+   * below, so a deliberate expansion can no longer exceed the viewport either.
+   */
   const [open, setOpen] = useState(false);
-
-  // Auto-open once per operation id, so arriving mid-flight catches you up but
-  // navigating between pages does not keep re-opening what you already read.
-  useEffect(() => {
-    if (live.length === 0) return;
-    const key = "yoshling.ops.autoOpened";
-    let seen: string[] = [];
-    try {
-      seen = JSON.parse(window.sessionStorage.getItem(key) || "[]");
-    } catch {}
-    const fresh = live.filter((o) => !o.synthetic && !seen.includes(o.id)).map((o) => o.id);
-    if (fresh.length === 0) return;
-    // Reacting to an id arriving from the poll, which is external state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setOpen(true);
-    try {
-      window.sessionStorage.setItem(key, JSON.stringify([...seen, ...fresh].slice(-40)));
-    } catch {}
-  }, [live]);
 
   /**
    * A clean finish clears itself after 90s. Everything else — partial, nothing,
@@ -127,7 +123,15 @@ export function OperationLedger({
    * synthetic boot then carries the 17 GB download for the next twenty minutes. Drop
    * the ended record and the strip shows a download with no explanation of where it
    * came from, which is exactly the twelve minutes of silence this exists to fill.
+   *
+   * Idle, it shows the **worst** retained record rather than merely the newest. Non-`ok`
+   * records are deliberately kept for six hours while clean ones clear in ten minutes, and
+   * nothing writes an Activity row on a failure path — so a `failed` record losing the one
+   * slot to a two-second memory change is the retention policy being defeated by the
+   * display. (Clean records self-dismiss after 90s, which is why this only bites in the
+   * first minute and a half — which is also exactly when someone is looking.)
    */
+  const worstSettled = settled.find((o) => o.outcome && o.outcome !== "ok");
   const context = active
     ? settled.filter(
         (f) =>
@@ -135,6 +139,8 @@ export function OperationLedger({
           live.some((l) => l.game === f.game) &&
           now - (f.endedAt ?? 0) < 5 * 60_000
       )
+    : worstSettled
+    ? [worstSettled]
     : settled.slice(0, 1);
 
   // Real work first (it is why the buttons are dead), then the context it explains,
@@ -176,6 +182,24 @@ export function OperationLedger({
 
   const primaryQuiet = primary ? isQuiet(beats.get(primary.id), browserNow) : false;
 
+  /**
+   * The world name is printed once, not twice.
+   *
+   * Every power summary opens with the world's name (it is also the toast text, which has
+   * no prefix of its own), so prefixing it here produced "7 Days to Die — 7 Days to Die —
+   * started in 5m 04s…" on screen *and* in the live region, which announced the
+   * duplication verbatim. Backup summaries open "Backup created —", so they still need
+   * the prefix; so does every live record, whose lede is a bare step label ("Copying the
+   * world"). Hence: condition it on the text, not remove it.
+   */
+  const primaryLede = primary ? lede(primary, now) : "";
+  const primaryName = primary ? headline(primary) : "";
+  /** Several worlds at once must not be labelled with the first one's name. */
+  const oneWorld = shown.filter((o) => !o.endedAt).every((o) => o.game === primary?.game);
+  /** Expanded with more than one live operation, the line names the group, not a record. */
+  const groupOpen = open && !primaryStale && runningCount > 1;
+  const needsName = groupOpen ? oneWorld : !primaryLede.startsWith(primaryName);
+
   return (
     <>
       {/*
@@ -198,11 +222,16 @@ export function OperationLedger({
         forever with no way to stop it but finding the Dismiss button.
       */}
       <p role="status" aria-live="polite" aria-atomic="false" className="sr-only">
-        {primary ? `${headline(primary)} — ${announce(primary, now)}` : ""}
+        {primary ? announceLine(primary, now) : ""}
       </p>
 
       {!primary ? null : (
-    <div
+    <aside
+      /* A landmark, so a screen-reader user skimming by landmark can reach the one
+         surface whose whole purpose is to say what the box is doing. axe flagged the
+         strip's own nodes as outside every landmark (`region`, moderate) on every page:
+         `<header>` came before it and `<main>` after it, with nothing around it. */
+      aria-label="Server operations"
       className="flex-shrink-0 backdrop-blur"
       style={{
         background: `color-mix(in oklab, color-mix(in oklab, ${railTint} 7%, var(--card)) 60%, transparent)`,
@@ -237,11 +266,22 @@ export function OperationLedger({
               />
             )}
           </span>
-          <p className="min-w-0 flex-1 truncate text-[13px]">
-            <span className="hidden font-semibold text-foreground sm:inline">
-              {headline(primary)}
-            </span>
-            <span className="hidden sm:inline"> — </span>
+          <p
+            className="min-w-0 flex-1 truncate text-[13px]"
+            /* It is truncated, so the tooltip only ever adds information. Without it a
+               sighted reader saw "…so it wa…" while the sr-only region carried the whole
+               failure sentence — the accessible version being better than the visual one
+               is backwards. */
+            title={primaryLede}
+          >
+            {needsName && (
+              <>
+                <span className="hidden font-semibold text-foreground sm:inline">
+                  {primaryName}
+                </span>
+                <span className="hidden sm:inline"> — </span>
+              </>
+            )}
             {/* Expanded, this line names the operation and the tape below says where it
                 has got to; collapsed, it has to carry both. Showing the live step here
                 *and* the title one row down said the same thing twice. */}
@@ -249,7 +289,12 @@ export function OperationLedger({
                 thing on this line that outranks knowing which operation it is. */}
             {open && !primaryStale ? (
               <span className="text-foreground">
-                {runningCount > 1 ? `${runningCount} operations running` : primary.title}
+                {runningCount > 1
+                  ? // Three backups on three worlds were headed "Project Zomboid — 3
+                    // operations running", which is the same name-borrowing 8760454 fixed
+                    // in the controls.
+                    `${runningCount} operations running${oneWorld ? "" : " across several worlds"}`
+                  : primary.title}
               </span>
             ) : (
               <span
@@ -257,7 +302,7 @@ export function OperationLedger({
                   primaryStale || primary.stalled ? "op-warn" : statusToneClass(primary)
                 )}
               >
-                {lede(primary, now)}
+                {primaryLede}
               </span>
             )}
             {/* Under reduced motion the pip does not move, so its 1 → 0.6 opacity step
@@ -274,11 +319,16 @@ export function OperationLedger({
               <span className="flex-shrink-0" aria-hidden>
                 <Pip tint={tint} beat={beats.get(primary.id)} reduced={reduced} now={browserNow} />
               </span>
+              {/* Rendered only after mount. It is computed from the current clock on both
+                  the server pass and the first client pass, so whenever the elapsed second
+                  ticked between them React threw an uncaught #418 text-content hydration
+                  error — observed on two page loads in three while an operation was live,
+                  and there is no `error.tsx` anywhere for it to land in. */}
               <span
-                className="flex-shrink-0 font-mono text-xs tabular-nums text-muted-foreground"
+                className="op-chrome flex-shrink-0 font-mono text-xs tabular-nums"
                 aria-hidden
               >
-                +{formatElapsed(elapsedMs(primary))}
+                {mounted ? `+${formatElapsed(elapsedMs(primary))}` : ""}
               </span>
             </>
           )}
@@ -288,7 +338,15 @@ export function OperationLedger({
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-controls="operation-tapes"
-            className="flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+            /* Below `sm` the visible label is a bare numeral beside a chevron, which a
+               screen reader announced as "1, button". The name is stated here so it is
+               right at every width. */
+            aria-label={
+              open
+                ? "Hide the operation steps"
+                : `Show the operation steps (${primary.steps.length})`
+            }
+            className="op-chrome flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-1 font-mono text-[11px] transition-colors hover:bg-foreground/5 hover:text-foreground"
           >
             <span className="hidden sm:inline">
               {open ? "Hide" : `${primary.steps.length} step${primary.steps.length === 1 ? "" : "s"}`}
@@ -314,7 +372,7 @@ export function OperationLedger({
                   ? dismiss(primary.id)
                   : setDismissedLive((p) => [...p, primary.id])
               }
-              className="flex-shrink-0 rounded-md px-1.5 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+              className="op-chrome flex-shrink-0 rounded-md px-1.5 py-1 font-mono text-[11px] transition-colors hover:bg-foreground/5 hover:text-foreground"
             >
               Dismiss
             </button>
@@ -323,7 +381,7 @@ export function OperationLedger({
 
         {/* A settled failure has to name a way forward, and the container log is it. */}
         {!active && primary.outcome === "failed" && primary.game && (
-          <p className="mt-1 pl-[43px] text-[11px] text-muted-foreground">
+          <p className="op-chrome mt-1 pl-[43px] text-[11px]">
             <Link href={`${GAMES[primary.game].base}/server`} className="underline hover:text-foreground">
               Open the console
             </Link>{" "}
@@ -332,7 +390,7 @@ export function OperationLedger({
         )}
 
         {!open && secondary && (
-          <p className="mt-1 flex items-center gap-1.5 pl-[43px] text-xs text-muted-foreground">
+          <p className="op-chrome mt-1 flex items-center gap-1.5 pl-[43px] text-xs">
             <span className="font-mono text-[10px] uppercase tracking-[0.16em]">also</span>
             <GameMark
               game={(secondary.game ?? "minecraft") as GameId}
@@ -343,7 +401,7 @@ export function OperationLedger({
               {headline(secondary)} — {lede(secondary, now)}
             </span>
             <span className="flex-shrink-0 font-mono tabular-nums" aria-hidden>
-              +{formatElapsed(elapsedMs(secondary))}
+              {mounted ? `+${formatElapsed(elapsedMs(secondary))}` : ""}
             </span>
           </p>
         )}
@@ -352,7 +410,7 @@ export function OperationLedger({
           <button
             type="button"
             onClick={() => setOpen(true)}
-            className="mt-1 pl-[43px] text-xs text-muted-foreground underline hover:text-foreground"
+            className="op-chrome mt-1 pl-[43px] text-xs underline hover:text-foreground"
           >
             and {moreCount} more
           </button>
@@ -364,7 +422,13 @@ export function OperationLedger({
         <div
           id="operation-tapes"
           hidden={!open}
-          className={cn("mt-2 grid gap-4 border-t pt-2", shown.length > 1 && "lg:grid-cols-2")}
+          /* Capped and scrollable: this panel has no natural ceiling — it grows with the
+             retained record count, and on a 375×667 phone it measured 683px, i.e. taller
+             than the viewport, with the page's own content entirely off screen. */
+          className={cn(
+            "mt-2 grid max-h-[45vh] gap-4 overflow-y-auto border-t pt-2",
+            shown.length > 1 && "lg:grid-cols-2"
+          )}
           style={{ borderColor: `color-mix(in oklab, ${railTint} 15%, transparent)` }}
         >
           {/* Each operation gets its own tape, never interleaved. Merging two
@@ -396,9 +460,21 @@ export function OperationLedger({
                   {/* One indent for every line in the strip — 43px, the tape's own mark
                       column plus its gap — and unconditional, so opening a second
                       operation no longer shifts the first one's text sideways. */}
-                  <p className="mb-1.5 pl-[43px] text-[11px] text-muted-foreground">
-                    {chrome(op, now, elapsedMs(op))}
+                  <p className="op-chrome mb-1.5 pl-[43px] text-[11px]">
+                    {chrome(op, now, elapsedMs(op), mounted)}
                   </p>
+                  {/* Pre-emption was recorded and shipped on the wire from the moment a
+                      power operation was admitted over this one, and nothing rendered it:
+                      a backup already guaranteed to be discarded went on settling "Wrote
+                      the archive — 291 MiB" for a further eleven minutes before concluding
+                      `failed`. The refusal machinery is right; only the silence was wrong. */}
+                  {op.preempted && !op.endedAt && (
+                    <p className="op-warn mb-1.5 pl-[43px] text-[11px]">
+                      {op.kind === "backup.create"
+                        ? "A power operation ran through this — the archive will be deleted rather than offered as a restore point."
+                        : "A power operation ran through this — its result cannot be trusted."}
+                    </p>
+                  )}
                   <OperationTape
                     op={op}
                     elapsedMs={elapsedMs(op)}
@@ -414,7 +490,7 @@ export function OperationLedger({
                     </p>
                   )}
                   {op.facts.length > 0 && op.endedAt && (
-                    <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 pl-[43px] font-mono text-[10px] text-muted-foreground">
+                    <dl className="op-chrome mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 pl-[43px] font-mono text-[10px]">
                       {op.facts.map((f, i) => (
                         <div key={`${f.label}-${i}`} className="flex gap-1.5">
                           <dt className="uppercase tracking-[0.12em]">{f.label}</dt>
@@ -438,7 +514,7 @@ export function OperationLedger({
             })}
         </div>
       </div>
-    </div>
+    </aside>
       )}
     </>
   );
@@ -488,8 +564,31 @@ function announce(op: OperationView, now: number): string {
   return liveStep(op)?.label ?? op.title;
 }
 
-/** The sub-line under an expanded operation. Always about THAT operation. */
-function chrome(op: OperationView, now: number, elapsed: number): string {
+/**
+ * What the live region says: the world, then the sentence — unless the sentence already
+ * opens with the world, which every power summary does.
+ *
+ * The name must stay for the live case, where the text is a bare step label ("Copying the
+ * world") and the region is the only place the world is spoken at all (the visible name is
+ * `hidden sm:inline` and every `GameMark` is `aria-hidden`). What it must not do is read
+ * "Minecraft — Minecraft — started in 5m 04s…", which is what it did.
+ */
+function announceLine(op: OperationView, now: number): string {
+  const text = announce(op, now);
+  const name = headline(op);
+  return text.startsWith(name) ? text : `${name} — ${text}`;
+}
+
+/**
+ * The sub-line under an expanded operation. Always about THAT operation.
+ *
+ * Time-derived parts render only after mount. `Started 15:26:58` is formatted in the
+ * viewer's zone (the box is Europe/Berlin) and `2m 26s ago` moves once a second, so both
+ * differed between the server pass and hydration — an uncaught React #418 on most loads
+ * while anything was live. The `Finished after …` figure is derived from two server
+ * epochs and is stable, so it stays.
+ */
+function chrome(op: OperationView, now: number, elapsed: number, mounted: boolean): string {
   if (op.endedAt) {
     return `Finished after ${formatElapsed(op.endedAt - op.startedAt)}${
       op.startedBy ? ` — started by ${op.startedBy.name}` : ""
@@ -499,16 +598,20 @@ function chrome(op: OperationView, now: number, elapsed: number): string {
   const p = (n: number) => String(n).padStart(2, "0");
   const at = `${p(started.getHours())}:${p(started.getMinutes())}:${p(started.getSeconds())}`;
   const locked = op.holdsPower
-    ? " — server controls are locked until this finishes"
+    ? "Server controls are locked until this finishes"
     : op.stalled
-    ? " — the container is up but the game is not answering; Restart is the way out"
+    ? "The container is up but the game is not answering; Restart is the way out"
     : op.synthetic
-    ? " — the server is not answering yet"
+    ? "The server is not answering yet"
     : "";
+  // Before mount, the clock-dependent half is simply omitted; the note that explains why
+  // the buttons are dead is not, because that is the useful half.
+  if (!mounted) return locked || "Started";
+  const note = locked ? ` — ${lowerFirst(locked)}` : "";
   if (now - op.heartbeatAt > OPERATION_STALE_MS && !op.synthetic) {
     return `Started ${at}, ${formatElapsed(elapsed)} ago — no heartbeat since`;
   }
-  return `Started ${at}, ${formatElapsed(elapsed)} ago${locked}`;
+  return `Started ${at}, ${formatElapsed(elapsed)} ago${note}`;
 }
 
 /**
@@ -516,12 +619,16 @@ function chrome(op: OperationView, now: number, elapsed: number): string {
  *
  * In Latte `--chart-5` (#df8e1d) on the strip's wash is 2.15:1 at 13px and
  * `--destructive` (#d20f39) is 4.49:1 — both short of AA for the single most important
- * sentence this feature produces. The two classes in `globals.css` mix the tone toward
- * `--foreground`, which clears 4.5:1 in Latte and stays correct in Mocha for free
- * (foreground is light there), without adding a colour to the palette.
+ * sentence this feature produces. See `globals.css`: `.op-bad` mixes toward
+ * `--foreground`, and `.op-warn` needed a dedicated Latte token because no amber mix
+ * reaches AA there.
+ *
+ * The uncoloured cases are `text-foreground`, not `text-muted-foreground`. This *is* the
+ * record's headline sentence, and muted measured 3.99:1 on the strip's wash in Latte —
+ * so the one line the feature exists to deliver was the one below AA.
  */
 function statusToneClass(op: OperationView): string {
-  if (!op.endedAt) return "text-muted-foreground";
+  if (!op.endedAt) return "text-foreground";
   switch (op.outcome) {
     case "failed":
       return "op-bad";
