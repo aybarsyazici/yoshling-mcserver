@@ -8,11 +8,11 @@ import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
 import { getPzStatus, pzConsole, pzSave, readModState } from "@/lib/zomboid";
 import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
 import {
-  POWER_RESOURCES,
   runOperation,
   type ControlAction,
   type OperationFact,
   type OperationKind,
+  type OperationResource,
   type OpHandle,
   type OpSuccess,
 } from "@/lib/operations";
@@ -850,8 +850,15 @@ export {
 } from "@/lib/operations";
 
 /**
- * Run a power-adjacent operation. Holds `"power"` plus every `files:` lane, since
- * saving and stopping a world writes that world's files.
+ * Run a power-adjacent operation. Holds `"power"` plus the `files:` lane of the
+ * world it is about to save and stop.
+ *
+ * It used to hold every world's file lane unconditionally (`POWER_RESOURCES`). That
+ * was too broad: admission is what marks in-flight file operations `preempted`, and a
+ * power operation on one world was therefore deleting finished backups of worlds it
+ * had never touched — see the comment on `POWER_RESOURCES`. `resources` is now
+ * overridable for the one case that legitimately needs more than one lane, a hand-off,
+ * where `powerOn` names the worlds it found running.
  *
  * Always records where the world was left, **including on the failure path**: a
  * failed summary that doesn't say whether the server came back is the least useful
@@ -865,6 +872,8 @@ async function withPowerOperation<T>(
     action: ControlAction;
     title: string;
     startedBy?: string | null;
+    /** Omit for the kind's default (`power` + this world's files). */
+    resources?: OperationResource[];
   },
   fn: (op: OpHandle) => Promise<OpSuccess<T>>
 ): Promise<T> {
@@ -874,7 +883,7 @@ async function withPowerOperation<T>(
       game: spec.game,
       action: spec.action,
       title: spec.title,
-      resources: POWER_RESOURCES,
+      resources: spec.resources,
       startedBy: spec.startedBy ? { name: spec.startedBy } : null,
     },
     async (op) => {
@@ -1012,9 +1021,23 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
       verdict: "warn",
       game,
     });
+  } else if (exitCode !== 0) {
+    // Only 137 used to be special-cased, so every other non-zero code fell into the
+    // `else` and was reported with the words "exited cleanly". Measured on production
+    // 2026-09-29: a Minecraft stop that ran 60.5 s and exited **255** recorded
+    // `Shutdown: exited cleanly (code 255)` with no verdict and summarised as a plain
+    // "Stopped Minecraft"; the only warning anywhere came from the save having failed.
+    // For contrast, in the same session every healthy stop really was 0 — MC 0.7 s ×4,
+    // 7DTD 31.8-33.7 s, PZ 12.5-20.3 s. Whether the world was written out is the one
+    // fact a player's save depends on, so a code we cannot vouch for must not be dressed
+    // up as one we can. `null` means `docker inspect` gave us nothing, which is also not
+    // evidence of a clean exit.
+    const code = exitCode ?? "unknown";
+    op.settle(`Stopped ${name} — exited with code ${code}`);
+    op.fact({ label: "Shutdown", value: `exited with code ${code}`, verdict: "warn", game });
   } else {
     op.settle(`Stopped ${name}`);
-    op.fact({ label: "Shutdown", value: `exited cleanly (code ${exitCode ?? "?"})`, game });
+    op.fact({ label: "Shutdown", value: `exited cleanly (code ${exitCode})`, game });
   }
   return true;
 }
@@ -1062,10 +1085,72 @@ async function narratedStart(op: OpHandle, game: GameId): Promise<void> {
  * Power on `game`. Because the host cannot run more than one world at a time,
  * this first gracefully saves + stops any *other* game that is running.
  * Returns the sequence of steps performed (for the UI's live progress display).
+ *
+ * ## The already-running cases are answered BEFORE admission, on purpose
+ *
+ * This is the mirror of `powerOff`'s guard, and it is what that guard's own comment
+ * said it always should have been. Admission is what marks every in-flight file
+ * operation `preempted`, so an operation that is going to touch nothing must hold
+ * nothing. Measured on production 2026-09-29: a `start zomboid` against a running,
+ * answering Project Zomboid returned `{changed:false, steps:[]}`, concluded `nothing`,
+ * wrote no Activity row, and `docker events` across the whole window is empty — yet it
+ * was admitted holding `power` plus all three file lanes, marked a live 7 Days to Die
+ * backup `preempted`, and 26 s later that backup deleted its own finished 304 MB
+ * archive on the grounds that it "was taken across a save-and-shutdown boundary".
+ * There was no boundary. The control case proves the mechanism: a *no-op stop* eleven
+ * seconds earlier, which already answered before admission with `resources: []`, left
+ * `preempted` unset.
  */
 export async function powerOn(game: GameId, startedBy?: string | null): Promise<HandoffStep[]> {
-  // Probed before admission ONLY so the operation can name itself accurately in the
-  // ledger; every authoritative check is repeated inside, under the lock.
+  // Two cases, and they are not the same claim. If the game ANSWERS, "it just isn't
+  // responding yet. Use Restart" is false twice over and pinned a red FAILED card to
+  // every page for six hours recommending a pointless restart of a healthy server
+  // (observed on production against a PZ reporting 0/32 players over RCON); that is a
+  // no-op, not a failure. If the container is up and the game is silent, the original
+  // sentence is exactly right and stays. Both branches hold no resources and return no
+  // steps, so the route's `changed = steps.length > 0` keeps working unchanged.
+  if ((await containerState(RUNTIME[game].container)) === "running") {
+    const answering = await DRIVERS[game]
+      .status()
+      .then((s) => s.status === "online")
+      .catch(() => false);
+    return runOperation(
+      {
+        kind: "power",
+        game,
+        action: "start",
+        title: `Starting ${GAMES[game].name}`,
+        // Deliberately empty, in both branches: nothing is going to be touched, so
+        // nothing may be held and nothing may be pre-empted. The refusal below is the
+        // case that was still doing damage after `powerOff` was fixed — a refusal that
+        // changes nothing was being admitted with `holdsPower: true`, pre-empting live
+        // backups and then keeping a `failed` record for six hours.
+        resources: [],
+        startedBy: startedBy ? { name: startedBy } : null,
+      },
+      async (op) => {
+        op.step(`Checking ${GAMES[game].name}`, { game });
+        if (answering) {
+          op.settle(`${GAMES[game].name} was already running and answering`, { kind: "noop" });
+          op.fact({ label: "Power", value: "running and answering", game });
+          return { value: [] as HandoffStep[] };
+        }
+        op.reject(`${GAMES[game].name} is already running but not answering`);
+        op.fact({ label: "Power", value: "running, not answering", verdict: "warn", game });
+        throw new Error(
+          `${GAMES[game].name} is already running — it just isn't responding yet. ` +
+            `Use Restart if it stays that way.`
+        );
+      }
+    );
+  }
+
+  // Probed before admission so the operation can name itself accurately in the ledger
+  // AND so it can declare exactly the file lanes it may write. Admission is conflict-
+  // checked on `power`, which every world-starting path in this app claims, so between
+  // this probe and admission no app path can change which worlds are up; the only
+  // remaining case is an out-of-band `docker start`, and the loop below refuses that by
+  // name rather than quietly stopping a world it never claimed.
   const runningOthers: GameId[] = [];
   for (const other of otherGames(game)) {
     if ((await containerState(RUNTIME[other].container)) === "running") runningOthers.push(other);
@@ -1077,40 +1162,35 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
     : `Starting ${GAMES[game].name}`;
 
   return withPowerOperation(
-    { kind: "power", game, action: "start", title, startedBy },
+    {
+      kind: "power",
+      game,
+      action: "start",
+      title,
+      startedBy,
+      resources: [
+        "power",
+        `files:${game}`,
+        ...runningOthers.map((g) => `files:${g}` as OperationResource),
+      ],
+    },
     async (op) => {
       const steps: HandoffStep[] = [];
 
-      // Refuse rather than silently succeed. `docker start` on a running container
-      // is a no-op, so a wedged server used to report "powering on" and then do
-      // nothing at all — which reads as the dashboard being broken. Say what is true
-      // and name the action that would help.
-      //
-      // Two cases, and they are not the same claim. If the game ANSWERS, "it just isn't
-      // responding yet. Use Restart" is false twice over and pinned a red FAILED card to
-      // every page for six hours recommending a pointless restart of a healthy server
-      // (observed on production against a PZ reporting 0/32 players over RCON); that is a
-      // no-op, not a failure. If the container is up and the game is silent, the original
-      // sentence is exactly right and stays.
-      if ((await containerState(RUNTIME[game].container)) === "running") {
-        const answering = await DRIVERS[game]
-          .status()
-          .then((s) => s.status === "online")
-          .catch(() => false);
-        if (answering) {
-          op.step(`Checking ${GAMES[game].name}`, { game });
-          op.settle(`${GAMES[game].name} was already running and answering`, { kind: "noop" });
-          op.fact({ label: "Power", value: "running and answering", game });
-          return { value: steps };
-        }
-        throw new Error(
-          `${GAMES[game].name} is already running — it just isn't responding yet. ` +
-            `Use Restart if it stays that way.`
-        );
-      }
-
       for (const other of otherGames(game)) {
         if ((await containerState(RUNTIME[other].container)) !== "running") continue;
+        if (!runningOthers.includes(other)) {
+          // A world came up between the probe and admission, so this operation never
+          // claimed its file lane and must not write to it. Only an out-of-band
+          // `docker start` can produce this — and it is what produced the 2026-09-26
+          // two-worlds-at-once overlap. First code path in the app that detects and
+          // reports co-residency instead of silently working around it.
+          throw new Error(
+            `${GAMES[other].name} started while this operation was being admitted, so ` +
+              `${GAMES[game].name} was not started and nothing was stopped. ` +
+              `Check which worlds are running and try again.`
+          );
+        }
         steps.push({ step: "save", game: other });
         steps.push({ step: "stop", game: other });
         await narratedStop(op, other);
