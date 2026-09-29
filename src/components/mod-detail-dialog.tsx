@@ -264,9 +264,15 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
               )}
             </div>
 
-            {/* Body */}
+            {/* Body.
+                `prose` here is the hand-rolled block in `globals.css`, NOT
+                @tailwindcss/typography. The plugin was in package.json but Tailwind v4
+                only loads a plugin from an `@plugin` line in the CSS, and there is
+                none (nor a tailwind.config), so the `prose-sm dark:prose-invert`
+                variants that used to be on this element emitted no rules at all — the
+                one thing that made the dependency look used. Both are gone with it. */}
             {detail.body && (
-              <div className="prose prose-sm dark:prose-invert max-w-none border-t border-border/50 pt-4">
+              <div className="prose max-w-none border-t border-border/50 pt-4">
                 {detail.body.trim().startsWith("<") ? (
                   parse(detail.body, {
                     replace: (domNode: any) => {

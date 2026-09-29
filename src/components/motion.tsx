@@ -123,49 +123,9 @@ export function AnimatedNumber({
   );
 }
 
-/** Card wrapper with a subtle pointer-follow tilt + lift. */
-export function TiltCard({
-  children,
-  className,
-  intensity = 6,
-  style,
-}: {
-  children: ReactNode;
-  className?: string;
-  intensity?: number;
-  style?: React.CSSProperties;
-}) {
-  const reduced = usePrefersReducedMotion();
-  const ref = useRef<HTMLDivElement>(null);
-  const px = useMotionValue(0.5);
-  const py = useMotionValue(0.5);
-  const rx = useSpring(useTransform(py, [0, 1], [intensity, -intensity]), { stiffness: 150, damping: 18 });
-  const ry = useSpring(useTransform(px, [0, 1], [-intensity, intensity]), { stiffness: 150, damping: 18 });
-
-  function onMove(e: React.MouseEvent) {
-    if (reduced || !ref.current) return;
-    const r = ref.current.getBoundingClientRect();
-    px.set((e.clientX - r.left) / r.width);
-    py.set((e.clientY - r.top) / r.height);
-  }
-  function onLeave() {
-    px.set(0.5);
-    py.set(0.5);
-  }
-
-  return (
-    <motion.div
-      ref={ref}
-      onMouseMove={onMove}
-      onMouseLeave={onLeave}
-      style={{ rotateX: reduced ? 0 : rx, rotateY: reduced ? 0 : ry, transformPerspective: 900, ...style }}
-      whileHover={reduced ? undefined : { y: -4 }}
-      transition={{ type: "spring", stiffness: 300, damping: 25 }}
-      className={cn("will-change-transform", className)}
-    >
-      {children}
-    </motion.div>
-  );
-}
+// `TiltCard` — a pointer-follow 3D tilt + lift wrapper — used to live here and was
+// never mounted. It respected `usePrefersReducedMotion`, so it was not deleted for
+// being hostile; it was deleted because nothing in the app tilts, and a ready-made
+// tilt sitting in the shared motion module is a standing suggestion to start.
 
 export { motion };

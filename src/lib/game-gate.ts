@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
 import { auth } from "@/lib/auth";
 import { canAccessGame } from "@/lib/permissions";
-import { isGameId, type GameId } from "@/lib/games";
+import type { GameId } from "@/lib/games";
 
 /**
  * Session + per-world gate for API routes. Every route that touches one game's
@@ -46,10 +46,9 @@ export function denyGame(session: Session | null, game: GameId): NextResponse | 
   return null;
 }
 
-/** Same as gameGate, for routes that take the world as a request parameter. */
-export async function gameGateFor(game: unknown): Promise<GameGate> {
-  if (!isGameId(typeof game === "string" ? game : null)) {
-    return { ok: false, response: NextResponse.json({ error: "Unknown game" }, { status: 400 }) };
-  }
-  return gameGate(game as GameId);
-}
+// `gameGateFor(game: unknown)` used to live here — gameGate plus an `isGameId`
+// check, for routes that take the world as a request parameter. It never had a
+// caller: `/api/games/{control,stats,memory}` each call `isGameId` themselves and
+// then pass the narrowed `GameId` to `denyGame`, which is what lets the compiler
+// check the rest of the handler. An untaken shortcut that launders `unknown` into a
+// `GameId` is worth more gone than kept.

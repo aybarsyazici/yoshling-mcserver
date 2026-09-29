@@ -108,22 +108,8 @@ export function SectionHeading({
   );
 }
 
-/** Small labelled stat used in headers/consoles. */
-export function MiniStat({
-  label,
-  value,
-  tint,
-}: {
-  label: string;
-  value: ReactNode;
-  tint?: string;
-}) {
-  return (
-    <div className="rounded-lg bg-card/60 px-3 py-2 ring-1 ring-foreground/10 backdrop-blur">
-      <div className="eyebrow text-muted-foreground">{label}</div>
-      <div className="mt-0.5 font-mono text-sm font-semibold" style={{ color: tint }}>
-        {value}
-      </div>
-    </div>
-  );
-}
+// `MiniStat` used to be here, documented as "used in headers/consoles" and used in
+// neither — every header and console builds its own stat markup inline. Deleted
+// rather than adopted: a shared primitive nothing reaches for is not yet a
+// primitive, and the comment claiming otherwise is the kind of thing that makes a
+// reader think the consolidation already happened.

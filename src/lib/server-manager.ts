@@ -1,42 +1,26 @@
-// Compatibility shim.
+// Where Minecraft's mods live.
 //
-// The server manager used to speak only Minecraft. It now delegates to the
-// generalized game-manager (which drives both Minecraft and 7 Days to Die).
-// These wrappers preserve the original Minecraft-only API so existing callers
-// (mod-manager, modpack install, legacy routes) keep working unchanged.
+// This file used to be a compatibility shim: the server manager spoke only
+// Minecraft, and when `game-manager` generalised it, a set of thin wrappers
+// (`startServer`, `stopServer`, `restartServer`, `getServerProperties`,
+// `getServerStatus`, plus a local `ServerStatus` type that duplicated the one in
+// `games.ts` minus `"installing"`) stayed behind so the legacy
+// `/api/server/{control,status,stats}` routes kept working.
+//
+// Those three routes are gone, and with them the wrappers' only callers. Deleting
+// them matters rather than being tidiness: `/api/server/control` was a *second*
+// power path that had drifted from `/api/games/control` — it set `changed = true`
+// unconditionally on `start`, so a Power on of an already-running world wrote a
+// permanent `server_start` Activity row for something that did not happen, which
+// is exactly the defect `/api/games/control` fixed ("a log of things that did not
+// happen is worse than no log"). A dormant duplicate of a power path is a standing
+// invitation to re-diverge, so the whole shim went with it.
+//
+// `getModsDir` is the one live export (3 importers, one of them a dynamic
+// `import()` in `install-modpack`), so the module stays.
 
 import path from "path";
-import {
-  getGameStatus,
-  powerOn,
-  powerOff,
-  restartGame,
-  getMinecraftProperties,
-  RUNTIME,
-} from "@/lib/game-manager";
-
-export type ServerStatus = "online" | "offline" | "starting" | "stopping";
-
-export async function getServerStatus(): Promise<{ status: ServerStatus; uptime?: string }> {
-  const s = await getGameStatus("minecraft");
-  return { status: (s.status === "installing" ? "starting" : s.status) as ServerStatus, uptime: s.uptime };
-}
-
-export async function startServer(): Promise<void> {
-  await powerOn("minecraft");
-}
-
-export async function stopServer(): Promise<void> {
-  await powerOff("minecraft");
-}
-
-export async function restartServer(): Promise<void> {
-  await restartGame("minecraft");
-}
-
-export async function getServerProperties(): Promise<Record<string, string>> {
-  return getMinecraftProperties();
-}
+import { RUNTIME } from "@/lib/game-manager";
 
 export function getModsDir(): string {
   return path.join(RUNTIME.minecraft.dir, "mods");

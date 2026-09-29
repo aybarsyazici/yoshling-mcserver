@@ -116,20 +116,14 @@ export function telnetSession(commands: string[], opts: TelnetOpts = {}): Promis
   });
 }
 
-/** Backwards-compatible single-command helper. */
-export function telnetCommand(command: string, opts: TelnetOpts = {}): Promise<string> {
-  return telnetSession([command], opts);
-}
-
-/** True if the telnet console accepts a connection & responds (server is up). */
-export async function telnetReachable(): Promise<boolean> {
-  try {
-    const out = await telnetSession(["version"], { timeoutMs: 2500, idleMs: 250 });
-    return out.length > 0;
-  } catch {
-    return false;
-  }
-}
+// Four wrappers used to sit here — `telnetCommand`, `telnetReachable`,
+// `getSdtdPlayers` and `getSdtdTime`, the last two labelled "kept for
+// compatibility" — and none of them had a caller. Every 7DTD read now goes
+// through `getSdtdStatus`, which is the point: it answers listplayers + gettime +
+// version in ONE session, and each of those wrappers opened its own. Keeping a
+// one-command convenience next to a deliberately batched probe is how a future
+// caller re-introduces the connection-per-question pattern this replaced.
+// `telnetSession` is the primitive; use it directly if you need something else.
 
 export interface SdtdPlayers {
   online: number;
@@ -176,16 +170,6 @@ export async function getSdtdStatus(maxPlayers = 8): Promise<SdtdStatus> {
   } catch {
     return { reachable: false, players: { online: 0, max: maxPlayers, players: [] }, time: null, version: null };
   }
-}
-
-/** Get just the player list (kept for compatibility). */
-export async function getSdtdPlayers(maxPlayers = 8): Promise<SdtdPlayers> {
-  return (await getSdtdStatus(maxPlayers)).players;
-}
-
-/** Get the in-game day/time (kept for compatibility). */
-export async function getSdtdTime(): Promise<string | null> {
-  return (await getSdtdStatus()).time;
 }
 
 /** Ask the server to save the world (used before a graceful shutdown). */
