@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { getProjectVersions, getProject } from "@/lib/modrinth";
+
+// Creating a modpack needs a capability, not just world access — see the note in
+// `src/app/api/modpacks/route.ts`.
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -11,6 +15,10 @@ export async function POST(request: NextRequest) {
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
+
+  if (!hasPermission(session.user.role, "mods.install")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { modrinthId, name } = await request.json();
 

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { getProjectVersions } from "@/lib/modrinth";
+
+// Mutating handlers need a capability, not just world access — see the note in
+// `src/app/api/modpacks/route.ts`.
 
 export async function POST(
   request: NextRequest,
@@ -14,6 +18,10 @@ export async function POST(
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
+
+  if (!hasPermission(session.user.role, "mods.install")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { id } = await params;
   const { modrinthId, slug, name, versionId } = await request.json();
@@ -91,6 +99,10 @@ export async function DELETE(request: NextRequest) {
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
+
+  if (!hasPermission(session.user.role, "mods.remove")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { searchParams } = new URL(request.url);
   const modId = searchParams.get("modId");

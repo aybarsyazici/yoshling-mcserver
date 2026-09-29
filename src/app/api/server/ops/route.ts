@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
+import { resolveEntryUuids } from "@/lib/mc-identity";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
@@ -26,8 +27,16 @@ interface OpEntry {
  *
  * So normalise to exactly the four fields Minecraft reads and reject the rest.
  * `level` is 1-4 (Minecraft's permission levels) and `name` must look like a Java
- * username — the game matches ops by those, so anything else is a typo that would
- * sit in the file silently granting nobody anything.
+ * username.
+ *
+ * This comment used to end "the game matches ops by those", meaning by name and
+ * level. **It doesn't — it matches by UUID**, and that mistake is most of why the
+ * blank-UUID bug survived: the file looked correct by the standard written here.
+ * Measured on the box: an entry with `uuid: ""` was accepted by this route, and
+ * after a restart the game had rewritten `ops.json` *without* it, while
+ * `deop <name>` answered "Nothing changed. The player is not an operator". A
+ * missing UUID is therefore filled in before the write (see the PUT), not merely
+ * tolerated.
  */
 function parseOps(body: unknown): { ops: OpEntry[] } | { error: string } {
   if (!Array.isArray(body)) return { error: "Expected an array of operators" };
@@ -104,8 +113,21 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
+  // Operator is granted by UUID. An entry with a blank one is discarded by the game
+  // — verified: this route reported `count:3`, the game rewrote the file without the
+  // new entry on its next start, and `deop` said the player was not an operator. So
+  // resolve every missing UUID, and refuse the whole request rather than write a
+  // file that hands out operator to nobody while reporting success.
+  //
+  // Entries that already carry a valid UUID are untouched, so the two real operators
+  // keep the ids Minecraft itself wrote for them.
+  const withIds = await resolveEntryUuids(parsed.ops);
+  if (!withIds.ok) {
+    return NextResponse.json({ error: withIds.error }, { status: withIds.status });
+  }
+
   try {
-    await writeFile(OPS_FILE, JSON.stringify(parsed.ops, null, 2), "utf-8");
+    await writeFile(OPS_FILE, JSON.stringify(withIds.entries, null, 2), "utf-8");
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
@@ -118,7 +140,7 @@ export async function PUT(request: NextRequest) {
         details: JSON.stringify({
           game: "minecraft",
           file: "ops.json",
-          count: parsed.ops.length,
+          count: withIds.entries.length,
         }),
       },
     });
@@ -129,5 +151,5 @@ export async function PUT(request: NextRequest) {
     console.error("[mc-ops] activity log failed", e);
   }
 
-  return NextResponse.json({ success: true, count: parsed.ops.length });
+  return NextResponse.json({ success: true, count: withIds.entries.length });
 }

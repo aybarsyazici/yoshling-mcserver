@@ -1,7 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
+
+/**
+ * Every mutating modpack handler needs a capability, not just world access.
+ *
+ * Six of them — `POST /api/modpacks`, `PUT`+`DELETE /api/modpacks/[id]`,
+ * `POST`+`DELETE /api/modpacks/[id]/mods` and `POST /api/modpacks/import` — called
+ * `auth()` + `denyGame` and never read `session.user.role`, while every
+ * `/api/mods/*` sibling checks `mods.install` / `mods.remove`. So a MEMBER, who is
+ * meant to be read-only, could delete the three legacy packs that still need
+ * re-importing. Nobody hit it only because all five production accounts are ADMIN.
+ *
+ * GETs stay open: browsing modpacks is gated by world access by design.
+ *
+ * (The check is repeated inline in each handler rather than factored out — a
+ * route module may only export HTTP method handlers, so a shared helper would have
+ * to live in another file, and these are one line each.)
+ */
 
 export async function GET() {
   const session = await auth();
@@ -26,6 +44,10 @@ export async function POST(request: NextRequest) {
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
+
+  if (!hasPermission(session.user.role, "mods.install")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { name, description, targetMcVersion, targetLoader } = await request.json();
 
