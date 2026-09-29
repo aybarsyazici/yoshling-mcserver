@@ -17,9 +17,12 @@ import {
  *
  * Duration lives in the gap and never in the text line, so text is never crushed
  * and two instant steps stack flush — which correctly reads as "these happened at
- * once". It is log-scaled because the steps on this box span 433 ms (a Project
- * Zomboid save) to twenty minutes (a SteamCMD download), and a linear scale renders
- * the first thirty of them as a single line.
+ * once". It is log-scaled because the steps on this box span ~100–150 ms (a Project
+ * Zomboid save — measured 2026-09-29, ten consecutive `SaveAll`: 94–156 ms; this
+ * said a flat "433 ms" from a single earlier reading) to twenty minutes (a SteamCMD
+ * download), and a linear scale renders the first thirty of them as a single line.
+ * The scale is unaffected by the correction: 100 ms → 20 min is a *wider* span than
+ * 433 ms → 20 min, and `gapPx` clamps both ends anyway.
  *
  * What is deliberately absent: there is no bar, no spinner, no shimmer, **no green
  * and no checkmark**. A bar animates identically whether the server is alive,
@@ -100,6 +103,7 @@ export function OperationTape({
                 beatTick={beatTick}
                 progress={op.progress}
                 synthetic={op.synthetic === true}
+                redacted={op.redacted === true}
               />
             </li>
           );
@@ -125,6 +129,7 @@ function StepRow({
   beatTick,
   progress,
   synthetic,
+  redacted,
 }: {
   step: OpStepView;
   live: boolean;
@@ -137,6 +142,16 @@ function StepRow({
   progress: OperationView["progress"];
   /** A projected boot: no heartbeat of its own, so "quiet" means something else. */
   synthetic: boolean;
+  /**
+   * Viewer lacks this world. `redact()` blanks every step's `label`, `detail` and
+   * `count` but deliberately leaves `progress` alone — a redacted boot needs its
+   * percentage, because that percentage is the only thing its pip beats on (see
+   * `beatSignal`'s synthetic branch, which excludes `heartbeatAt`). So the
+   * *count* rendered below has to be suppressed here instead: "42 of 166 mods"
+   * is exactly the identifying number `redact()` strips from `step.count`, and
+   * reading it off `progress` would route around that.
+   */
+  redacted: boolean;
 }) {
   const tint = step.game ? GAMES[step.game].tint : "var(--primary)";
   const durationMs = live ? Math.max(0, now - step.at) : Math.max(0, (step.endedAt ?? step.at) - step.at);
@@ -167,10 +182,29 @@ function StepRow({
   const severity =
     step.kind === "failed" ? "failed" : step.kind === "noop" ? "no change" : undefined;
 
+  /**
+   * The live step's concrete line, and — new — the live `count`.
+   *
+   * `op.progress({kind:"count"})` had **two producers and no renderer**: both are in
+   * `install-modpack` (once per mod inside the download loop, once at the end) and the
+   * only two places that read `progress` tested `kind === "fraction"`. So a 166-mod apply
+   * observed a real, one-at-a-time count and threw every value away, leaving the tape
+   * reading "Downloading mods" unchanged for ten minutes — the silence this whole feature
+   * exists to remove, for the longest operation in the app.
+   *
+   * These are **recorded** counts, never predicted totals (the loop genuinely handles
+   * one mod at a time), so rendering them does not break the honesty contract: it is
+   * still a past-tense number, just one that is allowed to be read before the end.
+   * It renders as TEXT, next to the mod name, and never as a bar.
+   */
+  const counted =
+    live && !redacted && progress.kind === "count"
+      ? `${progress.done} of ${progress.total} ${progress.noun}`
+      : undefined;
   const detail =
-    live && progress.kind === "fraction" && !step.detail
-      ? `${progress.percent}%`
-      : step.detail;
+    counted !== undefined
+      ? [counted, step.detail].filter(Boolean).join(" — ")
+      : step.detail ?? (live && progress.kind === "fraction" ? `${progress.percent}%` : undefined);
 
   return (
     <div className="relative">

@@ -938,7 +938,12 @@ function summarize(entry: Entry, outcome: Outcome): string {
             warnText || "something else in the run did not go cleanly"
           }.`;
         }
-        return `Installed ${count.done} of ${count.total} ${count.noun}; ${missing} failed. Open the report for which ones.`;
+        // "Open the report for which ones" pointed at nothing for the runs that need it:
+        // the report is built in the browser from `install-modpack`'s response body, and
+        // a 166-mod apply routinely outlives the ~100s origin timeout, after which
+        // `modpacks.tsx`'s catch substitutes `{installed: 0, total: 0}`. The names are a
+        // recorded `Failed` fact now, so the record itself is the report.
+        return `Installed ${count.done} of ${count.total} ${count.noun}; ${missing} failed. Expand this record to see which ones.`;
       }
       return `Installed ${count.done} of ${count.total} ${count.noun}. Restart ${name} to load them.`;
     }

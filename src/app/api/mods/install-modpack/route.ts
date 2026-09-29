@@ -5,12 +5,42 @@ import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { installMod, removeMod } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
+import { mkdir, rm, stat } from "fs/promises";
+import path from "path";
+import { RUNTIME } from "@/lib/game-manager";
+import { formatBytes } from "@/lib/format";
 import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 
-const execAsync = promisify(exec);
+/**
+ * `execFile` with an argv array, never `exec` with a template string.
+ *
+ * This route used `exec` for its tar, which is the same shape as the Minecraft backup
+ * shell-injection fixed on 2026-09-28 — the sibling `/api/server/backups` deliberately
+ * moved to `execFile` and says so. Nothing user-controlled reaches this particular
+ * command line (the only interpolations are a generated timestamp and a container path),
+ * so this was not itself exploitable; it was the wrong pattern sitting one edit away from
+ * being exploitable, in the route with the largest blast radius in the app.
+ */
+const execFileAsync = promisify(execFile);
+
+/**
+ * Same directory `/api/server/backups` lists and restores from, so the archive written
+ * here really is offerable as a restore point. (Still two definitions of the constant —
+ * the shared `src/lib/backups.ts` extraction is deliberately out of scope for this pass.)
+ */
+const BACKUP_DIR = "/app/data/backups";
+
+/**
+ * Was 60_000 here while the sibling `/api/server/backups` had already raised the very
+ * same `tar -czf … -C MC_DIR world` to 300_000, with the comment "was 60s, which is a
+ * coin-toss for a 170 MB world on a busy box". So the one backup taken immediately
+ * before every jar on the server is deleted had the short timeout, and the one you take
+ * by hand had the long one.
+ */
+const TAR_TIMEOUT_MS = 300_000;
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -122,33 +152,72 @@ async function applyModpack(
     warnings: string[];
   }
 ): Promise<OpSuccess<NextResponse>> {
-  // Auto-backup the world before touching mods. A failure here is reported rather
-  // than swallowed: this backup is the entire rollback story for a mod swap that
-  // corrupts the world, so "we took one" has to be true and not assumed. It is not
-  // fatal though -- a server with no world/ folder yet has nothing to back up.
+  // Auto-backup the world before touching mods.
+  //
+  // Four things were wrong with this block, and they compounded into the worst
+  // possible outcome. It used `exec` with a template string; it timed out at 60s while
+  // the identical command in `/api/server/backups` had been raised to 300s; it did NOT
+  // delete the partial archive on failure; and it was **non-fatal**. So a tar that
+  // timed out at 60 seconds left a truncated `auto-before-modpack-*.tar.gz` sitting in
+  // `/app/data/backups` — which `/api/server/backups` GET lists, which passes
+  // `safeBackupName`, and which is therefore offered in the UI as a restore point — and
+  // then this route went on to delete every installed jar anyway. A backup that cannot
+  // be restored, presented as the thing you would restore from, in front of the most
+  // destructive operation in the app. That is this codebase's documented defect class
+  // ("reports success after doing nothing or the wrong thing") at its sharpest.
+  //
+  // So: probe for the world FIRST and distinguish the two failures. No world on disk is
+  // legitimate (a fresh install) and stays non-fatal. A tar that was asked to run and
+  // did not is fatal, the partial is deleted, and nothing is deleted from the mods
+  // directory. `/api/7dtd/reset` already does exactly this and says why.
   op.step("Backing the world up first");
-  try {
-    const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-    const BACKUP_DIR = "/app/data/backups";
-    await execAsync(`mkdir -p ${BACKUP_DIR}`);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    await execAsync(
-      `tar -czf ${BACKUP_DIR}/auto-before-modpack-${timestamp}.tar.gz -C ${MC_DIR} world`,
-      { timeout: 60000 }
-    );
-    op.settle("Backed the world up");
-  } catch (e: any) {
-    warnings.push(
-      `World backup failed (${e.message || "unknown error"}) — this install has no rollback point.`
-    );
-    // A `noop`, not a silent warning string buried in the response: without a
-    // rollback point this install is a one-way door, and that belongs in the outcome.
-    op.settle(`Couldn't back the world up — ${e.message || "unknown error"}`, { kind: "noop" });
-    op.fact({
-      label: "Rollback point",
-      value: "no world backup was written, so this install cannot be rolled back",
-      verdict: "warn",
-    });
+  const MC_DIR = RUNTIME.minecraft.dir;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const archive = path.join(BACKUP_DIR, `auto-before-modpack-${stamp}.tar.gz`);
+  const hasWorld = await stat(path.join(MC_DIR, "world")).then(() => true).catch(() => false);
+
+  if (!hasWorld) {
+    // Settled `done`, NOT `noop`, and that distinction is load-bearing:
+    // `concludeOperation` turns any `noop` step into a `partial` outcome, so marking
+    // this one would have painted a flawless 166-mod apply amber on every server that
+    // has no world yet — inventing trouble, which is the thing this pass is cleaning up.
+    // Nothing went wrong here; there was simply nothing to do. `/api/7dtd/reset` settles
+    // its equivalent branch ("No existing save to back up") exactly this way.
+    //
+    // The fact still records it, so the outcome is `ok` rather than `unverified` and a
+    // reader can tell "no backup was needed" from "a backup was taken".
+    op.settle("Nothing to back up — there is no world on disk yet");
+    op.fact({ label: "Rollback point", value: "no world on disk yet, so none was needed" });
+  } else {
+    try {
+      await mkdir(BACKUP_DIR, { recursive: true });
+      await execFileAsync("tar", ["-czf", archive, "-C", MC_DIR, "world"], {
+        timeout: TAR_TIMEOUT_MS,
+      });
+      // Read the size back off disk, so "we took one" is evidence rather than an
+      // assumption — the same reason `/api/server/backups` does it.
+      const { size } = await stat(archive);
+      op.settle(`Backed the world up — ${formatBytes(size)}`);
+      op.fact({ label: "Rollback point", value: `${path.basename(archive)} (${formatBytes(size)})` });
+    } catch (e) {
+      // Drop the partial FIRST, so nothing can list it as a restore point even if the
+      // response below is never read.
+      await rm(archive, { force: true }).catch(() => {});
+      const why = (e instanceof Error ? e.message : "unknown error").trim();
+      op.reject("The world backup failed — the modpack was not applied");
+      return {
+        value: NextResponse.json(
+          {
+            error:
+              `The pre-install world backup failed, so the modpack was not applied and your ` +
+              `current mods are untouched: ${why}. The partial archive has been deleted. ` +
+              `Applying a modpack removes every installed jar, so it is not run without a ` +
+              `rollback point.`,
+          },
+          { status: 500 }
+        ),
+      };
+    }
   }
 
   // Refuse before deleting anything if this pack cannot actually be installed.
@@ -307,11 +376,30 @@ async function applyModpack(
   return {
     facts: [
       { label: "Installed", value: `${installed} of ${total}`, verdict: complete ? undefined : "warn" },
+      // NAMES, not just a count. This fact used to read "3 mods reported a problem",
+      // and the summary `concludeOperation` builds from it said "Open the report for
+      // which ones" — but "the report" is assembled in the browser from this route's
+      // HTTP response body, and a 166-mod apply routinely outlives the ~100s origin
+      // timeout, at which point `modpacks.tsx`'s own catch replaces it with
+      // `{installed: 0, total: 0}`. So the one sentence directing the user to the
+      // failure list pointed, for the long runs where it mattered most, at a list that
+      // no longer existed. A fact survives that: it is recorded server-side and rendered
+      // from the registry, and `redact()` strips it for viewers without the world.
+      //
+      // Sliced at 5 because the facts row is a single wrapping line; `split(":")[0]`
+      // takes the mod name off the "Name: reason" strings every `errors.push` here
+      // builds.
       ...(errors.length
         ? [
             {
-              label: "Errors",
-              value: `${errors.length} mod${errors.length === 1 ? "" : "s"} reported a problem`,
+              label: "Failed",
+              value:
+                `${errors.length} mod${errors.length === 1 ? "" : "s"} — ` +
+                errors
+                  .slice(0, 5)
+                  .map((e) => e.split(":")[0])
+                  .join(", ") +
+                (errors.length > 5 ? `, +${errors.length - 5} more` : ""),
               verdict: "warn" as const,
             },
           ]
