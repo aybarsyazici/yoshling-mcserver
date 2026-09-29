@@ -7,6 +7,9 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
+import { fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
+import { formatElapsed, liveStep } from "@/lib/operations-types";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { RamBudget } from "@/components/ram-budget";
 import { StatusPill } from "@/components/ui-bits";
@@ -21,8 +24,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-
-type Phase = { key: string; label: string };
 
 // How the world cards sit, and when the power bus above them is accurate: the
 // bus only shows while the cards are on one row, so its branches line up with
@@ -44,15 +45,28 @@ export function MissionControl({
   const [localBusy, setLocalBusy] = useState(false);
   const { games, activeGame, busy: serverBusy, memoryGb, hostGb, loading, refresh } =
     useGames(localBusy ? 1500 : 5000);
-  const reduced = usePrefersReducedMotion();
+  /**
+   * The live operation, read from the registry rather than kept here.
+   *
+   * This used to be local `phase` React state driven by `sleep()` calls — so the
+   * caption was a *guess* at what the server was doing, and a page reload wiped it
+   * and fell back to "all stopped". The landing page, with the Power Core on it, was
+   * the one screen in the app with no refresh-surviving progress at all.
+   */
+  const { operations, elapsedMs } = useOperations();
   const worlds = GAME_LIST.filter((g) => access.includes(g.id));
   const layout = LAYOUT[worlds.length] ?? LAYOUT[3];
 
   const [pending, setPending] = useState<GameId | null>(null); // game being powered on/awaiting confirm
   const [confirmFor, setConfirmFor] = useState<GameId | null>(null);
-  const [phase, setPhase] = useState<Phase | null>(null);
+  const [confirmPreempt, setConfirmPreempt] = useState<GameId | null>(null);
 
-  // Locked out if this tab is working OR the server reports any op in flight.
+  // The operation to caption the core with: whatever holds the power slot, else the
+  // world that is booting.
+  const headline =
+    operations.find((o) => o.holdsPower) ?? operations.find((o) => o.synthetic);
+
+  // Locked out if this tab is working OR the server reports a power op in flight.
   const busy = localBusy || serverBusy !== null;
 
   const coreState: CoreState = busy && pending
@@ -73,6 +87,11 @@ export function MissionControl({
 
   function onPowerClick(game: GameId, isOnline: boolean) {
     if (busy) return;
+    const blocker = powerBlocker(operations, game);
+    // A file operation on this world (a backup, a modpack apply) does not disable the
+    // button — Power off is the recovery path and must never be held hostage — but
+    // cutting it short needs saying out loud first.
+    if (blocker && !blocker.holdsPower) return setConfirmPreempt(game);
     if (isOnline) {
       // Power OFF this game
       void doControl(game, "stop");
@@ -90,28 +109,16 @@ export function MissionControl({
     if (localBusy) return;
     setLocalBusy(true);
     setConfirmFor(null);
+    setConfirmPreempt(null);
     if (action === "start") setPending(game);
 
-    const stopping = runningOthers(game);
-    const stoppingNames = stopping.map((g) => GAMES[g].name).join(" and ");
-
     try {
-      if (action === "start" && stopping.length > 0) {
-        setPhase({ key: "save", label: `Saving ${stoppingNames}…` });
-        await sleep(reduced ? 0 : 700);
-        setPhase({ key: "stop", label: `Powering down ${stoppingNames}…` });
-      } else if (action === "start") {
-        setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
-      } else {
-        setPhase({ key: "save", label: `Saving & stopping ${GAMES[game].name}…` });
-      }
-
       const res = await fetch("/api/games/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.status === 409) {
         toast.error(data.error || "A server operation is already in progress");
@@ -121,24 +128,23 @@ export function MissionControl({
         toast.error(data.error || "Command failed");
         return;
       }
-
-      if (action === "start") {
-        setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
-        toast.success(`${GAMES[game].name} is powering on`, {
-          description: stopping.length > 0 ? `${stoppingNames} was saved and stopped.` : undefined,
-        });
-      } else {
-        toast.success(`${GAMES[game].name} saved and stopped`);
-      }
-
-      await sleep(reduced ? 0 : 900);
+      // No success toast. The strip above says what is happening while it happens,
+      // and the completion toast carries the server's own summary — which is the only
+      // text that cannot claim more than was observed. "Saved and stopped" here fired
+      // before a 300s Project Zomboid stop had even reached the kill.
       await refresh();
     } catch {
-      toast.error("Network error");
+      // A successful Project Zomboid stop takes a fixed 300s and ends in SIGKILL,
+      // which outlasts Cloudflare's ~100s origin read timeout — so the response
+      // routinely never arrives for an operation that worked. Reporting that as a red
+      // "Network error" was the app's most-hit lie.
+      toast.info(
+        `Still working on ${GAMES[game].name}. The connection timed out before it finished, ` +
+          `which is normal for a long stop — watch the strip at the top of the page.`
+      );
     } finally {
       setLocalBusy(false);
       setPending(null);
-      setPhase(null);
     }
   }
 
@@ -181,23 +187,25 @@ export function MissionControl({
       {/* The single power slot, above the worlds that compete for it */}
       <div className="flex flex-col items-center gap-4">
         <PowerCore state={coreState} size={148} />
+        {/* The caption now reports the registry's live step and elapsed time instead
+            of a `sleep()`-driven guess, and there is no indeterminate sweep under it:
+            the bar moved the same way whether the server was alive or gone. The full
+            step history is in the strip at the top of this page. */}
         <AnimatePresence mode="wait">
-          {phase ? (
+          {headline ? (
             <motion.div
-              key={phase.key}
+              key={headline.id}
               className="text-center"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
             >
-              <p className="font-mono text-xs text-foreground">{phase.label}</p>
-              <div className="mx-auto mt-1.5 h-0.5 w-24 overflow-hidden rounded-full bg-muted">
-                <motion.div
-                  className="h-full w-1/3 rounded-full bg-primary"
-                  animate={{ x: ["-100%", "300%"] }}
-                  transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
-                />
-              </div>
+              <p className="font-mono text-xs text-foreground">
+                {liveStep(headline)?.label ?? headline.title}
+              </p>
+              <p className="mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground" aria-hidden>
+                {formatElapsed(elapsedMs(headline))}
+              </p>
             </motion.div>
           ) : (
             <motion.p
@@ -295,6 +303,48 @@ export function MissionControl({
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Cutting a file operation short. Same machinery as the switch dialog: the
+          consequence is stated, and agreeing to it is what "force" means here. */}
+      <Dialog open={confirmPreempt !== null} onOpenChange={(o) => !o && setConfirmPreempt(null)}>
+        <DialogContent>
+          {confirmPreempt &&
+            (() => {
+              const blocker = powerBlocker(operations, confirmPreempt);
+              if (!blocker) return null;
+              const online = games?.[confirmPreempt]?.containerRunning ?? false;
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <PowerGlyph
+                        className="h-4 w-4"
+                        style={{ color: GAMES[confirmPreempt].tint }}
+                      />
+                      {online ? "Power off anyway?" : "Start anyway?"}
+                    </DialogTitle>
+                    <DialogDescription>
+                      <strong>{GAMES[confirmPreempt].name}</strong> is being worked on —{" "}
+                      {fileOperationLabel(blocker, elapsedMs(blocker))}. Going ahead cuts it short.
+                      If it is a backup, the archive will be incomplete and is deleted.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setConfirmPreempt(null)}>
+                      Wait for it
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => doControl(confirmPreempt, online ? "stop" : "start")}
+                    >
+                      {online ? "Power off anyway" : "Start anyway"}
+                    </Button>
+                  </DialogFooter>
+                </>
+              );
+            })()}
         </DialogContent>
       </Dialog>
     </div>
@@ -567,8 +617,4 @@ function Metric({ label, value, tint }: { label: string; value: React.ReactNode;
       </div>
     </div>
   );
-}
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
 }

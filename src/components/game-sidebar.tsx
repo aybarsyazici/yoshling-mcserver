@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { GAMES, GAME_LIST, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
 import { GameMark } from "@/components/glyphs";
 import {
   Gamepad2,
@@ -54,6 +55,13 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { games } = useGames(8000);
+  // Which worlds have something running, so the switcher can point at it. The strip is
+  // collapsed on another world's page and would otherwise say only that *something* is
+  // happening, not where.
+  const { operations } = useOperations();
+  const busyWorlds = new Set(
+    operations.filter((o) => !o.synthetic && o.game).map((o) => o.game as GameId)
+  );
 
   const meta = GAMES[game];
   const nav = navFor(game);
@@ -153,12 +161,21 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
                 >
                   <span className="relative">
                     <GameMark game={g.id} className="h-4 w-4" />
-                    {on && (
+                    {/* Square, not round, and it overrides the online dot: a collapsed
+                        strip on another world's page still has to tell you WHERE the
+                        thing you are waiting on is happening. Same 6px square as the
+                        ledger's liveness pip, so the two read as one signal. */}
+                    {busyWorlds.has(g.id) ? (
+                      <span
+                        className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 ring-2 ring-sidebar"
+                        style={{ background: g.tint, filter: `drop-shadow(0 0 4px ${g.tint})` }}
+                      />
+                    ) : on ? (
                       <span
                         className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ring-2 ring-sidebar"
                         style={{ background: g.tint }}
                       />
-                    )}
+                    ) : null}
                   </span>
                   {!collapsed && <span className="truncate">{g.short}</span>}
                 </Link>

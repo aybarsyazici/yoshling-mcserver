@@ -12,6 +12,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { RefreshCw, DownloadCloud, RotateCcw, CheckCircle2, AlertTriangle } from "lucide-react";
+import { useOperations } from "@/components/operations-provider";
+import { blockedReason, powerBlocker } from "@/lib/operation-ui";
 
 interface UpdateInfo {
   branch: string;
@@ -27,6 +29,11 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
   const [resetInfo, setResetInfo] = useState<{ world: string; gameName: string; nextGameName: string } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
+  // Both of these hold every resource, so they have to refuse while anything else is
+  // running — and say which thing, because a disabled button with no reason is the
+  // same failure in miniature as a silent operation.
+  const { operations, elapsedMs, refresh: refreshOperations } = useOperations();
+  const blocker = powerBlocker(operations, "7dtd");
 
   async function check() {
     setChecking(true);
@@ -53,13 +60,21 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
     setUpdating(true);
     try {
       const res = await fetch("/api/7dtd/update", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        toast.success(data.message || "Update started");
-        setTimeout(check, 8000);
-      } else {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
         toast.error(data.error || "Update failed");
+        return;
       }
+      // No start toast. `toast.success("Update started")` was the *only* feedback that
+      // ever existed for a ~17 GB, ~20-minute download, and it was gone in four
+      // seconds. The strip at the top of the page now carries it, survives a reload,
+      // and keeps carrying it after this request has returned — the synthetic boot
+      // operation reads the download's own percentage out of the container log.
+      //
+      // Nor is the build id re-polled here: it cannot change for twenty minutes, so
+      // `setTimeout(check, 8000)` confidently redisplayed the OLD build and "update
+      // available" for the whole download.
+      await refreshOperations();
     } catch {
       toast.error("Update failed");
     } finally {
@@ -72,11 +87,19 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
     setConfirmReset(false);
     try {
       const res = await fetch("/api/7dtd/reset", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) toast.success(data.message || "World reset");
-      else toast.error(data.error || "Reset failed");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) toast.error(data.error || "Reset failed");
+      // Success is the operation's own completion toast, which names the new save and
+      // whether the server came back up.
+      await refreshOperations();
     } catch {
-      toast.error("Reset failed");
+      // A reset stops the server, wipes the save and starts it again, which outlasts
+      // Cloudflare's ~100s origin read timeout. Reporting that as "Reset failed" would
+      // invite someone to run a destructive operation a second time.
+      toast.info(
+        "Still resetting. The connection timed out before it finished — watch the strip at the " +
+          "top of the page, and don't run it again."
+      );
     } finally {
       setResetting(false);
     }
@@ -85,6 +108,10 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
   return (
     <div className="rounded-2xl bg-card/70 p-6 ring-1 ring-foreground/10 backdrop-blur" style={{ ["--tint" as string]: tint }}>
       <p className="eyebrow mb-4 text-muted-foreground">Server maintenance</p>
+
+      {blocker && (
+        <p className="mb-3 text-xs text-muted-foreground">{blockedReason(blocker, elapsedMs(blocker))}</p>
+      )}
 
       {/* Update */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-background/50 p-4 ring-1 ring-foreground/10">
@@ -118,7 +145,8 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
           <Button
             size="sm"
             onClick={doUpdate}
-            disabled={updating || !info?.updateAvailable}
+            className="disabled:cursor-not-allowed"
+            disabled={updating || !info?.updateAvailable || blocker !== undefined}
             style={info?.updateAvailable ? { background: tint, color: "var(--background)" } : undefined}
           >
             {updating ? "Updating…" : info?.updateAvailable ? "Update now" : info?.installedBuildId ? <><CheckCircle2 className="h-3.5 w-3.5" /> Up to date</> : "Update"}
@@ -138,7 +166,13 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
             {resetInfo ? <> (<span className="font-mono text-foreground">{resetInfo.gameName}</span> → <span className="font-mono" style={{ color: tint }}>{resetInfo.nextGameName}</span>)</> : null}. Everyone starts over.
           </p>
         </div>
-        <Button size="sm" variant="destructive" onClick={() => setConfirmReset(true)} disabled={resetting} className="flex-shrink-0">
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={() => setConfirmReset(true)}
+          disabled={resetting || blocker !== undefined}
+          className="flex-shrink-0 disabled:cursor-not-allowed"
+        >
           {resetting ? "Resetting…" : "Reset world"}
         </Button>
       </div>

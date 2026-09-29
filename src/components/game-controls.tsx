@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 import { GAMES, otherGames, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
+import { fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
 import { StatusPill } from "@/components/ui-bits";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { PowerGlyph } from "@/components/glyphs";
@@ -26,15 +27,28 @@ export function GameControls({ game }: { game: GameId }) {
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
   const { games, busy: serverBusy, can, memoryGb, refresh } = useGames(localBusy ? 1500 : 4000);
+  // The registry, not just the power lock: a four-minute backup of this world also
+  // has to disable these buttons, and the single-slot lock could never say so.
+  const { operations, elapsedMs } = useOperations();
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
   const reduced = usePrefersReducedMotion();
 
   const [confirm, setConfirm] = useState(false);
+  const [confirmPreempt, setConfirmPreempt] = useState<"stop" | "restart" | null>(null);
 
-  // Busy if THIS tab fired a request, OR the server reports any op in flight
-  // (e.g. another admin/tab). Either way, controls lock out.
+  const blocker = powerBlocker(operations, game);
+  /**
+   * A file operation on this world (a backup, a modpack apply). It does NOT disable
+   * the power buttons — on this box a wedged server is a documented real event and
+   * Power off / Restart is the recovery path, so a four-minute backup must never hold
+   * recovery hostage. The consequence is stated in a confirm dialog instead; the
+   * dialog is what "force" looks like here.
+   */
+  const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
+  // Busy if THIS tab fired a request, or a *power* operation is in flight anywhere
+  // (another admin, another tab, the Workshop watcher). Either way, controls lock.
   const busy = localBusy || serverBusy !== null;
   const busyAction = serverBusy?.action;
 
@@ -78,30 +92,49 @@ export function GameControls({ game }: { game: GameId }) {
     if (busy) return;
     // `containerUp`, not `isOnline`: a wedged server is still running, so the only
     // meaningful power action is to stop it.
-    if (containerUp) return void control("stop");
-    if (blocking.length > 0) setConfirm(true);
+    if (containerUp) {
+      if (preemptable) return setConfirmPreempt("stop");
+      return void control("stop");
+    }
+    if (blocking.length > 0 || preemptable) setConfirm(true);
     else void control("start");
+  }
+
+  function onRestart() {
+    if (busy) return;
+    if (preemptable) return setConfirmPreempt("restart");
+    void control("restart");
   }
 
   async function control(action: "start" | "stop" | "restart") {
     if (localBusy) return;
     setLocalBusy(true);
     setConfirm(false);
+    setConfirmPreempt(null);
     try {
       const res = await fetch("/api/games/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
       if (!res.ok) return void toast.error(data.error || "Command failed");
-      toast.success(
-        action === "stop" ? `${meta.name} saved & stopped` : action === "restart" ? `${meta.name} restarting` : `${meta.name} powering on`
-      );
+      // No success toast: the operation's own completion toast carries the server's
+      // summary, and it cannot say more than was actually observed. A "saved &
+      // stopped" here would fire before the 300s Project Zomboid stop had finished.
       setTimeout(refresh, reduced ? 0 : 1500);
     } catch {
-      toast.error("Network error");
+      // The request died; the operation did not. `/api/games/control` awaits the
+      // whole thing, and a Project Zomboid stop is a fixed 300s ending in SIGKILL —
+      // well past Cloudflare's ~100s origin read timeout. So EVERY successful PZ stop
+      // and restart used to report a red "Network error" from all three power UIs,
+      // which is the most-hit lie in the app. The strip at the top of the page is the
+      // source of truth, and it survives this.
+      toast.info(
+        `Still working on ${meta.name}. The connection timed out before it finished, which is ` +
+          `normal for a long stop — watch the strip at the top of the page.`
+      );
     } finally {
       setLocalBusy(false);
     }
@@ -140,14 +173,15 @@ export function GameControls({ game }: { game: GameId }) {
           <PowerCore state={coreState} size={120} />
         </div>
 
-        {/* What's actually happening. A big mod list takes minutes to load, and
-            without a stage + bar the UI reads as hung rather than working. The
-            control lock's stage wins when set, because it describes what WE are
-            doing (stopping / downloading); otherwise fall back to the server's
-            own boot progress. */}
+        {/* What's actually happening, as words and a clock-time — never as a bar.
+            The sweep that used to live here (`width: ["15%","85%","15%"]`) animated
+            identically whether the server was alive, wedged or gone, which in a
+            codebase whose recurring defect is "reports success after doing nothing"
+            is that same defect at the animation layer. The full step history lives in
+            the strip at the top of the page; this is the one-line version. */}
         {(busyStage || snap?.boot) && (
-          <div className="mb-4">
-            <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
+          <div className="mb-4 rounded-lg bg-background/50 px-3 py-2 ring-1 ring-foreground/10">
+            <div className="flex items-baseline justify-between gap-2 text-xs">
               <span className="truncate text-muted-foreground">
                 {busyStage ?? snap?.boot?.stage}
               </span>
@@ -157,25 +191,11 @@ export function GameControls({ game }: { game: GameId }) {
                 </span>
               )}
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted ring-1 ring-foreground/10">
-              <motion.div
-                className="h-full rounded-full"
-                style={{ background: meta.tint }}
-                initial={false}
-                // No percentage to show (our own stage, or an unknown phase):
-                // an indeterminate sweep rather than a fake number.
-                animate={
-                  busyStage || snap?.boot?.percent == null
-                    ? { width: ["15%", "85%", "15%"], x: ["0%", "18%", "0%"] }
-                    : { width: `${snap.boot.percent}%`, x: "0%" }
-                }
-                transition={
-                  busyStage || snap?.boot?.percent == null
-                    ? { duration: 2.2, repeat: Infinity, ease: "easeInOut" }
-                    : { type: "spring", stiffness: 90, damping: 22 }
-                }
-              />
-            </div>
+            {!busyStage && snap?.boot?.detail && (
+              <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                {snap.boot.detail}
+              </p>
+            )}
           </div>
         )}
 
@@ -208,8 +228,11 @@ export function GameControls({ game }: { game: GameId }) {
           <PowerGlyph className="h-5 w-5" />
           {busy ? busyLabel(busyAction) : containerUp ? "Power off" : "Power on"}
         </button>
-        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !containerUp || !can.restart} onClick={() => control("restart")}>
-          <RotateCw className={cn("h-4 w-4", busyAction === "restart" && "animate-spin")} />
+        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !containerUp || !can.restart} onClick={onRestart}>
+          {/* Not a spinner. `animate-spin` on a 1s CSS loop says "something is
+              happening" whether or not anything is, which is the claim we refuse to
+              make anywhere in this feature. */}
+          <RotateCw className="h-4 w-4" />
           {busyAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
 
@@ -224,6 +247,12 @@ export function GameControls({ game }: { game: GameId }) {
                 : "restarting"}
               {serverBusy.stage ? ` — ${serverBusy.stage.toLowerCase()}` : ""}. Controls unlock when
               it finishes.
+            </span>
+          ) : preemptable ? (
+            <span>
+              <strong className="text-foreground">{meta.name}</strong> is being worked on —{" "}
+              {fileOperationLabel(preemptable, elapsedMs(preemptable))}. Powering off or restarting
+              now cuts it short; you&apos;ll be asked to confirm.
             </span>
           ) : looksStuck ? (
             <span>
@@ -291,8 +320,20 @@ export function GameControls({ game }: { game: GameId }) {
               <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              This saves and stops <strong>{blockingNames}</strong>, then starts <strong>{meta.name}</strong>.
-              Players on {blockingNames} will be disconnected.
+              {blocking.length > 0 && (
+                <>
+                  This saves and stops <strong>{blockingNames}</strong>, then starts{" "}
+                  <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
+                </>
+              )}
+              {preemptable && (
+                <>
+                  {blocking.length > 0 ? " " : ""}
+                  <strong>{meta.name}</strong> is also being worked on —{" "}
+                  {fileOperationLabel(preemptable, elapsedMs(preemptable))} — and starting now cuts
+                  that short. If it is a backup, the archive will be incomplete.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -300,9 +341,41 @@ export function GameControls({ game }: { game: GameId }) {
               Cancel
             </Button>
             <Button onClick={() => control("start")} style={{ background: meta.tint, color: "var(--background)" }}>
-              Switch &amp; start
+              {blocking.length > 0 ? "Switch & start" : "Start anyway"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pre-empting a file operation. The dialog IS the force flag: there is no
+          `{force:true}` in the request body, because the only honest gate on a
+          destructive interruption is a sentence naming the consequence. */}
+      <Dialog open={confirmPreempt !== null} onOpenChange={(o) => !o && setConfirmPreempt(null)}>
+        <DialogContent>
+          {preemptable && confirmPreempt && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} />
+                  {confirmPreempt === "stop" ? "Power off anyway?" : "Restart anyway?"}
+                </DialogTitle>
+                <DialogDescription>
+                  <strong>{meta.name}</strong> is being worked on —{" "}
+                  {fileOperationLabel(preemptable, elapsedMs(preemptable))}. Going ahead cuts it
+                  short. If it is a backup, the archive will be incomplete and is deleted; if it is
+                  a mod install, some mods will be missing.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setConfirmPreempt(null)}>
+                  Wait for it
+                </Button>
+                <Button variant="destructive" onClick={() => control(confirmPreempt)}>
+                  {confirmPreempt === "stop" ? "Power off anyway" : "Restart anyway"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

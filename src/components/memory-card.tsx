@@ -70,7 +70,15 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
           : `Saved ${gb} GB, but the container still reports ${data.liveGb} GB.`
       );
     } catch {
-      toast.error("Couldn't change the memory setting");
+      // For Project Zomboid `setMemory` opens with a 300s graceful stop, so the request
+      // cannot come back inside Cloudflare's ~100s window — this fired red while the
+      // change was being applied perfectly. The configured-vs-live read-back still
+      // happens; it just arrives through the strip instead of through this response.
+      toast.info(
+        `Still applying the memory change to ${meta.name}. The connection timed out before it ` +
+          `finished, which is normal — watch the strip at the top of the page, then reload this ` +
+          `page to see the configured and running values.`
+      );
     } finally {
       setSaving(false);
     }

@@ -107,13 +107,23 @@ export function GameOverview({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
       if (!res.ok) return void toast.error(data.error || "Command failed");
-      toast.success(`${meta.name} ${action === "stop" ? "saved & stopped" : action === "restart" ? "restarting" : "powering on"}`);
+      // No success toast: the completion toast carries the server's own summary, which
+      // cannot claim more than was actually observed. "saved & stopped" fired here
+      // before a 300s Project Zomboid stop had even reached the kill.
       setTimeout(refresh, reduced ? 0 : 1200);
     } catch {
-      toast.error("Network error");
+      // The request died; the operation did not. `/api/games/control` awaits the whole
+      // thing, and a Project Zomboid stop is a fixed 300s ending in SIGKILL — past
+      // Cloudflare's ~100s origin read timeout. So the *successful* path routinely ends
+      // with a dead connection, and reporting that as a red "Network error" was the
+      // app's most-hit lie. The strip at the top of the page survives it.
+      toast.info(
+        `Still working on ${meta.name}. The connection timed out before it finished, which is ` +
+          `normal for a long stop — watch the strip at the top of the page.`
+      );
     } finally {
       setLocalBusy(false);
     }

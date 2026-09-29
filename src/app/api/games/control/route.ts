@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { powerOn, powerOff, restartGame, ControlBusyError } from "@/lib/game-manager";
+import { powerOn, powerOff, restartGame } from "@/lib/game-manager";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
 
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
   try {
     switch (action) {
       case "start":
-        steps = await powerOn(game);
+        steps = await powerOn(game, session.user.name);
         await db.gameState.upsert({
           where: { id: "main" },
           update: { activeGame: game },
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
         });
         break;
       case "stop":
-        await powerOff(game);
+        await powerOff(game, session.user.name);
         await db.gameState.upsert({
           where: { id: "main" },
           update: { activeGame: null },
@@ -51,16 +52,14 @@ export async function POST(request: NextRequest) {
         });
         break;
       case "restart":
-        await restartGame(game);
+        await restartGame(game, session.user.name);
         break;
     }
   } catch (e) {
-    if (e instanceof ControlBusyError) {
-      return NextResponse.json(
-        { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
-        { status: 409 }
-      );
-    }
+    // Widened from `ControlBusyError` to every conflict: a file-lane refusal (two
+    // backups of the same world) is not a power-lock conflict and used to fall through
+    // to a 500 with a message nobody could act on.
+    if (isConflict(e)) return conflictResponse(e);
     const msg = e instanceof Error ? e.message : "Server control failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

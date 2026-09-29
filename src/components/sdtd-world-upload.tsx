@@ -92,10 +92,15 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
       let data: { success?: boolean; hint?: string; error?: string; name?: string } = {};
       try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status >= 200 && xhr.status < 300 && data.success) {
+        // The *transfer* is finished, which is the only half this client can see. The
+        // server-side unpack-check-place is a tracked operation, and its completion
+        // toast reports whether the files actually landed where the game looks for them.
         toast.success(data.hint || `Uploaded ${data.name}`);
         setFile(null);
         setProgress(0);
         loadWorlds();
+      } else if (xhr.status === 409 && data.error) {
+        toast.error(data.error);
       } else if (xhr.status === 413) {
         toast.error("File too large for this route. The direct-upload host may not be configured.");
       } else {

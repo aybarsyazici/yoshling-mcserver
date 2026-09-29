@@ -9,8 +9,8 @@ import {
   containerImage,
   getGameStatus,
   withGameStopped,
-  ControlBusyError,
 } from "@/lib/game-manager";
+import { OperationConflictError, listOperations } from "@/lib/operations";
 
 const execAsync = promisify(exec);
 
@@ -203,6 +203,30 @@ export async function readWatchState(): Promise<WatchState> {
     );
   }
   return { ...state, applyingSince: 0, applyingTitles: [] };
+}
+
+/**
+ * The apply marker, preferring the registry and falling back to the file.
+ *
+ * The on-disk `applyingSince` is deliberately NOT deleted yet. It is the only
+ * operation record in this app that survives a deploy, for the one operation nobody
+ * clicked — and removing durable state in the same change that introduces the registry
+ * would mean a registry bug silently breaks the one thing that already works. The
+ * fields come out in a follow-up, once the registry has run for a week.
+ *
+ * A live registry entry wins because it cannot be orphaned: the entry exists exactly
+ * as long as the awaiting frame does.
+ */
+export async function applyMarker(): Promise<{ since: number; titles: string[] }> {
+  const state = await readWatchState();
+  const live = listOperations().find((o) => o.kind === "mods.update" && o.game === "zomboid");
+  // `since` from the registry when there is one; the titles still come off disk,
+  // because they are written before the long part and the registry carries only the
+  // truncated live detail line.
+  return {
+    since: live ? live.startedAt : state.applyingSince || 0,
+    titles: state.applyingTitles || [],
+  };
 }
 
 async function writeWatchState(state: WatchState): Promise<void> {
@@ -513,13 +537,36 @@ async function runPoll(
   try {
     // `restartOnFailure` defaults to true and that is what we want here: a mod
     // that Steam cannot fetch should not cost the world its uptime.
-    await withGameStopped("zomboid", "restart", () => seedMods(ids), {
-      stage: "Downloading updated mods",
-    });
+    await withGameStopped(
+      "zomboid",
+      "restart",
+      async (op) => {
+        op.step("Downloading mods from Steam");
+        op.detail(titles.slice(0, 3).join(", ") + (titles.length > 3 ? `, +${titles.length - 3} more` : ""));
+        await seedMods(ids);
+        // `seedMods` throws unless SteamCMD reported every item downloaded, so
+        // reaching here IS the read-back — the count is Steam's own, not ours.
+        op.settle(`Downloaded ${ids.length} of ${ids.length} mods`, {
+          count: { done: ids.length, total: ids.length, noun: "mods" },
+        });
+      },
+      {
+        kind: "mods.update",
+        title: "Applying mod updates",
+        // No `startedBy`: the watcher runs on a timer, and pinning it on whoever
+        // happened to press "Check now" would be a small lie in the record.
+        startedBy: null,
+      }
+    );
   } catch (e) {
     // Clear the in-flight marker on any exit path, or the UI shows a restart
     // that is no longer happening.
-    const busy = e instanceof ControlBusyError;
+    //
+    // Widened from `ControlBusyError`: a *file*-lane refusal (a Project Zomboid backup
+    // in flight) is equally "nothing was attempted", and misreading it as a failed
+    // apply would start the one-hour `applyFailedAt` cooldown and suppress every apply
+    // for an hour over a conflict that resolves in minutes.
+    const busy = e instanceof OperationConflictError;
     await writeWatchState({
       ...state,
       applyingSince: 0,

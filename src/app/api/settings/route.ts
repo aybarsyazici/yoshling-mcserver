@@ -3,7 +3,8 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
-import { applyServiceEnv, ControlBusyError } from "@/lib/game-manager";
+import { applyServiceEnv } from "@/lib/game-manager";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 
 // Memory is NOT set here — /api/games/memory owns it, because applying a heap
 // change means recreating the container, not just rewriting this file.
@@ -66,12 +67,14 @@ export async function PUT(request: NextRequest) {
       await applyServiceEnv(
         "minecraft",
         { TYPE: finalLoader.toUpperCase(), VERSION: finalVersion },
-        { stage: `Applying ${finalLoader} ${finalVersion}` }
+        {
+          stage: `Changing the Minecraft version`,
+          setting: "The Minecraft version",
+          startedBy: session.user.name,
+        }
       );
     } catch (e) {
-      if (e instanceof ControlBusyError) {
-        return NextResponse.json({ error: e.message, busy: e.lock }, { status: 409 });
-      }
+      if (isConflict(e)) return conflictResponse(e);
       // Not `{success: true, warning}` with HTTP 200: the settings page checks only
       // `res.ok` and never reads `warning`, so a failed apply rendered as "Saved."
       // The DB row has already been written, which is why the message has to say

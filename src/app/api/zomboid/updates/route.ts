@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
-import { findStaleMods, pollModUpdates, readWatchState } from "@/lib/zomboid-updates";
+import { applyMarker, findStaleMods, pollModUpdates, readWatchState } from "@/lib/zomboid-updates";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 
 /**
  * Workshop mod update status. The watcher in `instrumentation.ts` runs this on a
@@ -13,9 +14,10 @@ export async function GET() {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
 
-  const [stale, state] = await Promise.all([
+  const [stale, state, marker] = await Promise.all([
     findStaleMods().catch(() => null),
     readWatchState(),
+    applyMarker(),
   ]);
 
   return NextResponse.json({
@@ -25,9 +27,15 @@ export async function GET() {
     checkedAt: state.checkedAt || null,
     /** Why that check failed, or "" if it was fine. */
     lastError: state.lastError || "",
-    /** Non-null while a restart-and-update is actually in progress. */
-    applyingSince: state.applyingSince || null,
-    applyingTitles: state.applyingTitles || [],
+    /**
+     * Non-null while a restart-and-update is actually in progress. Taken from the
+     * live registry entry when there is one, and from the on-disk marker otherwise —
+     * that file is still written, because it is the only operation record here that
+     * survives a deploy and removing it in the same change as the registry would let
+     * a registry bug break the one thing that already worked.
+     */
+    applyingSince: marker.since || null,
+    applyingTitles: marker.titles,
     announcedAt: state.announcedAt || null,
     appliedAt: state.appliedAt || null,
     /** So the card can say how long until the next check without hardcoding it. */
@@ -64,6 +72,7 @@ export async function POST() {
     }
     return NextResponse.json({ action, stale });
   } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 }

@@ -48,7 +48,16 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <ThemeProvider>
           {children}
-          <Toaster />
+          {/* Bottom-right: diagonally opposite the operation ledger, and clear of
+              the sidebar. `richColors` stays off — it would put sonner's own
+              green/red beside Catppuccin. Severity comes from `.cn-toast`'s ring. */}
+          <Toaster
+            position="bottom-right"
+            duration={4000}
+            visibleToasts={3}
+            offset={{ bottom: 64 }}
+            closeButton={false}
+          />
           <MikuEasterEgg />
         </ThemeProvider>
       </body>

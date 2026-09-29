@@ -7,6 +7,8 @@ import { installMod, removeMod } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 
 const execAsync = promisify(exec);
 
@@ -76,10 +78,55 @@ export async function POST(request: NextRequest) {
   const errors: string[] = [];
   const warnings: string[] = [];
 
+  try {
+    return await runOperation(
+      {
+        kind: "mods.apply",
+        game: "minecraft",
+        title: "Installing a modpack",
+        startedBy: session.user.name ? { name: session.user.name } : null,
+      },
+      (op) => applyModpack(op, { modpack, serverConfig, userId: session.user.id, errors, warnings })
+    );
+  } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Modpack install failed" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * The apply itself, wrapped in an operation.
+ *
+ * Up to 166 sequential Modrinth fetches, and it *deletes every installed jar first* —
+ * so the window where the mods directory is empty used to be open to a Power on, a
+ * restore, or a second apply, with nothing refusing any of them. It holds
+ * `files:minecraft` now, and `count` progress is genuine: the loop already iterates
+ * one mod at a time, so the number is observed rather than interpolated.
+ */
+async function applyModpack(
+  op: OpHandle,
+  {
+    modpack,
+    serverConfig,
+    userId,
+    errors,
+    warnings,
+  }: {
+    modpack: { name: string; mods: any[] };
+    serverConfig: { mcVersion: string; modLoader: string };
+    userId: string;
+    errors: string[];
+    warnings: string[];
+  }
+): Promise<OpSuccess<NextResponse>> {
   // Auto-backup the world before touching mods. A failure here is reported rather
   // than swallowed: this backup is the entire rollback story for a mod swap that
   // corrupts the world, so "we took one" has to be true and not assumed. It is not
   // fatal though -- a server with no world/ folder yet has nothing to back up.
+  op.step("Backing the world up first");
   try {
     const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
     const BACKUP_DIR = "/app/data/backups";
@@ -89,10 +136,19 @@ export async function POST(request: NextRequest) {
       `tar -czf ${BACKUP_DIR}/auto-before-modpack-${timestamp}.tar.gz -C ${MC_DIR} world`,
       { timeout: 60000 }
     );
+    op.settle("Backed the world up");
   } catch (e: any) {
     warnings.push(
       `World backup failed (${e.message || "unknown error"}) — this install has no rollback point.`
     );
+    // A `noop`, not a silent warning string buried in the response: without a
+    // rollback point this install is a one-way door, and that belongs in the outcome.
+    op.settle(`Couldn't back the world up — ${e.message || "unknown error"}`, { kind: "noop" });
+    op.fact({
+      label: "Rollback point",
+      value: "no world backup was written, so this install cannot be rolled back",
+      verdict: "warn",
+    });
   }
 
   // Refuse before deleting anything if this pack cannot actually be installed.
@@ -107,17 +163,27 @@ export async function POST(request: NextRequest) {
     (m: { downloadUrl?: string | null; modrinthId?: string | null }) =>
       m.downloadUrl || m.modrinthId
   ).length;
+  op.step("Reading the modpack list");
   if (installable === 0) {
-    return NextResponse.json(
-      {
-        error:
-          `None of the ${modpack.mods.length} mods in "${modpack.name}" has a download source, ` +
-          `so installing it would remove every current mod and add nothing. ` +
-          `This pack was imported before a fix to the importer — re-import it to repair it.`,
-      },
-      { status: 409 }
+    op.settle(
+      `Read the modpack list: ${modpack.mods.length} mods, none with a download source`,
+      { kind: "noop", count: { done: 0, total: modpack.mods.length, noun: "installable mods" } }
     );
+    return {
+      value: NextResponse.json(
+        {
+          error:
+            `None of the ${modpack.mods.length} mods in "${modpack.name}" has a download source, ` +
+            `so installing it would remove every current mod and add nothing. ` +
+            `This pack was imported before a fix to the importer — re-import it to repair it.`,
+        },
+        { status: 409 }
+      ),
+    };
   }
+  op.settle(`Read the modpack list: ${modpack.mods.length} mods`, {
+    count: { done: installable, total: modpack.mods.length, noun: "installable" },
+  });
   if (installable < modpack.mods.length) {
     warnings.push(
       `${modpack.mods.length - installable} of ${modpack.mods.length} mods in this pack have no ` +
@@ -128,18 +194,29 @@ export async function POST(request: NextRequest) {
   // Remove all currently installed mods. A jar that survives this loads alongside
   // the new pack, so a failed removal has to be said out loud.
   const installedMods = await db.installedMod.findMany();
+  op.step("Removing the current mods");
+  let removed = 0;
   for (const mod of installedMods) {
     try {
-      await removeMod(mod.id, session.user.id);
+      await removeMod(mod.id, userId);
+      removed++;
     } catch (e: any) {
       errors.push(`${mod.name}: could not be removed (${e.message || "failed"})`);
     }
   }
+  op.settle(`Removed the current mods`, {
+    kind: removed === installedMods.length ? "done" : "noop",
+    count: { done: removed, total: installedMods.length, noun: "mods" },
+  });
 
   // Install modpack mods
   let installed = 0;
-
+  op.step("Downloading mods");
   for (const mod of modpack.mods) {
+    // Real counts only: the loop genuinely handles one mod at a time, so this is
+    // observed rather than interpolated. A count that only jumps 0 → n would be a fake.
+    op.progress({ kind: "count", done: installed, total: modpack.mods.length, noun: "mods" });
+    op.detail(mod.name);
     try {
       if ((mod as any).downloadUrl) {
         // Direct download (e.g. Technic/Solder)
@@ -166,7 +243,7 @@ export async function POST(request: NextRequest) {
             fileName,
             mcVersion: serverConfig.mcVersion,
             loader: serverConfig.modLoader,
-            installedBy: session.user.id,
+            installedBy: userId,
           },
         });
         installed++;
@@ -191,7 +268,7 @@ export async function POST(request: NextRequest) {
           slug: mod.slug,
           name: mod.name,
           version,
-          userId: session.user.id,
+          userId,
         });
         installed++;
       } else {
@@ -211,22 +288,52 @@ export async function POST(request: NextRequest) {
   const total = modpack.mods.length;
   const complete = installed === total;
 
-  return NextResponse.json(
+  // The count IS the verdict. `concludeOperation` reads this step: 0-of-a-real-total
+  // is `nothing`, short-of-total is `partial`, and neither can render green however
+  // the response below is worded.
+  op.settle(
+    installed === 0
+      ? `Installed 0 of ${total} mods — no download source recorded`
+      : complete
+      ? `Installed ${installed} of ${total} mods`
+      : `Installed ${installed} of ${total} mods — ${total - installed} failed`,
     {
-      success: complete,
-      installed,
-      total,
-      errors,
-      warnings,
-      ...(complete
-        ? {}
-        : {
-            error:
-              installed === 0
-                ? `No mods were installed (0 of ${total}). The server's mods are now empty.`
-                : `Only ${installed} of ${total} mods were installed.`,
-          }),
-    },
-    { status: complete ? 200 : 500 }
+      kind: complete ? "done" : "noop",
+      count: { done: installed, total, noun: "mods" },
+    }
   );
+  op.progress({ kind: "count", done: installed, total, noun: "mods" });
+
+  return {
+    facts: [
+      { label: "Installed", value: `${installed} of ${total}`, verdict: complete ? undefined : "warn" },
+      ...(errors.length
+        ? [
+            {
+              label: "Errors",
+              value: `${errors.length} mod${errors.length === 1 ? "" : "s"} reported a problem`,
+              verdict: "warn" as const,
+            },
+          ]
+        : []),
+    ],
+    value: NextResponse.json(
+      {
+        success: complete,
+        installed,
+        total,
+        errors,
+        warnings,
+        ...(complete
+          ? {}
+          : {
+              error:
+                installed === 0
+                  ? `No mods were installed (0 of ${total}). The server's mods are now empty.`
+                  : `Only ${installed} of ${total} mods were installed.`,
+            }),
+      },
+      { status: complete ? 200 : 500 }
+    ),
+  };
 }

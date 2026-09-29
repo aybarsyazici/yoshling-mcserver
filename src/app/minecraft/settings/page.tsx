@@ -60,6 +60,7 @@ export default function SettingsPage() {
     mcVersion: "1.21.4",
     modLoader: "fabric",
   });
+  const [savedConfig, setSavedConfig] = useState<ServerConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [mcVersions, setMcVersions] = useState<string[]>([]);
   const [properties, setProperties] = useState<Record<string, string>>({});
@@ -77,6 +78,10 @@ export default function SettingsPage() {
       .then((data) => {
         if (data && data.mcVersion) {
           setConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader });
+          // Kept so Save can tell "applied a change" from "pressed Save on the values
+          // that were already there" — the two produce completely different server
+          // behaviour and used to produce the same green toast.
+          setSavedConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader });
         }
       })
       .catch(() => {});
@@ -104,14 +109,39 @@ export default function SettingsPage() {
 
   async function handleSaveConfig() {
     setSaving(true);
+    const changed =
+      !savedConfig ||
+      savedConfig.mcVersion !== config.mcVersion ||
+      savedConfig.modLoader !== config.modLoader;
     try {
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
-      if (res.ok) toast.success("Server config saved. Server will restart with new version.");
-      else toast.error("Failed to save");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // This used to be `toast.error("Failed to save")`, which **discarded
+        // `data.error`** — throwing away both the 409 busy message and the route's
+        // deliberately-worded "Saved … to settings, but applying it to the container
+        // failed … The configured and running versions now disagree."
+        toast.error(data.error || "Failed to save");
+        return;
+      }
+      // And the old success text — "Server will restart with new version" — was false
+      // twice over: nothing is recreated when nothing changed, and `applyServiceEnv`
+      // uses `create` never `up`, so a stopped world stays stopped. When something did
+      // change it is a tracked operation, and its completion toast carries the
+      // container's read-back version.
+      if (!changed) toast.info("Nothing changed — the version and loader are already set to that.");
+      else setSavedConfig({ ...config });
+    } catch {
+      // A version change stops and recreates the container, which outlasts
+      // Cloudflare's ~100s origin read timeout for a world that takes a while to save.
+      toast.info(
+        "Still applying the version change. The connection timed out before it finished — watch " +
+          "the strip at the top of the page."
+      );
     } finally {
       setSaving(false);
     }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
-  getAllStatus,
+  cachedAllStatus,
   currentControlLock,
   configuredMemoryGb,
   hostTotalGb,
@@ -16,7 +16,11 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const games = await getAllStatus();
+  // Coalesced (3.5s) and copied before mutation: the cache hands out the same object
+  // to every caller, and the redaction loop below would otherwise strip player names
+  // out of the shared snapshot for whoever polls next.
+  const snapshot = await cachedAllStatus();
+  const games = { ...snapshot };
   const access = session.user.games;
 
   // Every world's run state is reported, even ones this user can't open: only
@@ -57,5 +61,8 @@ export async function GET() {
     },
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,
+    // So elapsed times are measured against the server's clock rather than the
+    // browser's. `Date.now() - busy.since` mixed the two.
+    serverNow: Date.now(),
   });
 }

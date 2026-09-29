@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
-import { getMemoryState, setMemory, ControlBusyError } from "@/lib/game-manager";
+import { getMemoryState, setMemory } from "@/lib/game-manager";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
 
@@ -33,7 +34,7 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const state = await setMemory(game, Number(gb));
+    const state = await setMemory(game, Number(gb), session.user.name);
     await db.activity
       .create({
         data: {
@@ -45,12 +46,7 @@ export async function PUT(request: NextRequest) {
       .catch(() => {});
     return NextResponse.json(state);
   } catch (e) {
-    if (e instanceof ControlBusyError) {
-      return NextResponse.json(
-        { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.` },
-        { status: 409 }
-      );
-    }
+    if (isConflict(e)) return conflictResponse(e);
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Couldn't change the memory setting" },
       { status: 500 }

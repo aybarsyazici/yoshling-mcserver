@@ -83,9 +83,15 @@ export default function SevenDtdSettings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
       });
-      const data = await res.json();
-      if (res.ok) toast.success(data.warning || "Settings saved. Restart 7DTD to apply.");
-      else toast.error(data.error || "Failed to save");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) toast.error(data.error || "Failed to save");
+      // `data.warning` is the route being honest and this line used to paint it green.
+      // The strings it can hold include "Saved here, but writing the server config
+      // failed, so nothing changed on the server: …" and "…the server config has no
+      // Difficulty (GameDifficulty) property, so that setting had no effect in-game."
+      // A warning rendered as a success is the defect class this whole change is about.
+      else if (data.warning) toast.warning(data.warning);
+      else toast.success("Settings saved. Restart 7DTD to apply.");
     } finally {
       setSaving(false);
     }

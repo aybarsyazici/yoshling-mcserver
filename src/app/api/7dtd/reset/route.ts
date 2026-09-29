@@ -6,9 +6,14 @@ import { promisify } from "util";
 import { readFile, writeFile, rm, readdir, mkdir } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
-import { RUNTIME, restartGame, ControlBusyError } from "@/lib/game-manager";
+import { RUNTIME } from "@/lib/game-manager";
+import { POWER_RESOURCES, runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 
-export const maxDuration = 120;
+// A Vercel-only hint; `node server.js` ignores it. It was also *shorter* than the
+// operation it claimed to protect. Kept as a statement of intent only — the registry
+// is what actually keeps this coherent when the response is lost.
+export const maxDuration = 300;
 
 /**
  * `execFile`, never `exec`.
@@ -62,8 +67,43 @@ export async function POST() {
   if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   try {
+    /**
+     * ONE operation around the whole reset.
+     *
+     * It used to take the control lock twice, non-atomically: `powerOff` acquired and
+     * released it, then the save wipe and the `GameName` bump ran **unlocked**, then
+     * `restartGame` acquired it again. Two windows in the middle of a destructive
+     * operation where a Power on could interleave — and the ~14s safety `tar` ran
+     * outside the lock too, against a live server.
+     *
+     * Holding `POWER_RESOURCES` for the duration closes both windows. The stop and the
+     * start are open-coded here rather than delegated to `powerOff`/`restartGame`,
+     * because those enter operations of their own and would be refused by this one.
+     */
+    return await runOperation(
+      {
+        kind: "world.reset",
+        game: "7dtd",
+        title: "Resetting the world",
+        action: "restart",
+        resources: POWER_RESOURCES,
+        startedBy: session.user.name ? { name: session.user.name } : null,
+      },
+      (op) => resetWorld(op, session.user.id)
+    );
+  } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
+    return NextResponse.json({ error: (e as Error).message || "Reset failed" }, { status: 500 });
+  }
+}
+
+async function resetWorld(
+  op: OpHandle,
+  userId: string
+): Promise<OpSuccess<NextResponse>> {
+  {
     let xml = await readFile(XML_PATH, "utf-8").catch(() => "");
-    if (!xml) return NextResponse.json({ error: "Config not found" }, { status: 400 });
+    if (!xml) return { value: NextResponse.json({ error: "Config not found" }, { status: 400 }) };
 
     const world = getProp(xml, "GameWorld");
     // Step 3 rm -rf's Saves/<world>, so GameWorld has to be one plain directory
@@ -71,12 +111,14 @@ export async function POST() {
     // world's save, and ".." would climb out of it. All settings will write
     // either value into the XML without complaint, so check it here.
     if (!world || world === "." || world === ".." || /[/\\]/.test(world)) {
-      return NextResponse.json(
-        {
-          error: `sdtdserver.xml has no usable GameWorld (currently "${world}"), so there's nothing safe to reset. Set Game World in All settings first.`,
-        },
-        { status: 400 }
-      );
+      return {
+        value: NextResponse.json(
+          {
+            error: `sdtdserver.xml has no usable GameWorld (currently "${world}"), so there's nothing safe to reset. Set Game World in All settings first.`,
+          },
+          { status: 400 }
+        ),
+      };
     }
     const oldName = getProp(xml, "GameName");
     const newName = bumpName(oldName);
@@ -97,6 +139,7 @@ export async function POST() {
     // response still claimed a backup had been made. The server is still running
     // at this point, so tar can fail for real reasons — GNU tar exits 1 on "file
     // changed as we read it" when an autosave lands mid-archive.
+    op.step("Backing the save up first");
     const hadSave = await readdir(savePath).then(() => true).catch(() => false);
     if (hadSave) {
       const archive = path.join(backupDir, `presreset-${world}-${stamp}.tar.gz`);
@@ -106,54 +149,73 @@ export async function POST() {
           ["-czf", archive, "-C", path.join(SAVES_DIR, "Saves"), world],
           { timeout: 120000 }
         );
+        op.settle(`Backed the old save up — presreset-${world}-${stamp}.tar.gz`);
+        op.fact({ label: "Safety copy", value: `presreset-${world}-${stamp}.tar.gz` });
       } catch (e) {
         // Drop the partial archive so nothing later mistakes it for a backup.
         await rm(archive, { force: true }).catch(() => {});
-        return NextResponse.json(
-          {
-            error: `The safety backup failed, so the reset was cancelled and the save is untouched: ${(e as Error).message.trim()}. The server may have been mid-autosave — try again in a moment.`,
-          },
-          { status: 500 }
-        );
+        op.reject("The safety backup failed — the reset was cancelled");
+        return {
+          value: NextResponse.json(
+            {
+              error: `The safety backup failed, so the reset was cancelled and the save is untouched: ${(e as Error).message.trim()}. The server may have been mid-autosave — try again in a moment.`,
+            },
+            { status: 500 }
+          ),
+        };
       }
+    } else {
+      op.settle("No existing save to back up");
     }
 
     // 2) Stop the server (graceful), keeping the world map in GeneratedWorlds.
-    try {
-      const { powerOff } = await import("@/lib/game-manager");
-      await powerOff("7dtd");
-    } catch (e) {
-      if (e instanceof ControlBusyError) return NextResponse.json({ error: e.message, busy: e.lock }, { status: 409 });
-      // if it wasn't running, continue
-    }
+    //    Open-coded rather than `powerOff("7dtd")`, because that enters an operation
+    //    of its own and this one already holds every resource it would want.
+    const { stopGameForOperation, startGameForOperation, containerIsRunning } = await import(
+      "@/lib/game-manager"
+    );
+    const wasRunning = await containerIsRunning("7dtd");
+    if (wasRunning) await stopGameForOperation(op, "7dtd");
 
     // 3) Wipe the save for this world + the cross-play profile cache. Keep the
     //    world MAP (GeneratedWorlds) so we don't lose the custom map.
+    op.step("Wiping the save");
     await rm(savePath, { recursive: true, force: true });
     await rm(path.join(SAVES_DIR, "Saves", "sdcs_profiles.sdf"), { force: true }).catch(() => {});
+    op.settle(`Wiped the save for "${world}" — the world map was kept`);
 
     // 4) Bump GameName so the fresh save has a new identity.
+    op.step("Naming the new save");
     xml = setProp(xml, "GameName", newName);
     await writeFile(XML_PATH, xml, "utf-8");
+    // Read it back off disk: the whole reset hinges on the server booting onto the
+    // NEW name, and "we wrote the file" is not the same claim.
+    const readBack = getProp(await readFile(XML_PATH, "utf-8").catch(() => ""), "GameName");
+    op.settle(`Named the new save "${newName}"`);
+    op.fact({
+      label: "New game name",
+      value: readBack || "could not be read back",
+      verdict: readBack === newName ? undefined : "warn",
+    });
+    op.fact({ label: "World map", value: `kept — ${world}` });
 
-    // 5) Restart onto the fresh save.
-    await restartGame("7dtd");
+    // 5) Start onto the fresh save.
+    await startGameForOperation(op, "7dtd");
 
     // keep the curated DB row's notion of nothing here; log it.
     await db.activity
-      .create({ data: { userId: session.user.id, action: "server_reset", details: JSON.stringify({ game: "7dtd", world, oldName, newName }) } })
+      .create({ data: { userId, action: "server_reset", details: JSON.stringify({ game: "7dtd", world, oldName, newName }) } })
       .catch(() => {});
 
-    return NextResponse.json({
-      success: true,
-      world,
-      newGameName: newName,
-      message: `World "${world}" reset to a fresh save (${newName}). The map was kept${
-        hadSave ? "; the old save was backed up first" : " (there was no existing save to back up)"
-      }. The server is restarting.`,
-    });
-  } catch (e) {
-    if (e instanceof ControlBusyError) return NextResponse.json({ error: e.message, busy: e.lock }, { status: 409 });
-    return NextResponse.json({ error: (e as Error).message || "Reset failed" }, { status: 500 });
+    return {
+      value: NextResponse.json({
+        success: true,
+        world,
+        newGameName: newName,
+        message: `World "${world}" reset to a fresh save (${newName}). The map was kept${
+          hadSave ? "; the old save was backed up first" : " (there was no existing save to back up)"
+        }. The server is restarting.`,
+      }),
+    };
   }
 }
