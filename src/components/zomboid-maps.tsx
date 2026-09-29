@@ -38,10 +38,20 @@ interface MapsState {
  * off disk, so a conflict here is a fact rather than a guess.
  *
  * `Map=` decides, first entry wins — including for add-on maps (a map.info with
- * `lots=<parent>`), which is why every installed map has to be listed. The list
- * is regenerated from the installed mods on every server start, so this card
- * shows the result and lets you reorder it; a map missing after a restart is a
- * real fault, not the normal state.
+ * `lots=<parent>`), which is why every installed map has to be listed.
+ *
+ * The list is regenerated from the installed mods on every server start, and until
+ * 2026-09-29 that regeneration **discarded whatever was saved here**: the container's
+ * `entry.sh` rewrites `Map=` from `pz/search_folder.sh`'s output ~3 s before the world
+ * loads, so a reorder survived exactly zero restarts — and this card's own toast told
+ * the user to restart, which was the action that reverted it. `search_folder.sh` now
+ * seeds itself from the `Map=` already on disk, so the saved order is what the scanner
+ * emits first and a newly-installed map is appended after it by cell count.
+ *
+ * This docstring used to end "a map missing after a restart is a real fault, not the
+ * normal state". That was backwards: a reorder being gone after a restart *was* the
+ * normal state, and calling it a fault is what kept anyone from looking at the
+ * generator.
  */
 export function ZomboidMaps({ tint }: { tint: string }) {
   const [state, setState] = useState<MapsState | null>(null);
@@ -88,7 +98,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
         toast.error(data.error || "Couldn't save the map order");
         return;
       }
-      toast.success("Map order saved. Restart Project Zomboid to apply.");
+      toast.success("Map order saved — it applies the next time Project Zomboid starts.");
       await load();
     } finally {
       setSaving(false);

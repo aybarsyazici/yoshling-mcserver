@@ -6,11 +6,17 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, mkdir, rename } from "fs/promises";
 import path from "path";
+import { db } from "@/lib/db";
 import { containerIsRunning, withGameStopped } from "@/lib/game-manager";
 import { sendCommand } from "@/lib/rcon";
 import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
 import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
 import { formatBytes } from "@/lib/format";
+import {
+  BadArchiveError,
+  refuseIfPreemptedEarly,
+  safeBackupName,
+} from "@/lib/backup-archive";
 
 // A restore now saves + stops the world, swaps the files and starts it again, so
 // the request lives as long as a graceful stop plus an extract.
@@ -26,29 +32,6 @@ const BACKUP_DIR = "/app/data/backups";
  * a long tar can't lose it partway through.
  */
 const TAR_TIMEOUT_MS = 300_000;
-
-/**
- * `backupName` arrives straight off the request body and is used both as a
- * filesystem path and as an argument to `tar`, so it has to be closed off before
- * either. Two near-misses to avoid repeating:
- *
- *   - `path.basename` alone stops `../../../etc/passwd` but leaves shell
- *     metacharacters intact, and quoting with `JSON.stringify` produces *double*
- *     quotes — inside which `sh` still runs `$(…)` and backticks.
- *   - `exec()` resolves on the *last* command's exit status, so `x.tar.gz; true`
- *     made a failed restore answer `{success:true}`.
- *
- * So: an allowlist, and `execFile` (argv array, no shell) for every command
- * below. A space is admitted because `/api/7dtd/reset` names its pre-reset
- * archive after the world ("Reveo Valley") without sanitising it, and with no
- * shell in the picture a space is just a character.
- */
-function safeBackupName(name: unknown): string | null {
-  if (typeof name !== "string") return null;
-  if (name !== path.basename(name)) return null; // no directory part at all
-  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*\.tar\.gz$/.test(name)) return null;
-  return name;
-}
 
 export async function GET() {
   const session = await auth();
@@ -126,8 +109,16 @@ export async function POST(request: NextRequest) {
           // that to be assumed.
           const { flushed, mustResume } = await flushMinecraft(op);
 
-          op.step("Compressing the archive");
           try {
+            // Refuse a doomed backup BEFORE the tar, not only after it. Deliberately
+            // *inside* this `try`: throwing above it would skip the `finally` that
+            // re-enables autosave, and leaving autosave off loses every minute of play
+            // since the backup — strictly worse than the torn archive this whole step
+            // exists to prevent. (MC's world tars in ~5s, so the saving here is small;
+            // the correctness of where the check sits is not.)
+            refuseIfPreemptedEarly(op, "this backup");
+
+            op.step("Compressing the archive");
             await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
               timeout: TAR_TIMEOUT_MS,
             });
@@ -178,6 +169,10 @@ export async function POST(request: NextRequest) {
         }
       );
 
+      await logBackup(session.user.id, "backup_create", {
+        name: backup.name,
+        sizeBytes: backup.size,
+      });
       return NextResponse.json({ success: true, backup });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
@@ -227,9 +222,17 @@ export async function POST(request: NextRequest) {
           restartOnFailure: false,
         }
       );
+      await logBackup(session.user.id, "backup_restore", { name, restartedAfter: restarted });
       return NextResponse.json({ success: true, restarted });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
+      // A valid gzip archive that turns out not to contain a `world/` folder is the
+      // user being wrong about their own file, and it answered **500** — "the server
+      // broke" — for a sentence that reads like advice. The message is unchanged; only
+      // the status was a lie.
+      if (e instanceof BadArchiveError) {
+        return NextResponse.json({ error: e.message }, { status: 400 });
+      }
       return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
     }
   }
@@ -252,8 +255,16 @@ export async function POST(request: NextRequest) {
     const laneBusy = fileLaneBusy("minecraft");
     if (laneBusy) return laneBusy;
 
+    const target = path.join(BACKUP_DIR, name);
     try {
-      await rm(path.join(BACKUP_DIR, name));
+      await stat(target);
+    } catch {
+      return NextResponse.json({ error: "No such backup" }, { status: 404 });
+    }
+
+    try {
+      await rm(target);
+      await logBackup(session.user.id, "backup_delete", { name });
       return NextResponse.json({ success: true });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message }, { status: 500 });
@@ -261,6 +272,39 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+}
+
+/**
+ * The durable half of this feature.
+ *
+ * The operation registry forgets a clean record in 10 minutes; `/activity` does not.
+ * Until 2026-09-29 **no backup action of any kind had ever written a row** — verified
+ * against the production DB, which held 182 rows across ten action types and not one
+ * `backup_*`. A restore replaces the world people play, and it does not go through
+ * `/api/games/control`, so it left no `server_stop`/`server_start` either: ten minutes
+ * later, nothing anywhere recorded that it happened or who did it. Every neighbouring
+ * feature in this route's own directory (`server.properties`, `ops.json`,
+ * `whitelist.json`, file edits) already wrote one.
+ *
+ * `game` has to be in `details`: `/api/activity` selects each world's panel with
+ * `contains "<game>"`, and an untagged row is shown to everyone.
+ *
+ * Logged rather than swallowed, following `mc-whitelist`'s precedent. Only ever called
+ * after the work succeeded — a refused backup writes nothing, because a log of things
+ * that did not happen is worse than no log.
+ */
+async function logBackup(
+  userId: string,
+  action: "backup_create" | "backup_restore" | "backup_delete",
+  details: Record<string, unknown>
+): Promise<void> {
+  try {
+    await db.activity.create({
+      data: { userId, action, details: JSON.stringify({ game: "minecraft", ...details }) },
+    });
+  } catch (e) {
+    console.error(`[server/backups] could not write the ${action} activity row:`, e);
+  }
 }
 
 /**
@@ -380,7 +424,9 @@ async function restoreWorld(backupPath: string): Promise<void> {
       .then((s) => s.isDirectory())
       .catch(() => false);
     if (!isDir) {
-      throw new Error("This backup has no world folder in it — nothing was changed.");
+      // `BadArchiveError`, so the route answers 400 rather than 500: a valid gzip file
+      // that happens not to contain `world/` is the user's archive being wrong.
+      throw new BadArchiveError("This backup has no world folder in it — nothing was changed.");
     }
 
     await rm(path.join(MC_DIR, "world"), { recursive: true, force: true });

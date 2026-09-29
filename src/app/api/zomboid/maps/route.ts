@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
+import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import {
   STOCK_MAPS,
@@ -19,7 +20,6 @@ export async function GET() {
   if (!gate.ok) return gate.response;
 
   const maps = await scanMaps();
-  const conflicts = findConflicts(maps);
 
   let order: string[] = [];
   let configMissing = false;
@@ -28,6 +28,11 @@ export async function GET() {
   } catch {
     configMissing = true;
   }
+
+  // The order has to be read *before* the conflicts, because a map that is not in
+  // `Map=` claims no cells and so cannot be in a conflict. With no config yet there is
+  // no order to judge against, so report every overlap rather than none.
+  const conflicts = findConflicts(maps, configMissing ? undefined : order);
 
   const installed = new Set(maps.map((m) => m.name));
   type ModTitle = { id: string; title: string };
@@ -69,7 +74,18 @@ export async function GET() {
   });
 }
 
-/** Reorder `Map=`. The first entry wins where two maps claim the same cell. */
+/**
+ * Reorder `Map=`. The first entry wins where two maps claim the same cell.
+ *
+ * What is saved here now **survives a restart**, and until 2026-09-29 it did not:
+ * the container's `entry.sh` (line 234) unconditionally `sed`s the whole `Map=` line
+ * to `${map_list}Muldraugh, KY` about 3 s before the world loads, from whatever
+ * `pz/search_folder.sh` wrote to `maps.txt`. So this route genuinely wrote the file,
+ * the card said "restart to apply", and the restart was the thing that reverted it.
+ * `search_folder.sh` now seeds itself from the `Map=` already on disk, which makes the
+ * saved order the input to the regeneration instead of its casualty. **A change to
+ * that script only takes effect after `docker compose build zomboid` and a recreate.**
+ */
 export async function PUT(request: NextRequest) {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
@@ -77,6 +93,14 @@ export async function PUT(request: NextRequest) {
   if (!hasPermission(session.user.role, "settings.edit")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+
+  // The same lane the other three writers of this exact file take (`/api/zomboid/config`,
+  // `config/import` and `files`). This one was the only `yoshling.ini` writer without it:
+  // a restore holds the lane for minutes and extracts the archive's own `Server/` over
+  // the top, so a reorder saved through the middle of one is silently discarded — while
+  // the card toasts "Map order saved".
+  const laneBusy = fileLaneBusy("zomboid");
+  if (laneBusy) return laneBusy;
 
   const body = await request.json();
   const order = (Array.isArray(body?.order) ? body.order : [])
