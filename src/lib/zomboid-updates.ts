@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
+import { parseInstalledVersions, parseLatestKnownVersions } from "@/lib/acf";
 import { PZ_APP_ID, PZ_WORKSHOP_DIR, pzConsole, readModState } from "@/lib/zomboid";
 import {
   COMPOSE_PROJECT,
@@ -250,59 +251,26 @@ async function writeWatchState(state: WatchState): Promise<void> {
   await writeFile(STATE_FILE, JSON.stringify(state), "utf-8").catch(() => {});
 }
 
-/**
- * The body of a named Valve-KeyValues block, found by matching braces.
- *
- * Bounding the block matters: `appworkshop_<appid>.acf` contains **two** sections
- * keyed by workshop id — `WorkshopItemsInstalled` (what is on disk) and
- * `WorkshopItemDetails` (what Steam knows about it, including
- * `latest_timeupdated`). Both carry a `timeupdated`. Reading from the first
- * section to end-of-file lets the second section's values win, which silently
- * makes installed == published for every mod and the staleness check a no-op that
- * always answers "nothing to do". That is exactly the bug this replaced.
- */
-function kvSection(text: string, name: string): string | null {
-  const key = `"${name}"`;
-  const at = text.indexOf(key);
-  if (at < 0) return null;
-  const open = text.indexOf("{", at + key.length);
-  if (open < 0) return null;
-
-  let depth = 0;
-  for (let i = open; i < text.length; i++) {
-    if (text[i] === "{") depth++;
-    else if (text[i] === "}" && --depth === 0) return text.slice(open + 1, i);
-  }
-  return null;
-}
-
-// The three version sources below are module-local on purpose: they are only
+// The two version sources below are module-local on purpose: they are only
 // meaningful *compared against each other*, and `findStaleMods` is that comparison
 // — including the `latestKnownVersions` cross-check, which is stale whenever the
 // server has been stopped. A caller reaching for one alone would be reading a
 // number it cannot interpret.
+//
+// The parsing itself lives in `@/lib/acf.ts`, which imports nothing: this module
+// reaches Docker and Prisma through `game-manager`, so the one part where a mistake
+// is *silent* — reading `timeupdated` out of the wrong section, which makes every mod
+// look current forever — was untestable while it lived here. See `tests/acf.test.ts`.
 
 /** `timeupdated` per installed item — the version actually on disk. */
 async function installedVersions(): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
   let text: string;
   try {
     text = await readFile(MANIFEST, "utf-8");
   } catch {
-    return out; // nothing downloaded yet
+    return new Map(); // nothing downloaded yet
   }
-
-  const section = kvSection(text, "WorkshopItemsInstalled");
-  if (!section) return out;
-
-  // Per-item blocks hold only scalars, so no nesting to worry about here.
-  const itemRe = /"(\d{6,})"\s*\{([^}]*)\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = itemRe.exec(section)) !== null) {
-    const updated = /"timeupdated"\s*"(\d+)"/.exec(m[2]);
-    if (updated) out.set(m[1], Number(updated[1]));
-  }
-  return out;
+  return parseInstalledVersions(text);
 }
 
 /**
@@ -312,24 +280,13 @@ async function installedVersions(): Promise<Map<string, number>> {
  * while the server is stopped and nothing refreshes it.
  */
 async function latestKnownVersions(): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
   let text: string;
   try {
     text = await readFile(MANIFEST, "utf-8");
   } catch {
-    return out;
+    return new Map();
   }
-
-  const section = kvSection(text, "WorkshopItemDetails");
-  if (!section) return out;
-
-  const itemRe = /"(\d{6,})"\s*\{([^}]*)\}/g;
-  let m: RegExpExecArray | null;
-  while ((m = itemRe.exec(section)) !== null) {
-    const latest = /"latest_timeupdated"\s*"(\d+)"/.exec(m[2]);
-    if (latest) out.set(m[1], Number(latest[1]));
-  }
-  return out;
+  return parseLatestKnownVersions(text);
 }
 
 /** Published `time_updated` + title per id, in ONE request for all of them. */

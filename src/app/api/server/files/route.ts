@@ -3,20 +3,12 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
+import { isPathSafe } from "@/lib/file-paths";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-
-const BLOCKED_PATTERNS = ["..", "~", "node_modules"];
-
-function isPathSafe(requestedPath: string): boolean {
-  const resolved = path.resolve(MC_DIR, requestedPath);
-  if (!resolved.startsWith(MC_DIR)) return false;
-  if (BLOCKED_PATTERNS.some((p) => requestedPath.includes(p))) return false;
-  return true;
-}
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -39,7 +31,7 @@ export async function GET(request: NextRequest) {
   const relativePath = searchParams.get("path") || "";
   const action = searchParams.get("action") || "list";
 
-  if (!isPathSafe(relativePath)) {
+  if (!isPathSafe(MC_DIR, relativePath)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
@@ -121,7 +113,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "path and content required" }, { status: 400 });
   }
 
-  if (!isPathSafe(relativePath)) {
+  if (!isPathSafe(MC_DIR, relativePath)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
@@ -166,7 +158,7 @@ export async function DELETE(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const relativePath = searchParams.get("path") || "";
 
-  if (!relativePath || !isPathSafe(relativePath)) {
+  if (!relativePath || !isPathSafe(MC_DIR, relativePath)) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 

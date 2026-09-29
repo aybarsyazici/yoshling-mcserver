@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
+import { isPathSafe } from "@/lib/file-paths";
 import { db } from "@/lib/db";
 import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
@@ -15,18 +16,9 @@ const ROOTS: Record<string, string> = {
   saves: process.env.SDTD_SERVER_DIR || "/sevendtd",
 };
 
-const BLOCKED_PATTERNS = ["..", "~", "node_modules"];
-
 function resolveRoot(root: string | null): string | null {
   if (!root) return ROOTS.config;
   return ROOTS[root] ?? null;
-}
-
-function isPathSafe(baseDir: string, requestedPath: string): boolean {
-  const resolved = path.resolve(baseDir, requestedPath);
-  if (!resolved.startsWith(baseDir)) return false;
-  if (BLOCKED_PATTERNS.some((p) => requestedPath.includes(p))) return false;
-  return true;
 }
 
 export async function GET(request: NextRequest) {

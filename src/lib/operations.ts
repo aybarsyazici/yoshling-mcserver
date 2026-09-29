@@ -902,14 +902,26 @@ function summarize(entry: Entry, outcome: Outcome): string {
           ["World map"]
         )}`;
       }
-      if (outcome === "partial") {
-        return `Backup created — ${size}, but ${
-          warnText.toLowerCase() || "part of it is missing"
-        }. This is not a restore point.`;
+      // Evidence required, and `warnText` IS the evidence. The fallback string used to be
+      // `"part of it is missing"`, which fired whenever `warnText` was empty — and a
+      // `partial` with no warn fact at all is the commonest way to get here: any `noop`
+      // step makes the whole operation `partial`. So a flawless archive of a STOPPED
+      // world, whose flush step legitimately had nothing to do, was published as
+      // "Backup created — 217 MB, but part of it is missing. This is not a restore point."
+      // in amber, on the everyday path — Minecraft and 7 Days to Die are both normally
+      // stopped. The routes were fixed to settle that step `done`, but leaving the
+      // fallback here means the next route author's `noop` re-creates the same lie, which
+      // is exactly the rule in `docs/OPERATIONS.md`: never branch on
+      // `outcome === "partial"` to make a claim the facts do not support.
+      if (outcome === "partial" && warnText) {
+        return `Backup created — ${size}, but ${warnText.toLowerCase()}. This is not a restore point.`;
       }
+      // Still `partial`, so the row and toast stay amber — but the sentence names the step
+      // that did nothing instead of inventing a missing part.
+      const skipped = outcome === "partial" ? entry.steps.find((s) => s.kind === "noop") : undefined;
       return `Backup created — ${size}${
         factValue(entry, "World map") === "included" ? ", world map included" : ""
-      }.`;
+      }.${skipped ? ` ${trimSentence(skipped.label)}.` : ""}`;
     }
     case "backup.restore": {
       const from = factValue(entry, "Archive");
