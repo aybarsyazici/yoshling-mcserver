@@ -6,7 +6,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, mkdir, rename } from "fs/promises";
 import path from "path";
-import { ControlBusyError, setControlStage, withGameStopped } from "@/lib/game-manager";
+import { withGameStopped } from "@/lib/game-manager";
+import { refuseIfPreempted, runOperation } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { formatBytes } from "@/lib/format";
 
 // A restore now saves + stops the world, swaps the files and starts it again, so
 // the request lives as long as a graceful stop plus an extract.
@@ -98,18 +101,61 @@ export async function POST(request: NextRequest) {
     const filename = `world-${timestamp}.tar.gz`;
     const target = path.join(BACKUP_DIR, filename);
     try {
-      await mkdir(BACKUP_DIR, { recursive: true });
-      await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
-        timeout: TAR_TIMEOUT_MS,
-      });
+      // Tracked as an operation even though a 217 MB Minecraft world tars in ~5s:
+      // the classification is made here, at the moment the work is entered, not by
+      // the caller — and the same code path takes 4m 20s for Project Zomboid's 1.9 GB.
+      // A duration cutoff applied at the call site structurally cannot get that right.
+      // It holds `files:minecraft`, so two creates serialise and a restore cannot run
+      // through the middle of a `tar` and tear the archive.
+      const backup = await runOperation(
+        {
+          kind: "backup.create",
+          game: "minecraft",
+          title: "Creating a backup",
+          startedBy: session.user.name ? { name: session.user.name } : null,
+        },
+        async (op) => {
+          await mkdir(BACKUP_DIR, { recursive: true });
+          op.step("Compressing the archive");
+          await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
+            timeout: TAR_TIMEOUT_MS,
+          });
 
-      const s = await stat(target);
+          // Read the size back off disk. Without this the operation has no evidence
+          // and renders `unverified` — which is the correct, visible price for
+          // claiming a backup exists without looking.
+          let size: number | null = null;
+          let mtime = new Date();
+          try {
+            const s = await stat(target);
+            size = s.size;
+            mtime = s.mtime;
+          } catch {}
+          op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
 
-      return NextResponse.json({
-        success: true,
-        backup: { name: filename, size: s.size, createdAt: s.mtime.toISOString() },
-      });
+          // A power operation admitted over this one means the world was saved and
+          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
+          // as a restore point would be exactly the "reports success after doing the
+          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
+          // below does the `rm`.
+          refuseIfPreempted(op, "this backup");
+
+          return {
+            facts:
+              size != null
+                ? [
+                    { label: "Size", value: formatBytes(size) },
+                    { label: "World map", value: "included" },
+                  ]
+                : [],
+            value: { name: filename, size: size ?? 0, createdAt: mtime.toISOString() },
+          };
+        }
+      );
+
+      return NextResponse.json({ success: true, backup });
     } catch (e) {
+      if (isConflict(e)) return conflictResponse(e);
       // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
       // behind, and the listing would offer it as something you can restore.
       await rm(target, { force: true }).catch(() => {});
@@ -137,22 +183,28 @@ export async function POST(request: NextRequest) {
       // and starts again only if it was running; it also holds the control lock,
       // so a Power on can't race in halfway through and the banner can say what
       // is happening.
-      const { restarted } = await withGameStopped("minecraft", "restart", async () => {
-        setControlStage("Restoring the world from backup");
-        await restoreWorld(backupPath);
-      },
-      // A half-replaced world is worse than a stopped one: the game would rewrite
-      // the mess on its first autosave. Staying down keeps the archive usable.
-      { restartOnFailure: false }
+      const { restarted } = await withGameStopped(
+        "minecraft",
+        "restart",
+        async (op) => {
+          op.step("Restoring the world from backup");
+          op.detail(name);
+          await restoreWorld(backupPath);
+          op.settle("Replaced the world folder");
+          op.fact({ label: "Archive", value: name });
+        },
+        {
+          kind: "backup.restore",
+          title: "Restoring a backup",
+          startedBy: session.user.name,
+          // A half-replaced world is worse than a stopped one: the game would rewrite
+          // the mess on its first autosave. Staying down keeps the archive usable.
+          restartOnFailure: false,
+        }
       );
       return NextResponse.json({ success: true, restarted });
     } catch (e) {
-      if (e instanceof ControlBusyError) {
-        return NextResponse.json(
-          { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
-          { status: 409 }
-        );
-      }
+      if (isConflict(e)) return conflictResponse(e);
       return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
     }
   }

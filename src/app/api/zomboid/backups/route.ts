@@ -6,7 +6,10 @@ import { promisify } from "util";
 import { readdir, stat, rm, writeFile, mkdir, cp } from "fs/promises";
 import path from "path";
 import { PZ_DIR, savePaths } from "@/lib/zomboid";
-import { ControlBusyError, setControlStage, withGameStopped } from "@/lib/game-manager";
+import { withGameStopped } from "@/lib/game-manager";
+import { refuseIfPreempted, runOperation, type OperationFact } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { formatBytes } from "@/lib/format";
 
 export const maxDuration = 300;
 
@@ -114,61 +117,120 @@ export async function POST(request: NextRequest) {
     const work = path.join(BACKUP_DIR, `.work-${stamp}`);
     let target = "";
     try {
-      await mkdir(BACKUP_DIR, { recursive: true });
-      const { name, world, db: dbFile, serverDir } = await savePaths();
-
-      // Stage the pieces in a work dir, then tar them together.
-      await rm(work, { recursive: true, force: true });
-      await mkdir(work, { recursive: true });
-
-      // 1) the world
-      let includesWorld = false;
-      if (await exists(world)) {
-        await mkdir(path.join(work, "Saves", "Multiplayer"), { recursive: true });
-        await cp(world, path.join(work, "Saves", "Multiplayer", name), { recursive: true });
-        includesWorld = true;
-      }
-      // else: never started — nothing to snapshot yet, still back up the config.
-
-      // 2) the player database
-      let includesDb = false;
-      if (await exists(dbFile)) {
-        await mkdir(path.join(work, "db"), { recursive: true });
-        await cp(dbFile, path.join(work, "db", `${name}.db`));
-        includesDb = true;
-      }
-
-      // 3) the server config trio (.ini + SandboxVars + spawnregions)
-      await mkdir(path.join(work, "Server"), { recursive: true });
-      for (const f of await readdir(serverDir)) {
-        if (!f.startsWith(name)) continue;
-        await cp(path.join(serverDir, f), path.join(work, "Server", f), { recursive: true });
-      }
-
-      const manifest: Manifest = {
-        createdAt: new Date().toISOString(),
-        serverName: name,
-        includesWorld,
-        includesDb,
-      };
-      await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
-
-      const filename = `zomboid-${name}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
-      target = path.join(BACKUP_DIR, filename);
-      await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
-
-      const s = await stat(target);
-      return NextResponse.json({
-        success: true,
-        backup: {
-          name: filename,
-          size: s.size,
-          createdAt: s.mtime.toISOString(),
-          world: name,
-          includesWorldMap: includesWorld,
+      // Measured on the box: 1.9 GB of Saves → **4 min 20 s** and a 198 MB archive.
+      // Past Cloudflare's ~100s origin read timeout, so the client's own response is
+      // not a reliable source of truth for the outcome — server-side tracking is the
+      // only possible mechanism here, not a nicety. Holds `files:zomboid`, so a
+      // restore can no longer run through the middle of the `cp -r` and tear it.
+      const backup = await runOperation(
+        {
+          kind: "backup.create",
+          game: "zomboid",
+          title: "Creating a backup",
+          startedBy: gate.session.user.name ? { name: gate.session.user.name } : null,
         },
-      });
+        async (op) => {
+          await mkdir(BACKUP_DIR, { recursive: true });
+          const { name, world, db: dbFile, serverDir } = await savePaths();
+
+          // Stage the pieces in a work dir, then tar them together.
+          await rm(work, { recursive: true, force: true });
+          await mkdir(work, { recursive: true });
+
+          // 1) the world
+          op.step("Copying the world");
+          op.detail(name);
+          let includesWorld = false;
+          if (await exists(world)) {
+            await mkdir(path.join(work, "Saves", "Multiplayer"), { recursive: true });
+            await cp(world, path.join(work, "Saves", "Multiplayer", name), { recursive: true });
+            includesWorld = true;
+            op.settle("Copied the world");
+          } else {
+            // Never started — nothing to snapshot yet. The config is still worth
+            // keeping, but an archive with no world is NOT a restore point, and that
+            // has to be visible rather than inferred from a 4 MB size.
+            op.settle("No world on disk yet — nothing to copy", { kind: "noop" });
+          }
+
+          // 2) the player database
+          op.step("Copying the player database");
+          let includesDb = false;
+          if (await exists(dbFile)) {
+            await mkdir(path.join(work, "db"), { recursive: true });
+            await cp(dbFile, path.join(work, "db", `${name}.db`));
+            includesDb = true;
+            op.settle("Copied the player database");
+          } else {
+            op.settle("No player database yet");
+          }
+
+          // 3) the server config trio (.ini + SandboxVars + spawnregions)
+          op.step("Copying the server config");
+          await mkdir(path.join(work, "Server"), { recursive: true });
+          let configFiles = 0;
+          for (const f of await readdir(serverDir)) {
+            if (!f.startsWith(name)) continue;
+            await cp(path.join(serverDir, f), path.join(work, "Server", f), { recursive: true });
+            configFiles++;
+          }
+          op.settle("Copied the server config", {
+            count: { done: configFiles, noun: "files" },
+          });
+
+          const manifest: Manifest = {
+            createdAt: new Date().toISOString(),
+            serverName: name,
+            includesWorld,
+            includesDb,
+          };
+          await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
+
+          const filename = `zomboid-${name}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
+          target = path.join(BACKUP_DIR, filename);
+          op.step("Compressing the archive");
+          await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
+
+          let size: number | null = null;
+          let mtime = new Date();
+          try {
+            const s = await stat(target);
+            size = s.size;
+            mtime = s.mtime;
+          } catch {}
+          op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
+
+          // A power operation admitted over this one means the world was saved and
+          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
+          // as a restore point would be exactly the "reports success after doing the
+          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
+          // below does the `rm`.
+          refuseIfPreempted(op, "this backup");
+
+          const facts: OperationFact[] = [];
+          if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
+          facts.push({
+            label: "World map",
+            value: includesWorld ? "included" : "not included",
+            // A config-only archive is not something you can restore a world from.
+            verdict: includesWorld ? undefined : "warn",
+          });
+          facts.push({ label: "Player database", value: includesDb ? "included" : "not included" });
+          return {
+            facts,
+            value: {
+              name: filename,
+              size: size ?? 0,
+              createdAt: mtime.toISOString(),
+              world: name,
+              includesWorldMap: includesWorld,
+            },
+          };
+        }
+      );
+      return NextResponse.json({ success: true, backup });
     } catch (e) {
+      if (isConflict(e)) return conflictResponse(e);
       // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
       // that the listing would offer as restorable.
       if (target) await rm(target, { force: true }).catch(() => {});
@@ -197,20 +259,27 @@ export async function POST(request: NextRequest) {
       // and starts again only if it was running; it also holds the control lock,
       // so a Power on can't race in halfway through and the banner can say what
       // is happening.
-      const { restarted } = await withGameStopped("zomboid", "restart", async () => {
-        setControlStage("Restoring the save from backup");
-        await restoreBundle(backupPath, serverName, m);
-      },
-      { restartOnFailure: false }
+      const { restarted } = await withGameStopped(
+        "zomboid",
+        "restart",
+        async (op) => {
+          op.step("Restoring the save from backup");
+          op.detail(name);
+          await restoreBundle(backupPath, serverName, m);
+          op.settle("Replaced the world, the player database and the config");
+          op.fact({ label: "Archive", value: name });
+          op.fact({ label: "World", value: serverName });
+        },
+        {
+          kind: "backup.restore",
+          title: "Restoring a backup",
+          startedBy: gate.session.user.name,
+          restartOnFailure: false,
+        }
       );
       return NextResponse.json({ success: true, restoredWorld: serverName, restarted });
     } catch (e) {
-      if (e instanceof ControlBusyError) {
-        return NextResponse.json(
-          { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
-          { status: 409 }
-        );
-      }
+      if (isConflict(e)) return conflictResponse(e);
       return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
     }
   }

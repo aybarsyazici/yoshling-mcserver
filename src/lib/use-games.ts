@@ -31,6 +31,12 @@ export interface ControlLock {
   game: GameId;
   action: "start" | "stop" | "restart";
   since: number;
+  /**
+   * Last proof-of-life from the holder. It has always been on the wire; it was
+   * just never declared here, so nothing could tell a slow operation from a dead
+   * one on the client side.
+   */
+  beat: number;
   /** What the operation is doing right now, e.g. "Downloading updated mods". */
   stage?: string;
 }
@@ -56,6 +62,13 @@ export interface GamesState {
   memoryGb: Partial<Record<GameId, number | null>>;
   /** Total host RAM in GB. */
   hostGb: number | null;
+  /**
+   * The server's clock at the last poll, minus the browser's at the same moment.
+   * Elapsed times add this: `Date.now() - busy.since` mixes a browser clock with a
+   * server epoch, and a machine a few minutes out then shows nonsense or negative
+   * durations.
+   */
+  clockSkewMs: number;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -69,15 +82,18 @@ export function useGames(interval = 5000): GamesState {
   const [can, setCan] = useState({ start: false, stop: false, restart: false });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
+  const [clockSkewMs, setClockSkewMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
 
   const refresh = useCallback(async () => {
     try {
+      const receivedAt = Date.now();
       const res = await fetch("/api/games/status", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
       if (!alive.current) return;
+      if (typeof data.serverNow === "number") setClockSkewMs(data.serverNow - receivedAt);
       setGames(data.games);
       setActiveGame(data.activeGame ?? null);
       setBusy(data.busy ?? null);
@@ -108,5 +124,5 @@ export function useGames(interval = 5000): GamesState {
     };
   }, [refresh, interval]);
 
-  return { games, activeGame, busy, access, can, memoryGb, hostGb, loading, refresh };
+  return { games, activeGame, busy, access, can, memoryGb, hostGb, clockSkewMs, loading, refresh };
 }

@@ -92,10 +92,18 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
       let data: { success?: boolean; hint?: string; error?: string; name?: string } = {};
       try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status >= 200 && xhr.status < 300 && data.success) {
-        toast.success(data.hint || `Uploaded ${data.name}`);
+        // No toast. `xhr.onload` resolves only after the whole server-side operation has
+        // finished and returned, so the old comment here ("the transfer is the only half
+        // this client can see") was simply wrong — and a green `toast.success` fired
+        // beside the operation's amber "Uploaded and placed Reveo Valley… Also, it
+        // replaced an existing copy of the same name." Two different severities for one
+        // event, with the wrong one coloured reassuringly. The operation's summary is the
+        // only text that cannot overstate, so it is the single voice.
         setFile(null);
         setProgress(0);
         loadWorlds();
+      } else if (xhr.status === 409 && data.error) {
+        toast.error(data.error);
       } else if (xhr.status === 413) {
         toast.error("File too large for this route. The direct-upload host may not be configured.");
       } else {

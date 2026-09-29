@@ -6,7 +6,12 @@ import { promisify } from "util";
 import { db } from "@/lib/db";
 import { patchServiceEnv, readCompose, writeCompose } from "@/lib/compose";
 import { recreateService } from "@/lib/game-manager";
+import { POWER_RESOURCES, runOperation } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 
+// A Vercel-only hint: this deployment runs `node server.js`, so it does nothing here.
+// The real cap is Cloudflare's ~100s origin read timeout. Left as documentation of
+// intent; the operation registry is what actually survives the response being lost.
 export const maxDuration = 300;
 
 const execAsync = promisify(exec);
@@ -74,51 +79,109 @@ export async function POST() {
   if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   try {
-    // Save the world first if it's up (best-effort).
-    try {
-      const { sdtdSaveWorld } = await import("@/lib/telnet");
-      await sdtdSaveWorld();
-    } catch {}
+    /**
+     * This is the operation the whole ledger exists for.
+     *
+     * It was completely untracked: it called `recreateService()` directly, which takes
+     * no lock and enters no record, so a ~17 GB SteamCMD download ran inside the
+     * container for twenty minutes with nothing watching it and nothing refusing to
+     * interleave — `powerOn("zomboid")` would cheerfully stop 7DTD mid-download. The
+     * only feedback was `toast.success("Update started")`, gone in four seconds.
+     *
+     * Note what the operation can honestly claim: it proves the container was
+     * recreated with `START_MODE=3`, which means the update was *requested*. The
+     * installed build id cannot change until the download finishes, so a `warn` fact
+     * is the truthful verdict and the synthetic boot operation carries the next twenty
+     * minutes from the container's own log.
+     */
+    const result = await runOperation(
+      {
+        kind: "game.update",
+        game: "7dtd",
+        title: "Updating 7 Days to Die",
+        resources: POWER_RESOURCES,
+        startedBy: session.user.name ? { name: session.user.name } : null,
+      },
+      async (op) => {
+        const [installedBefore] = await Promise.all([installedBuildId()]);
 
-    // START_MODE=3 is "update, then start". It's a one-shot: flip it in compose,
-    // recreate through compose so the container keeps its labels, network alias
-    // and mounts, then flip it back so the NEXT recreate is a normal start.
-    //
-    // This used to `docker rm -f` and hand-build a `docker run`, which produced a
-    // container with no compose labels — the next `docker compose up` couldn't
-    // adopt it, and the hardcoded volume/port list silently drifted from compose
-    // (that's how the `sevendtd` network alias went missing once before).
-    const before = await readCompose();
-    const version = /VERSION:\s*"?([^"\n]+)"?/.exec(
-      before.slice(before.indexOf("  sevendtd:"))
-    )?.[1]?.trim() ?? "latest_experimental";
+        op.step("Saving the world");
+        // Best-effort: the server may not be up, and that is not a reason to refuse.
+        let saved = false;
+        try {
+          const { sdtdSaveWorld } = await import("@/lib/telnet");
+          await sdtdSaveWorld();
+          saved = true;
+        } catch {}
+        op.settle(saved ? "Saved the world" : "No running server to save", {
+          kind: saved ? "done" : "noop",
+        });
 
-    const up = patchServiceEnv(before, "sevendtd", { START_MODE: "3" });
-    if (up.applied.length === 0) {
-      return NextResponse.json(
-        { error: "Couldn't find START_MODE in the sevendtd service" },
-        { status: 500 }
-      );
-    }
-    await writeCompose(up.text);
+        // START_MODE=3 is "update, then start". It's a one-shot: flip it in compose,
+        // recreate through compose so the container keeps its labels, network alias
+        // and mounts, then flip it back so the NEXT recreate is a normal start.
+        //
+        // This used to `docker rm -f` and hand-build a `docker run`, which produced a
+        // container with no compose labels — the next `docker compose up` couldn't
+        // adopt it, and the hardcoded volume/port list silently drifted from compose
+        // (that's how the `sevendtd` network alias went missing once before).
+        op.step("Requesting the update");
+        const before = await readCompose();
+        const version =
+          /VERSION:\s*"?([^"\n]+)"?/
+            .exec(before.slice(before.indexOf("  sevendtd:")))?.[1]
+            ?.trim() ?? "latest_experimental";
 
-    try {
-      await recreateService("7dtd", { start: true });
-    } finally {
-      // Always put it back, even if the recreate failed, so a later start isn't
-      // stuck re-running the ~17GB update.
-      await writeCompose(patchServiceEnv(await readCompose(), "sevendtd", { START_MODE: "1" }).text);
-    }
+        const up = patchServiceEnv(before, "sevendtd", { START_MODE: "3" });
+        if (up.applied.length === 0) {
+          throw new Error("Couldn't find START_MODE in the sevendtd service");
+        }
+        await writeCompose(up.text);
+
+        try {
+          await recreateService("7dtd", { start: true });
+        } finally {
+          // Always put it back, even if the recreate failed, so a later start isn't
+          // stuck re-running the ~17GB update.
+          await writeCompose(
+            patchServiceEnv(await readCompose(), "sevendtd", { START_MODE: "1" }).text
+          );
+        }
+
+        const latest = await branchInfo(version);
+        const target = latest.buildid;
+        op.settle(
+          target && installedBefore
+            ? `Requested the update — build ${installedBefore} → ${target}, downloading`
+            : "Requested the update — SteamCMD is downloading"
+        );
+        op.detail("the download runs inside the container; watch the boot progress");
+
+        // Amber by construction. All we proved is that we asked.
+        op.fact({
+          label: "Build",
+          value:
+            target && installedBefore
+              ? `${installedBefore} → ${target} (downloading)`
+              : "downloading",
+          verdict: "warn",
+        });
+        op.fact({ label: "Branch", value: version });
+        return { value: { version, from: installedBefore, to: target } };
+      }
+    );
 
     await db.activity
-      .create({ data: { userId: session.user.id, action: "server_update", details: JSON.stringify({ game: "7dtd", branch: version }) } })
+      .create({ data: { userId: session.user.id, action: "server_update", details: JSON.stringify({ game: "7dtd", branch: result.version }) } })
       .catch(() => {});
 
     return NextResponse.json({
       success: true,
-      message: "Update started. The server is downloading the latest build and will come back online in a few minutes.",
+      message:
+        "Update requested — the server is downloading the new build. Watch the strip at the top of the page.",
     });
   } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
     return NextResponse.json({ error: (e as Error).message || "Update failed" }, { status: 500 });
   }
 }

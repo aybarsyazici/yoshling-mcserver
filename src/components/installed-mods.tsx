@@ -47,10 +47,13 @@ export function InstalledMods() {
         setMods((prev) => prev.filter((m) => m.id !== mod.id));
         toast.success(`${mod.name} removed. Restart server to apply.`);
       } else {
-        toast.error("Failed to remove mod");
+        // Both of these were `toast.error("Failed to remove mod")` with the body never
+        // read, so `/api/mods/[id]`'s own message — which says *why* — was discarded.
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || `Couldn't remove ${mod.name}`);
       }
     } catch {
-      toast.error("Failed to remove mod");
+      toast.error(`Couldn't reach the server to remove ${mod.name}. Nothing was changed.`);
     } finally {
       setRemoving(null);
     }

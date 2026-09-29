@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { GameMark } from "@/components/glyphs";
-import { GAME_LIST, type GameId } from "@/lib/games";
+import { GAMES, GAME_LIST, type GameId } from "@/lib/games";
 
 const ROLE_TINT: Record<string, string> = {
   ADMIN: "var(--primary)",
@@ -73,7 +73,16 @@ export function CrewList({
       setCrew((prev) => prev.map((u) => (u.id === user.id ? { ...u, games: user.games } : u)));
       const data = await res.json().catch(() => ({}));
       toast.error(data.error || "Couldn't change world access");
+      return;
     }
+    // One line, because this is the only action here that changes what *another*
+    // person can see, and an optimistic chip was the whole of the feedback.
+    const granted = next.length > user.games.length;
+    toast.success(
+      granted
+        ? `Granted ${GAMES[game].name} access to ${user.username}.`
+        : `Removed ${GAMES[game].name} access from ${user.username}.`
+    );
   }
 
   return (

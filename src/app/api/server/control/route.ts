@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { powerOn, powerOff, restartGame, ControlBusyError } from "@/lib/game-manager";
+import { powerOn, powerOff, restartGame } from "@/lib/game-manager";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 
 // Legacy Minecraft-only control endpoint. Kept for backward compatibility;
@@ -50,12 +51,7 @@ export async function POST(request: NextRequest) {
         break;
     }
   } catch (e) {
-    if (e instanceof ControlBusyError) {
-      return NextResponse.json(
-        { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
-        { status: 409 }
-      );
-    }
+    if (isConflict(e)) return conflictResponse(e);
     const msg = e instanceof Error ? e.message : "Server control failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

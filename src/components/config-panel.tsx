@@ -126,16 +126,59 @@ export function ConfigPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ updates }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        toast.success(`Saved ${data.applied?.length ?? dirty.length} setting(s). ${restartNote}`);
-        setProps(
-          (prev) =>
-            prev?.map((p) => (draft[p.name] !== undefined ? { ...p, value: draft[p.name] } : p)) ??
-            prev
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error || "Couldn't save");
+        return;
+      }
+
+      // `applied` and `ignored` are what the route actually did, and both were thrown
+      // away here. `applied: []` toasted a green "Saved 0 setting(s)", and `ignored` —
+      // returned for exactly this purpose, e.g. 7DTD's Difficulty and Day length, which
+      // are not properties this server's XML has — was never read at all.
+      const applied: string[] = Array.isArray(data.applied) ? data.applied : [];
+      const ignored: string[] = Array.isArray(data.ignored) ? data.ignored : [];
+
+      // Only write back what the server says it wrote. This used to optimistically
+      // copy EVERY draft value into the displayed props, so a property the server
+      // refused was redisplayed as if it had been saved — the UI manufacturing the
+      // confirmation the server had declined to give.
+      const accepted = new Set(data.applied ? applied : dirty.map((p) => p.name));
+      setProps(
+        (prev) =>
+          prev?.map((p) =>
+            accepted.has(p.name) && draft[p.name] !== undefined
+              ? { ...p, value: draft[p.name] }
+              : p
+          ) ?? prev
+      );
+      // And put the refused fields back to the server's value, so the form stops
+      // showing a pending edit that will never land.
+      if (ignored.length > 0) {
+        setDraft((d) => {
+          const next = { ...d };
+          for (const p of props ?? []) if (ignored.includes(p.name)) next[p.name] = p.value;
+          return next;
+        });
+      }
+
+      const n = data.applied ? applied.length : dirty.length;
+      if (n === 0 && ignored.length > 0) {
+        toast.warning(
+          `Nothing was saved. ${ignored.join(", ")} ${
+            ignored.length === 1 ? "is not a setting" : "are not settings"
+          } this server has.`
+        );
+      } else if (n === 0) {
+        toast.warning("Nothing was saved — the server applied none of those settings.");
+      } else if (ignored.length > 0) {
+        toast.warning(
+          `Saved ${n} of ${n + ignored.length} settings. ${ignored.join(", ")} ${
+            ignored.length === 1 ? "isn't a setting" : "aren't settings"
+          } this server has, so ${ignored.length === 1 ? "it was" : "they were"} not written. ${restartNote}`
         );
       } else {
-        toast.error(data.error || "Couldn't save");
+        toast.success(`Saved ${n} setting${n === 1 ? "" : "s"}. ${restartNote}`);
       }
     } catch {
       toast.error("Couldn't save");

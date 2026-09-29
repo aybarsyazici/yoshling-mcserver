@@ -73,15 +73,26 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
         return;
       }
       const n = data.stale?.length ?? 0;
-      if (data.action === "applied") toast.success("Updates applied and the server restarted");
-      else if (data.action === "seeded") toast.success("Mods updated on disk");
+      // Not "applied": that answer arrives through the operation's own completion
+      // toast, whose text is the server's summary and therefore names how many mods
+      // actually downloaded. This button is the same route and the same click whether
+      // the work takes 2 seconds or 6 minutes, which is exactly why the classification
+      // is made server-side and not here.
+      if (data.action === "applied" || data.action === "seeded") await load();
       else if (data.action === "announced")
         toast.info(`${n} update${n === 1 ? "" : "s"} pending — waiting for the server to empty`);
       else if (data.action === "skipped") toast.info("A server operation is already running");
-      else toast.success("All mods are up to date");
+      else toast.success("Checked just now — all mods are up to date");
       await load();
     } catch {
-      toast.error("Network error");
+      // A real apply takes ~6 minutes (measured 18:30:25 → 18:36:23), so the response
+      // cannot arrive inside Cloudflare's ~100s window: this fired red on the
+      // *successful* path, which meant a working apply was only ever reported as a
+      // failure. The strip at the top of the page is what actually tracks it.
+      toast.info(
+        "Still checking. If an update was found the server is being restarted now — watch the " +
+          "strip at the top of the page; it survives a reload."
+      );
     } finally {
       setChecking(false);
     }

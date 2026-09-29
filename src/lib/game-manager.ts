@@ -7,6 +7,15 @@ import { sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
 import { getPzStatus, pzSave, readModState } from "@/lib/zomboid";
 import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
+import {
+  POWER_RESOURCES,
+  runOperation,
+  type ControlAction,
+  type OperationFact,
+  type OperationKind,
+  type OpHandle,
+  type OpSuccess,
+} from "@/lib/operations";
 
 const execAsync = promisify(exec);
 
@@ -196,7 +205,16 @@ export interface GameStatus {
 interface GameDriver {
   status(): Promise<GameStatus>;
   start(): Promise<void>;
-  /** Graceful: ask the game to save, then stop the container. */
+  /**
+   * Ask the game to write the world out. Split from `stop()` so the two can be
+   * narrated separately: for Project Zomboid the save takes 433 ms and the stop
+   * takes the full 300 s, and one combined "Saving and stopping" step spends five
+   * minutes implying the save is what's slow.
+   */
+  save(): Promise<void>;
+  /** Stop the container, with this game's own grace period. */
+  stop(): Promise<void>;
+  /** Graceful: `save()` then `stop()`. */
   gracefulStop(): Promise<void>;
   restart(): Promise<void>;
 }
@@ -357,13 +375,19 @@ const minecraftDriver: GameDriver = {
   async start() {
     await execAsync(`docker start ${RUNTIME.minecraft.container}`);
   },
-  async gracefulStop() {
+  async save() {
     // Save chunks over RCON before pulling the plug so no progress is lost.
     try {
       await rconSend("save-all flush");
       await new Promise((r) => setTimeout(r, 1500));
     } catch {}
+  },
+  async stop() {
     await execAsync(`docker stop ${RUNTIME.minecraft.container}`);
+  },
+  async gracefulStop() {
+    await minecraftDriver.save();
+    await minecraftDriver.stop();
   },
   async restart() {
     try {
@@ -454,12 +478,18 @@ const sevenDtdDriver: GameDriver = {
   async start() {
     await execAsync(`docker start ${RUNTIME["7dtd"].container}`);
   },
-  async gracefulStop() {
+  async save() {
     try {
       await sdtdSaveWorld();
       await new Promise((r) => setTimeout(r, 1000));
     } catch {}
+  },
+  async stop() {
     await execAsync(`docker stop ${RUNTIME["7dtd"].container}`);
+  },
+  async gracefulStop() {
+    await sevenDtdDriver.save();
+    await sevenDtdDriver.stop();
   },
   async restart() {
     try {
@@ -561,12 +591,18 @@ const zomboidDriver: GameDriver = {
   async start() {
     await execAsync(`docker start ${RUNTIME.zomboid.container}`);
   },
-  async gracefulStop() {
+  async save() {
     try {
       await pzSave();
       await new Promise((r) => setTimeout(r, 1000));
     } catch {}
+  },
+  async stop() {
     await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${RUNTIME.zomboid.container}`);
+  },
+  async gracefulStop() {
+    await zomboidDriver.save();
+    await zomboidDriver.stop();
   },
   async restart() {
     try {
@@ -597,89 +633,190 @@ export async function getAllStatus(): Promise<Record<GameId, GameStatus>> {
   return Object.fromEntries(entries) as Record<GameId, GameStatus>;
 }
 
+/**
+ * `getAllStatus`, coalesced.
+ *
+ * A full sweep is ~6 `docker inspect` forks at rest and ~15 while a world boots
+ * (`docker logs | awk` plus a `lastLogLine`). `/api/games/status` is polled every
+ * 4s by up to six independent `useGames` instances on one page, and the operations
+ * endpoint polls every 1.5s for the boot projection — so without a shared cache
+ * the ledger would multiply a measured problem. 3.5s is under the status poll's own
+ * interval, so no consumer sees data older than it already tolerates.
+ */
+export const cachedAllStatus = cachedProbe(3500, getAllStatus);
+
 export interface HandoffStep {
   step: string;
   game?: GameId;
 }
 
-// ── control lock ─────────────────────────────────────────────────────────────
+// ── power operations ─────────────────────────────────────────────────────────
 //
-// The box can only be doing ONE power operation at a time. Without this, a user
+// The box can only be doing ONE power operation at a time. Without that, a user
 // spamming Start/Stop/Restart (or two admins in different tabs) would fire
 // overlapping `docker` commands and risk a corrupt save or a wedged container.
-// A single in-process lock serializes all control actions; a concurrent request
-// is rejected with ControlBusyError (surfaced as HTTP 409). The web app runs as
-// one long-lived Node process, so this module-level state is shared across all
-// requests. A max age guards against a crashed op locking things forever.
+//
+// The lock itself now lives in `src/lib/operations.ts`, as the registry entry
+// holding the `"power"` resource — `currentControlLock()` is a projection of it,
+// so `busy` keeps its exact wire shape. Expiry is still judged on the heartbeat and
+// there is still **no cap on total duration**: at 300s that cap was shorter than a
+// single Project Zomboid graceful stop, so a mod-update apply lost its own lock
+// partway through, a second operation started on top, and two SteamCMD runs raced
+// on the workshop volume until one reported "updated 0 of 1 mods".
 
-export type ControlAction = "start" | "stop" | "restart";
-export interface ControlLock {
-  game: GameId;
-  action: ControlAction;
-  /** When the operation began. Never moves — the UI shows elapsed time from it. */
-  since: number;
-  /**
-   * Last proof-of-life from the holder, refreshed while it works. Expiry is
-   * judged on THIS, not `since`, so a slow operation keeps its lock while a
-   * crashed one still releases.
-   */
-  beat: number;
-  /** What the holder is doing right now, for the UI. */
-  stage?: string;
+export {
+  ControlBusyError,
+  OperationConflictError,
+  currentControlLock,
+  setControlStage,
+  type ControlAction,
+  type ControlLock,
+} from "@/lib/operations";
+
+/**
+ * Run a power-adjacent operation. Holds `"power"` plus every `files:` lane, since
+ * saving and stopping a world writes that world's files.
+ *
+ * Always records where the world was left, **including on the failure path**: a
+ * failed summary that doesn't say whether the server came back is the least useful
+ * sentence we could write, because `restart: "no"` means nothing revives Project
+ * Zomboid and nothing else on the page says so either.
+ */
+async function withPowerOperation<T>(
+  spec: {
+    kind: OperationKind;
+    game: GameId;
+    action: ControlAction;
+    title: string;
+    startedBy?: string | null;
+  },
+  fn: (op: OpHandle) => Promise<OpSuccess<T>>
+): Promise<T> {
+  return runOperation(
+    {
+      kind: spec.kind,
+      game: spec.game,
+      action: spec.action,
+      title: spec.title,
+      resources: POWER_RESOURCES,
+      startedBy: spec.startedBy ? { name: spec.startedBy } : null,
+    },
+    async (op) => {
+      try {
+        return await fn(op);
+      } catch (err) {
+        try {
+          const state = await containerState(RUNTIME[spec.game].container);
+          op.fact({
+            label: "Power",
+            value: state === "running" ? "still running" : "still powered off",
+          });
+        } catch {
+          /* nothing to add; the summary falls back to "check its page" */
+        }
+        throw err;
+      }
+    }
+  );
+}
+
+/** Read back what happened to the process, not just whether `docker` exited 0. */
+async function containerExit(container: string): Promise<{ state: string; exitCode: number | null }> {
+  try {
+    const { stdout } = await execAsync(
+      `docker inspect --format='{{.State.Status}}|{{.State.ExitCode}}' ${container}`
+    );
+    const [state, code] = stdout.trim().replace(/'/g, "").split("|");
+    const n = Number(code);
+    return { state, exitCode: Number.isFinite(n) ? n : null };
+  } catch {
+    return { state: "missing", exitCode: null };
+  }
 }
 
 /**
- * How long without a heartbeat before the lock is assumed abandoned.
+ * Save the world and stop the container, as two named steps, and say what actually
+ * became of the process.
  *
- * This used to be judged against `since`, which made it a cap on total operation
- * length — and at 300s it was shorter than a single Project Zomboid graceful stop
- * (`PZ_STOP_TIMEOUT` is 300 *seconds*). So a mod-update apply would lose its lock
- * partway through, a second operation could start on top, and two SteamCMD runs
- * would race on the same workshop volume; one then reported
- * "SteamCMD updated 0 of 1 mods". Heartbeats fix that without needing a number
- * larger than the slowest imaginable operation.
+ * `docker stop -t 300` exits 0 whether the container went quietly or was SIGKILLed
+ * at the end of the grace period — and **Project Zomboid never exits on SIGTERM**,
+ * so every PZ stop reported a clean success and hid the kill. `.State.ExitCode` is
+ * the only place that fact exists; 137 is 128 + SIGKILL.
  */
-const LOCK_STALE_MS = 90_000;
-const HEARTBEAT_MS = 20_000;
-let controlLock: ControlLock | null = null;
+async function narratedStop(op: OpHandle, game: GameId): Promise<void> {
+  const name = GAMES[game].name;
+  op.step(`Saving ${name}`, { game });
+  const t0 = Date.now();
+  await DRIVERS[game].save();
+  const savedMs = Date.now() - t0;
+  op.settle(`Saved ${name}`);
 
-export class ControlBusyError extends Error {
-  lock: ControlLock;
-  constructor(lock: ControlLock) {
-    super("A server operation is already in progress");
-    this.name = "ControlBusyError";
-    this.lock = lock;
+  const grace = game === "zomboid" ? PZ_STOP_TIMEOUT : null;
+  op.step(`Stopping ${name}`, { game });
+  op.detail(
+    grace
+      ? `Saved in ${savedMs} ms — waiting up to ${grace}s for the process to exit`
+      : `Saved in ${savedMs} ms — waiting for the process to exit`
+  );
+  await DRIVERS[game].stop();
+
+  const { state, exitCode } = await containerExit(RUNTIME[game].container);
+  if (state === "running") {
+    // Proceeding here is how two worlds end up co-resident, which is an open
+    // defect on this box. Refuse instead.
+    throw new Error(
+      `${name}'s container is still running after docker stop — nothing else was done. ` +
+        `Check the server before trying again.`
+    );
+  }
+  if (exitCode === 137 && grace) {
+    op.settle(`Stopped ${name} — killed after ${grace}s`);
+    op.fact({ label: "Shutdown", value: `killed after ${grace}s`, verdict: "warn" });
+  } else if (exitCode === 137) {
+    op.settle(`Stopped ${name} — killed at the end of the grace period`);
+    op.fact({ label: "Shutdown", value: "killed at the end of the grace period", verdict: "warn" });
+  } else {
+    op.settle(`Stopped ${name}`);
+    op.fact({ label: "Shutdown", value: `exited cleanly (code ${exitCode ?? "?"})` });
   }
 }
 
-/** The in-flight control operation, or null. Auto-expires stale locks. */
-export function currentControlLock(): ControlLock | null {
-  if (controlLock && Date.now() - controlLock.beat > LOCK_STALE_MS) {
-    controlLock = null;
-  }
-  return controlLock;
+/**
+ * The narrated stop and start, for a route that already holds an operation.
+ *
+ * `/api/7dtd/reset` is the case: it needs a stop and a start *inside* one operation,
+ * and `powerOff`/`restartGame` each enter an operation of their own, which this one's
+ * own resources would refuse. Before this it called them anyway — acquiring and
+ * releasing the lock twice — which left two unlocked windows in the middle of a
+ * destructive operation for a Power on to interleave with.
+ */
+export async function stopGameForOperation(op: OpHandle, game: GameId): Promise<void> {
+  return narratedStop(op, game);
 }
 
-/** Describe what the in-flight operation is doing, for the UI. No-op if unlocked. */
-export function setControlStage(stage: string): void {
-  if (controlLock) controlLock.stage = stage;
+export async function startGameForOperation(op: OpHandle, game: GameId): Promise<void> {
+  return narratedStart(op, game);
 }
 
-async function withControlLock<T>(game: GameId, action: ControlAction, fn: () => Promise<T>): Promise<T> {
-  const held = currentControlLock();
-  if (held) throw new ControlBusyError(held);
-  const now = Date.now();
-  controlLock = { game, action, since: now, beat: now };
-  // Keep proving we're alive for as long as the work takes. Without this the lock
-  // frees itself mid-operation and a second one starts on top of it.
-  const heart = setInterval(() => {
-    if (controlLock) controlLock.beat = Date.now();
-  }, HEARTBEAT_MS);
-  try {
-    return await fn();
-  } finally {
-    clearInterval(heart);
-    controlLock = null;
+export async function containerIsRunning(game: GameId): Promise<boolean> {
+  return (await containerState(RUNTIME[game].container)) === "running";
+}
+
+/** Start the container and prove it came up, rather than assuming `docker start` meant it. */
+async function narratedStart(op: OpHandle, game: GameId): Promise<void> {
+  const name = GAMES[game].name;
+  op.step(`Starting ${name}`, { game });
+  await DRIVERS[game].start();
+  const state = await containerState(RUNTIME[game].container);
+  if (state === "running") {
+    op.settle("Started the container");
+    op.fact({ label: "Power", value: "running" });
+  } else {
+    // `docker start` exited 0 and the container is not up: a crash-loop looks
+    // exactly like this, and calling it a success is the defect this whole module
+    // exists to stop.
+    op.settle(`Ran docker start — the container is "${state}"`, { kind: "noop" });
+    op.fact({ label: "Power", value: state, verdict: "bad" });
   }
 }
 
@@ -688,36 +825,64 @@ async function withControlLock<T>(game: GameId, action: ControlAction, fn: () =>
  * this first gracefully saves + stops any *other* game that is running.
  * Returns the sequence of steps performed (for the UI's live progress display).
  */
-export async function powerOn(game: GameId): Promise<HandoffStep[]> {
-  return withControlLock(game, "start", async () => {
-    const steps: HandoffStep[] = [];
+export async function powerOn(game: GameId, startedBy?: string | null): Promise<HandoffStep[]> {
+  // Probed before admission ONLY so the operation can name itself accurately in the
+  // ledger; every authoritative check is repeated inside, under the lock.
+  const runningOthers: GameId[] = [];
+  for (const other of otherGames(game)) {
+    if ((await containerState(RUNTIME[other].container)) === "running") runningOthers.push(other);
+  }
+  const title = runningOthers.length
+    ? `Starting ${GAMES[game].name} — saving and stopping ${runningOthers
+        .map((g) => GAMES[g].name)
+        .join(" and ")} first`
+    : `Starting ${GAMES[game].name}`;
 
-    // Refuse rather than silently succeed. `docker start` on a running container is
-    // a no-op, so a wedged server used to report "powering on" and then do nothing
-    // at all — which reads as the dashboard being broken. Say what is true and name
-    // the action that would help.
-    if ((await containerState(RUNTIME[game].container)) === "running") {
-      throw new Error(
-        `${GAMES[game].name} is already running — it just isn't responding yet. ` +
-          `Use Restart if it stays that way.`
-      );
+  return withPowerOperation(
+    { kind: "power", game, action: "start", title, startedBy },
+    async (op) => {
+      const steps: HandoffStep[] = [];
+
+      // Refuse rather than silently succeed. `docker start` on a running container
+      // is a no-op, so a wedged server used to report "powering on" and then do
+      // nothing at all — which reads as the dashboard being broken. Say what is true
+      // and name the action that would help.
+      if ((await containerState(RUNTIME[game].container)) === "running") {
+        throw new Error(
+          `${GAMES[game].name} is already running — it just isn't responding yet. ` +
+            `Use Restart if it stays that way.`
+        );
+      }
+
+      for (const other of otherGames(game)) {
+        if ((await containerState(RUNTIME[other].container)) !== "running") continue;
+        steps.push({ step: "save", game: other });
+        steps.push({ step: "stop", game: other });
+        await narratedStop(op, other);
+      }
+
+      steps.push({ step: "start", game });
+      await narratedStart(op, game);
+      return { value: steps };
     }
-
-    for (const other of otherGames(game)) {
-      if ((await containerState(RUNTIME[other].container)) !== "running") continue;
-      steps.push({ step: "save", game: other });
-      steps.push({ step: "stop", game: other });
-      await DRIVERS[other].gracefulStop();
-    }
-
-    steps.push({ step: "start", game });
-    await DRIVERS[game].start();
-    return steps;
-  });
+  );
 }
 
-export async function powerOff(game: GameId): Promise<void> {
-  return withControlLock(game, "stop", () => DRIVERS[game].gracefulStop());
+export async function powerOff(game: GameId, startedBy?: string | null): Promise<void> {
+  return withPowerOperation(
+    {
+      kind: "power",
+      game,
+      action: "stop",
+      title: `Saving and stopping ${GAMES[game].name}`,
+      startedBy,
+    },
+    async (op) => {
+      await narratedStop(op, game);
+      op.fact({ label: "Power", value: "powered off" });
+      return { value: undefined as void };
+    }
+  );
 }
 
 /**
@@ -738,10 +903,20 @@ export async function powerOff(game: GameId): Promise<void> {
 export async function withGameStopped(
   game: GameId,
   action: ControlAction,
-  whileStopped: () => Promise<void>,
+  /**
+   * The work to do while the world is down. Receives the operation handle, so a
+   * caller can name its own steps and — more importantly — attach the evidence
+   * that decides the outcome. Callers that don't need it can ignore the argument.
+   */
+  whileStopped: (op: OpHandle) => Promise<void>,
   opts: {
-    /** What to say while the callback runs. Surfaces in `OperationBanner`. */
+    /** What to say while the callback runs. Surfaces in the ledger. */
     stage?: string;
+    /** What kind of operation this really is, so the summary reads correctly. */
+    kind?: OperationKind;
+    /** Present-tense title, rendered verbatim. */
+    title?: string;
+    startedBy?: string | null;
     /**
      * Whether to start the world again when the callback *throws*.
      *
@@ -761,28 +936,42 @@ export async function withGameStopped(
     restartOnFailure?: boolean;
   } = {}
 ): Promise<{ restarted: boolean }> {
-  const { stage, restartOnFailure = true } = opts;
-  return withControlLock(game, action, async () => {
-    const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
-    if (wasRunning) {
-      setControlStage("Saving and stopping the server");
-      await DRIVERS[game].gracefulStop();
-    }
-    let failed = false;
-    try {
-      setControlStage(stage ?? "Working");
-      await whileStopped();
-    } catch (err) {
-      failed = true;
-      throw err;
-    } finally {
-      if (wasRunning && (!failed || restartOnFailure)) {
-        setControlStage("Starting the server");
-        await DRIVERS[game].start();
+  const { stage, restartOnFailure = true, kind = "power", title, startedBy } = opts;
+  return withPowerOperation(
+    {
+      kind,
+      game,
+      action,
+      title: title ?? `Restarting ${GAMES[game].name}`,
+      startedBy,
+    },
+    async (op) => {
+      const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
+      if (wasRunning) await narratedStop(op, game);
+      let failed = false;
+      try {
+        // Only open a step when the caller gave one. A caller that narrates itself
+        // (`op.step` / `op.settle`, or the legacy `setControlStage` shim) would
+        // otherwise leave a stray "Working" row settled above its own.
+        if (stage) op.step(stage, { game });
+        await whileStopped(op);
+        if (stage) op.settle(stage);
+      } catch (err) {
+        failed = true;
+        throw err;
+      } finally {
+        if (wasRunning && (!failed || restartOnFailure)) {
+          await narratedStart(op, game);
+        } else if (!wasRunning) {
+          op.fact({ label: "Power", value: "powered off" });
+        }
       }
+      // "Restored but the world stayed down" is a materially different outcome from
+      // "restored and it's coming back up", and nothing else on the page says which.
+      op.fact({ label: "Server", value: wasRunning ? "starting again" : "left powered off" });
+      return { value: { restarted: wasRunning } };
     }
-    return { restarted: wasRunning };
-  });
+  );
 }
 
 /** The image the game's container was created from, for one-off helper runs. */
@@ -806,13 +995,21 @@ export async function containerImage(game: GameId): Promise<string> {
  * `start()` returns as soon as the container is up, so the lock releases early
  * and the UI falls through to the richer per-boot progress (`snap.boot`).
  */
-export async function restartGame(game: GameId): Promise<void> {
-  return withControlLock(game, "restart", async () => {
-    setControlStage("Saving and stopping the server");
-    await DRIVERS[game].gracefulStop();
-    setControlStage("Starting the server");
-    await DRIVERS[game].start();
-  });
+export async function restartGame(game: GameId, startedBy?: string | null): Promise<void> {
+  return withPowerOperation(
+    {
+      kind: "power",
+      game,
+      action: "restart",
+      title: `Restarting ${GAMES[game].name}`,
+      startedBy,
+    },
+    async (op) => {
+      await narratedStop(op, game);
+      await narratedStart(op, game);
+      return { value: undefined as void };
+    }
+  );
 }
 
 // ── server memory ────────────────────────────────────────────────────────────
@@ -857,6 +1054,13 @@ export async function maxGameGb(): Promise<number> {
  * running it: a stopped world must stay stopped, or changing its settings would
  * quietly start it and evict whichever world currently holds the box.
  * Either way the result is checked for duplicates before we return.
+ *
+ * **This function takes no lock and enters no operation.** It reads as the
+ * sanctioned safe helper and is not a complete one: that is precisely why
+ * `/api/7dtd/update` — its only direct caller — was entirely untracked, leaving a
+ * 17 GB SteamCMD download running inside a container that nothing was watching and
+ * nothing would refuse to interleave with. Call it from inside `runOperation` (or
+ * `applyServiceEnv`), never straight from a route.
  */
 export async function recreateService(
   game: GameId,
@@ -1014,34 +1218,66 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
 export async function applyServiceEnv(
   game: GameId,
   updates: Record<string, string>,
-  { stage }: { stage: string }
+  { stage, setting, startedBy }: { stage: string; setting?: string; startedBy?: string | null }
 ): Promise<void> {
   const rt = RUNTIME[game];
-  return withControlLock(game, "restart", async () => {
-    setControlStage(stage);
-    const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
-    if (applied.length === 0) {
-      throw new Error(
-        `Couldn't find ${Object.keys(updates).join("/")} in the ${rt.service} service block of docker-compose.yml`
-      );
-    }
-    await writeCompose(text);
+  return withPowerOperation(
+    { kind: "settings", game, action: "restart", title: stage, startedBy },
+    async (op) => {
+      op.step("Editing docker-compose.yml", { game });
+      const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
+      if (applied.length === 0) {
+        throw new Error(
+          `Couldn't find ${Object.keys(updates).join("/")} in the ${rt.service} service block of docker-compose.yml`
+        );
+      }
+      await writeCompose(text);
+      op.settle(`Patched ${applied.join(", ")} in docker-compose.yml`);
 
-    const wasRunning = (await containerState(rt.container)) === "running";
-    if (wasRunning) {
-      setControlStage("Saving and stopping the server");
-      await DRIVERS[game].gracefulStop();
+      const wasRunning = (await containerState(rt.container)) === "running";
+      if (wasRunning) await narratedStop(op, game);
+
+      op.step("Recreating the container", { game });
+      await recreateService(game, { start: false });
+      op.settle("Recreated the container");
+
+      if (wasRunning) await narratedStart(op, game);
+      else op.fact({ label: "Power", value: "powered off" });
+
+      // Read the env back off the NEW container. A container's env is fixed when it
+      // is created, so "we wrote the compose file" proves nothing on its own — this
+      // is the same configured-vs-live comparison the memory card makes, which is
+      // the one report in this codebase that has never been wrong.
+      await recordEnvApplied(op, game, updates, setting ?? Object.keys(updates).join("/"));
+      return { value: undefined as void };
     }
-    setControlStage(stage);
-    await recreateService(game, { start: false });
-    if (wasRunning) {
-      setControlStage("Starting the server");
-      await DRIVERS[game].start();
-    }
-  });
+  );
 }
 
-export async function setMemory(game: GameId, gb: number): Promise<MemoryState> {
+/** Compare what compose now says against what the new container was created with. */
+async function recordEnvApplied(
+  op: OpHandle,
+  game: GameId,
+  updates: Record<string, string>,
+  setting: string
+): Promise<void> {
+  const rt = RUNTIME[game];
+  const wanted = Object.entries(updates)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(", ");
+  const live: string[] = [];
+  let agrees = true;
+  for (const [k, v] of Object.entries(updates)) {
+    const got = await liveEnv(rt.container, k);
+    live.push(`${k}=${got ?? "unset"}`);
+    if (got !== v) agrees = false;
+  }
+  op.fact({ label: "Setting", value: setting });
+  op.fact({ label: "Configured", value: wanted });
+  op.fact({ label: "Container", value: live.join(", "), verdict: agrees ? undefined : "warn" });
+}
+
+export async function setMemory(game: GameId, gb: number, startedBy?: string | null): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");
   const cap = await maxGameGb();
@@ -1053,28 +1289,53 @@ export async function setMemory(game: GameId, gb: number): Promise<MemoryState> 
     );
   }
 
-  return withControlLock(game, "restart", async () => {
-    const value = rt.memory!.format(gb);
-    const updates = Object.fromEntries(rt.memory!.keys.map((k) => [k, value]));
+  return withPowerOperation(
+    {
+      kind: "settings",
+      game,
+      action: "restart",
+      title: `Changing ${GAMES[game].name}'s memory setting`,
+      startedBy,
+    },
+    async (op) => {
+      const value = rt.memory!.format(gb);
+      const updates = Object.fromEntries(rt.memory!.keys.map((k) => [k, value]));
 
-    const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
-    if (applied.length === 0) {
-      throw new Error(`Couldn't find ${rt.memory!.keys.join("/")} in the ${rt.service} service`);
-    }
-    await writeCompose(text);
+      // This used to set no stage at all — `applyServiceEnv` sets four — so a
+      // Project Zomboid memory change showed a bare "Restarting" for the whole 300s
+      // stop, which is exactly the "indistinguishable from hung" failure that
+      // splitting `restartGame` into save/stop/start was meant to eliminate.
+      op.step("Editing docker-compose.yml", { game });
+      const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
+      if (applied.length === 0) {
+        throw new Error(`Couldn't find ${rt.memory!.keys.join("/")} in the ${rt.service} service`);
+      }
+      await writeCompose(text);
+      op.settle(`Set ${applied.join(", ")} to ${value} in docker-compose.yml`);
 
-    const wasRunning = (await containerState(rt.container)) === "running";
-    if (wasRunning) {
+      const wasRunning = (await containerState(rt.container)) === "running";
       // Save first — recreating a running game server is otherwise a hard kill.
-      await DRIVERS[game].gracefulStop();
+      if (wasRunning) await narratedStop(op, game);
+
+      // Recreate without starting, then start again only if it was running before.
+      op.step("Recreating the container", { game });
+      await recreateService(game, { start: false });
+      op.settle("Recreated the container");
+
+      if (wasRunning) await narratedStart(op, game);
+      else op.fact({ label: "Power", value: "powered off" });
+
+      const state = await getMemoryState(game);
+      op.fact({ label: "Setting", value: "Memory" });
+      op.fact({ label: "Configured", value: `${state.configuredGb ?? gb} GB` });
+      op.fact({
+        label: "Container",
+        value: state.liveGb != null ? `${state.liveGb} GB` : "no container yet",
+        verdict: state.applied ? undefined : "warn",
+      });
+      return { value: state };
     }
-
-    // Recreate without starting, then start again only if it was running before.
-    await recreateService(game, { start: false });
-    if (wasRunning) await DRIVERS[game].start();
-
-    return getMemoryState(game);
-  });
+  );
 }
 
 // ── config file readers (shared) ─────────────────────────────────────────────

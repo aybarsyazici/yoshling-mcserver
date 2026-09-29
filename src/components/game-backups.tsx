@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { cn } from "@/lib/utils";
 import { useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
+import { blockedReason, powerBlocker } from "@/lib/operation-ui";
 import { Button } from "@/components/ui/button";
 import { Archive, RotateCcw, Trash2, Plus, AlertTriangle } from "lucide-react";
 
@@ -43,13 +45,17 @@ export function GameBackups({ game }: { game: GameId }) {
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
 
-  // A restore is a power operation now — it saves + stops the server, swaps the
-  // files and starts it back up, all under the control lock. So it has to know
-  // whether the server is up (to say what will happen) and whether some other
-  // operation already holds the lock (the request would come back 409).
-  const { games, busy, refresh } = useGames();
+  // A restore is a power operation — it saves + stops the server, swaps the files and
+  // starts it back up, all inside one operation. So it has to know whether the server
+  // is up (to say what will happen) and whether anything else already holds this
+  // world's files (the request would come back 409).
+  const { games, refresh } = useGames();
+  const { operations, elapsedMs } = useOperations();
   const running = games?.[game]?.containerRunning ?? false;
-  const locked = busy !== null;
+  // The registry, not just the power lock: a create and a restore on the same world
+  // both hold `files:{game}`, and two of them at once is how an archive gets torn.
+  const blocker = powerBlocker(operations, game);
+  const locked = blocker !== undefined;
 
   async function fetchBackups() {
     try {
@@ -74,15 +80,27 @@ export function GameBackups({ game }: { game: GameId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "create" }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.backup) {
         setBackups((prev) => [data.backup, ...prev]);
-        toast.success("Backup created");
+        // No success toast: the operation's completion toast carries the archive's
+        // read-back size, which is the only evidence that the file exists.
       } else {
         toast.error(data.error || "Backup failed");
       }
+    } catch {
+      // This whole function used to be `try { … } finally {}` with **no catch**. A
+      // Project Zomboid create measures 4 min 20 s, so Cloudflare answers 524 with an
+      // HTML body, `res.json()` throws, and the result was total *silence*: no toast at
+      // all, the spinner just stopped, no row appeared — for an operation that had in
+      // fact written a 198 MB archive.
+      toast.info(
+        `Still creating the backup. The connection timed out before it finished, which is normal ` +
+          `for a large world — watch the strip at the top of the page, and don't start another.`
+      );
     } finally {
       setCreating(false);
+      void fetchBackups();
     }
   }
 
@@ -101,14 +119,10 @@ export function GameBackups({ game }: { game: GameId }) {
         body: JSON.stringify({ action: "restore", backupName: name }),
       });
       const d = await res.json().catch(() => ({}));
-      if (res.ok) {
-        toast.success(
-          `${noun[0].toUpperCase() + noun.slice(1)} restored. ` +
-            (d.restarted ? "The server is starting again." : "Power on to play.")
-        );
-      } else {
-        toast.error(d.error || "Restore failed");
-      }
+      if (!res.ok) toast.error(d.error || "Restore failed");
+      // On success, say nothing here: the operation's completion toast carries the
+      // server's own summary, which names the archive and whether the world came back
+      // up. That sentence is derived from what was recorded, so it cannot overstate.
     } catch {
       // The request died, but the restore did not: it runs server-side under the
       // control lock and carries on regardless. A Project Zomboid restore opens
@@ -150,7 +164,12 @@ export function GameBackups({ game }: { game: GameId }) {
         <p className="max-w-2xl text-sm text-muted-foreground">
           {describes} Take one before switching worlds, changing settings, or installing updates — then you can roll back with one click.
         </p>
-        <Button onClick={create} disabled={creating} style={{ background: meta.tint, color: "var(--background)" }}>
+        <Button
+          onClick={create}
+          disabled={creating || locked}
+          className="disabled:cursor-not-allowed"
+          style={{ background: meta.tint, color: "var(--background)" }}
+        >
           <Plus className="h-4 w-4" /> {creating ? "Creating…" : "Create backup"}
         </Button>
       </div>
@@ -165,11 +184,11 @@ export function GameBackups({ game }: { game: GameId }) {
         </p>
       </div>
 
-      {locked && (
+      {/* A disabled control that doesn't say why is the same failure as a silent
+          operation, so this always names the work and how long it has been going. */}
+      {blocker && (
         <p className="text-xs text-muted-foreground">
-          <strong className="text-foreground">{GAMES[busy.game].name}</strong> is{" "}
-          {busy.action === "start" ? "starting up" : busy.action === "stop" ? "shutting down" : "busy"}
-          {busy.stage ? ` — ${busy.stage.toLowerCase()}` : ""}. Restore unlocks when it finishes.
+          {blockedReason(blocker, elapsedMs(blocker))}
         </p>
       )}
 

@@ -6,7 +6,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { readdir, stat, rm, readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
-import { ControlBusyError, RUNTIME, setControlStage, withGameStopped } from "@/lib/game-manager";
+import { RUNTIME, withGameStopped } from "@/lib/game-manager";
+import { refuseIfPreempted, runOperation, type OperationFact } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { formatBytes } from "@/lib/format";
 
 export const maxDuration = 300;
 
@@ -138,53 +141,111 @@ export async function POST(request: NextRequest) {
     const work = path.join(BACKUP_DIR, `.work-${stamp}`);
     let target = "";
     try {
-      await mkdir(BACKUP_DIR, { recursive: true });
+      // Holds `files:7dtd`: two creates now serialise instead of colliding on the
+      // same second-resolution `.work-${stamp}` directory, which each one begins by
+      // `rm -rf`-ing. A power operation is still admitted over this, with a
+      // confirmation naming the torn archive — Power off is the recovery path on this
+      // box and must never be blocked by a four-minute `tar`.
+      const backup = await runOperation(
+        {
+          kind: "backup.create",
+          game: "7dtd",
+          title: "Creating a backup",
+          startedBy: session.user.name ? { name: session.user.name } : null,
+        },
+        async (op) => {
+          await mkdir(BACKUP_DIR, { recursive: true });
 
-      // Determine the active world from the config.
-      let xml = "";
-      try { xml = await readFile(XML_PATH, "utf-8"); } catch {}
-      const gameWorld = readGameWorld(xml);
+          // Determine the active world from the config.
+          let xml = "";
+          try { xml = await readFile(XML_PATH, "utf-8"); } catch {}
+          const gameWorld = readGameWorld(xml);
 
-      // Stage the pieces in a work dir, then tar them together.
-      await rm(work, { recursive: true, force: true });
-      await mkdir(work, { recursive: true });
+          // Stage the pieces in a work dir, then tar them together.
+          await rm(work, { recursive: true, force: true });
+          await mkdir(work, { recursive: true });
 
-      // 1) Saves/ — `cp -a` rather than fs.cp because the game container runs as
-      // a non-root user and the copy has to keep its ownership. A backup without
-      // Saves/ is worthless, so refuse instead of writing one that looks fine.
-      const savesSrc = path.join(SDTD_DIR, "Saves");
-      if (!(await isDir(savesSrc))) {
-        throw new Error(`No Saves/ in ${SDTD_DIR} — the server has not generated a world yet.`);
-      }
-      await execFileAsync("cp", ["-a", savesSrc, work]);
+          // 1) Saves/ — `cp -a` rather than fs.cp because the game container runs as
+          // a non-root user and the copy has to keep its ownership. A backup without
+          // Saves/ is worthless, so refuse instead of writing one that looks fine.
+          op.step("Copying the saves");
+          const savesSrc = path.join(SDTD_DIR, "Saves");
+          if (!(await isDir(savesSrc))) {
+            throw new Error(`No Saves/ in ${SDTD_DIR} — the server has not generated a world yet.`);
+          }
+          await execFileAsync("cp", ["-a", savesSrc, work]);
+          op.settle("Copied the saves");
 
-      // 2) the custom world map, only if the active world is a custom one.
-      const worldSrc = path.join(SDTD_DIR, "GeneratedWorlds", gameWorld);
-      let includesWorldMap = false;
-      if (gameWorld && (await isDir(worldSrc))) {
-        await mkdir(path.join(work, "GeneratedWorlds"), { recursive: true });
-        await execFileAsync("cp", ["-a", worldSrc, path.join(work, "GeneratedWorlds")]);
-        includesWorldMap = true;
-      }
-      // else: stock world (Navezgane/Pregen…) — ships with the server, no need to bundle.
+          // 2) the custom world map, only if the active world is a custom one.
+          const worldSrc = path.join(SDTD_DIR, "GeneratedWorlds", gameWorld);
+          let includesWorldMap = false;
+          op.step("Copying the world map");
+          if (gameWorld && (await isDir(worldSrc))) {
+            await mkdir(path.join(work, "GeneratedWorlds"), { recursive: true });
+            await execFileAsync("cp", ["-a", worldSrc, path.join(work, "GeneratedWorlds")]);
+            includesWorldMap = true;
+            op.settle(`Copied the world map — ${gameWorld}`);
+          } else {
+            // Stock world (Navezgane/Pregen…) — it ships with the server, so there is
+            // genuinely nothing to bundle and the archive is still a full restore
+            // point. Deliberately NOT a `noop`: that would make the operation
+            // `partial` and say "this is not a restore point", which would be false.
+            op.settle(
+              gameWorld
+                ? `No custom map to copy — "${gameWorld}" ships with the server`
+                : "No world map named in the config"
+            );
+          }
 
-      // 3) sdtdserver.xml
-      if (xml) await writeFile(path.join(work, "sdtdserver.xml"), xml, "utf-8");
+          // 3) sdtdserver.xml
+          if (xml) await writeFile(path.join(work, "sdtdserver.xml"), xml, "utf-8");
 
-      // 4) manifest
-      const manifest: Manifest = { createdAt: new Date().toISOString(), gameWorld, includesWorldMap };
-      await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
+          // 4) manifest
+          const manifest: Manifest = { createdAt: new Date().toISOString(), gameWorld, includesWorldMap };
+          await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
 
-      const filename = `7dtd-${gameWorld || "world"}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
-      target = path.join(BACKUP_DIR, filename);
-      await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
+          const filename = `7dtd-${gameWorld || "world"}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
+          target = path.join(BACKUP_DIR, filename);
+          op.step("Compressing the archive");
+          await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
 
-      const s = await stat(target);
-      return NextResponse.json({
-        success: true,
-        backup: { name: filename, size: s.size, createdAt: s.mtime.toISOString(), world: gameWorld || null, includesWorldMap },
-      });
+          let size: number | null = null;
+          let mtime = new Date();
+          try {
+            const s = await stat(target);
+            size = s.size;
+            mtime = s.mtime;
+          } catch {}
+          op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
+
+          // A power operation admitted over this one means the world was saved and
+          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
+          // as a restore point would be exactly the "reports success after doing the
+          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
+          // below does the `rm`.
+          refuseIfPreempted(op, "this backup");
+
+          const facts: OperationFact[] = [];
+          if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
+          facts.push({
+            label: "World map",
+            value: includesWorldMap ? "included" : "not needed (stock world)",
+          });
+          return {
+            facts,
+            value: {
+              name: filename,
+              size: size ?? 0,
+              createdAt: mtime.toISOString(),
+              world: gameWorld || null,
+              includesWorldMap,
+            },
+          };
+        }
+      );
+      return NextResponse.json({ success: true, backup });
     } catch (e) {
+      if (isConflict(e)) return conflictResponse(e);
       // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
       // that the listing would offer as restorable.
       if (target) await rm(target, { force: true }).catch(() => {});
@@ -212,20 +273,31 @@ export async function POST(request: NextRequest) {
       // and starts again only if it was running; it also holds the control lock,
       // so a Power on can't race in halfway through and the banner can say what
       // is happening.
-      const { restarted } = await withGameStopped("7dtd", "restart", async () => {
-        setControlStage("Restoring the saves from backup");
-        await restoreBundle(backupPath, m);
-      },
-      { restartOnFailure: false }
+      const { restarted } = await withGameStopped(
+        "7dtd",
+        "restart",
+        async (op) => {
+          op.step("Restoring the saves from backup");
+          op.detail(name);
+          await restoreBundle(backupPath, m);
+          op.settle(
+            m?.includesWorldMap
+              ? "Replaced the saves and the world map"
+              : "Replaced the saves"
+          );
+          op.fact({ label: "Archive", value: name });
+          if (m?.gameWorld) op.fact({ label: "World", value: m.gameWorld });
+        },
+        {
+          kind: "backup.restore",
+          title: "Restoring a backup",
+          startedBy: session.user.name,
+          restartOnFailure: false,
+        }
       );
       return NextResponse.json({ success: true, restoredWorld: m?.gameWorld ?? null, restarted });
     } catch (e) {
-      if (e instanceof ControlBusyError) {
-        return NextResponse.json(
-          { error: `Busy: ${e.lock.game} is ${e.lock.action}ing. Try again in a moment.`, busy: e.lock },
-          { status: 409 }
-        );
-      }
+      if (isConflict(e)) return conflictResponse(e);
       return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
     }
   }

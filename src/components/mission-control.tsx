@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
+import { fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
+import { formatElapsed, liveStep } from "@/lib/operations-types";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { RamBudget } from "@/components/ram-budget";
 import { StatusPill } from "@/components/ui-bits";
@@ -21,8 +24,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-
-type Phase = { key: string; label: string };
 
 // How the world cards sit, and when the power bus above them is accurate: the
 // bus only shows while the cards are on one row, so its branches line up with
@@ -44,16 +45,55 @@ export function MissionControl({
   const [localBusy, setLocalBusy] = useState(false);
   const { games, activeGame, busy: serverBusy, memoryGb, hostGb, loading, refresh } =
     useGames(localBusy ? 1500 : 5000);
-  const reduced = usePrefersReducedMotion();
+  /**
+   * The live operation, read from the registry rather than kept here.
+   *
+   * This used to be local `phase` React state driven by `sleep()` calls — so the
+   * caption was a *guess* at what the server was doing, and a page reload wiped it
+   * and fell back to "all stopped". The landing page, with the Power Core on it, was
+   * the one screen in the app with no refresh-surviving progress at all.
+   */
+  const { operations, elapsedMs } = useOperations();
   const worlds = GAME_LIST.filter((g) => access.includes(g.id));
   const layout = LAYOUT[worlds.length] ?? LAYOUT[3];
 
   const [pending, setPending] = useState<GameId | null>(null); // game being powered on/awaiting confirm
   const [confirmFor, setConfirmFor] = useState<GameId | null>(null);
-  const [phase, setPhase] = useState<Phase | null>(null);
+  const [confirmPreempt, setConfirmPreempt] = useState<GameId | null>(null);
 
-  // Locked out if this tab is working OR the server reports any op in flight.
-  const busy = localBusy || serverBusy !== null;
+  // The operation to caption the core with: whatever holds the power slot, else the
+  // world that is booting.
+  const headline =
+    operations.find((o) => o.holdsPower) ?? operations.find((o) => o.synthetic);
+
+  /**
+   * Whatever holds the power slot, from the registry.
+   *
+   * `serverBusy` alone could not see it: `projectLock()` refuses to project an operation
+   * with no `action` (correctly — `busy.action` drives a rendered verb), and the 7 Days
+   * to Die update holds `POWER_RESOURCES` without one. So for ~20 minutes every card's
+   * Power button stayed live and returned a red 409.
+   */
+  const powerHolder = operations.find((o) => o.holdsPower && !o.endedAt);
+  // Locked out if this tab is working OR a power operation is in flight anywhere.
+  const busy = localBusy || serverBusy !== null || powerHolder !== undefined;
+
+  /**
+   * What the pre-empt dialog is about, computed here so `open` can be derived from the
+   * CONTENT. Gating `open` on the intent alone left the modal open with no title (and
+   * therefore no accessible name) and no buttons when the file operation finished
+   * mid-decision.
+   */
+  const preemptBlockerRaw = confirmPreempt ? powerBlocker(operations, confirmPreempt) : undefined;
+  const preemptBlocker =
+    preemptBlockerRaw && !preemptBlockerRaw.holdsPower ? preemptBlockerRaw : undefined;
+  useEffect(() => {
+    if (!preemptBlocker && confirmPreempt !== null) {
+      // Reacting to the poll, which is external state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConfirmPreempt(null);
+    }
+  }, [preemptBlocker, confirmPreempt]);
 
   const coreState: CoreState = busy && pending
     ? { kind: "handoff", from: activeGame && activeGame !== pending ? activeGame : null, to: pending }
@@ -73,13 +113,29 @@ export function MissionControl({
 
   function onPowerClick(game: GameId, isOnline: boolean) {
     if (busy) return;
+    const blocker = powerBlocker(operations, game);
+    // A file operation on this world (a backup, a modpack apply) does not disable the
+    // button — Power off is the recovery path and must never be held hostage — but
+    // cutting it short needs saying out loud first.
+    const preempting = blocker && !blocker.holdsPower;
     if (isOnline) {
-      // Power OFF this game
+      // Power OFF: the pre-empt dialog alone is the whole story.
+      if (preempting) return setConfirmPreempt(game);
       void doControl(game, "stop");
       return;
     }
-    // Power ON — if another world is running, confirm the switch first
-    if (runningOthers(game).length > 0) {
+    /**
+     * Power ON always routes to the ONE `confirmFor` dialog, which renders both clauses.
+     *
+     * The pre-empt check used to `return` here, ahead of the hand-off confirm — so with
+     * Project Zomboid online and players on it, starting Minecraft while a Minecraft
+     * backup ran showed a dialog about the backup and never the "Switch servers? …
+     * Players on Project Zomboid will be disconnected." one, then evicted PZ anyway.
+     * `game-controls.tsx:99` already had this right (`if (blocking.length > 0 ||
+     * preemptable) setConfirm(true)`); the landing page — the one with the world cards
+     * on it — did not.
+     */
+    if (runningOthers(game).length > 0 || preempting) {
       setConfirmFor(game);
     } else {
       void doControl(game, "start");
@@ -90,28 +146,16 @@ export function MissionControl({
     if (localBusy) return;
     setLocalBusy(true);
     setConfirmFor(null);
+    setConfirmPreempt(null);
     if (action === "start") setPending(game);
 
-    const stopping = runningOthers(game);
-    const stoppingNames = stopping.map((g) => GAMES[g].name).join(" and ");
-
     try {
-      if (action === "start" && stopping.length > 0) {
-        setPhase({ key: "save", label: `Saving ${stoppingNames}…` });
-        await sleep(reduced ? 0 : 700);
-        setPhase({ key: "stop", label: `Powering down ${stoppingNames}…` });
-      } else if (action === "start") {
-        setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
-      } else {
-        setPhase({ key: "save", label: `Saving & stopping ${GAMES[game].name}…` });
-      }
-
       const res = await fetch("/api/games/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.status === 409) {
         toast.error(data.error || "A server operation is already in progress");
@@ -121,24 +165,23 @@ export function MissionControl({
         toast.error(data.error || "Command failed");
         return;
       }
-
-      if (action === "start") {
-        setPhase({ key: "boot", label: `Starting ${GAMES[game].name}…` });
-        toast.success(`${GAMES[game].name} is powering on`, {
-          description: stopping.length > 0 ? `${stoppingNames} was saved and stopped.` : undefined,
-        });
-      } else {
-        toast.success(`${GAMES[game].name} saved and stopped`);
-      }
-
-      await sleep(reduced ? 0 : 900);
+      // No success toast. The strip above says what is happening while it happens,
+      // and the completion toast carries the server's own summary — which is the only
+      // text that cannot claim more than was observed. "Saved and stopped" here fired
+      // before a 300s Project Zomboid stop had even reached the kill.
       await refresh();
     } catch {
-      toast.error("Network error");
+      // A successful Project Zomboid stop takes a fixed 300s and ends in SIGKILL,
+      // which outlasts Cloudflare's ~100s origin read timeout — so the response
+      // routinely never arrives for an operation that worked. Reporting that as a red
+      // "Network error" was the app's most-hit lie.
+      toast.info(
+        `Still working on ${GAMES[game].name}. The connection timed out before it finished, ` +
+          `which is normal for a long stop — watch the strip at the top of the page.`
+      );
     } finally {
       setLocalBusy(false);
       setPending(null);
-      setPhase(null);
     }
   }
 
@@ -181,23 +224,25 @@ export function MissionControl({
       {/* The single power slot, above the worlds that compete for it */}
       <div className="flex flex-col items-center gap-4">
         <PowerCore state={coreState} size={148} />
+        {/* The caption now reports the registry's live step and elapsed time instead
+            of a `sleep()`-driven guess, and there is no indeterminate sweep under it:
+            the bar moved the same way whether the server was alive or gone. The full
+            step history is in the strip at the top of this page. */}
         <AnimatePresence mode="wait">
-          {phase ? (
+          {headline ? (
             <motion.div
-              key={phase.key}
+              key={headline.id}
               className="text-center"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
             >
-              <p className="font-mono text-xs text-foreground">{phase.label}</p>
-              <div className="mx-auto mt-1.5 h-0.5 w-24 overflow-hidden rounded-full bg-muted">
-                <motion.div
-                  className="h-full w-1/3 rounded-full bg-primary"
-                  animate={{ x: ["-100%", "300%"] }}
-                  transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
-                />
-              </div>
+              <p className="font-mono text-xs text-foreground">
+                {liveStep(headline)?.label ?? headline.title}
+              </p>
+              <p className="mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground" aria-hidden>
+                {formatElapsed(elapsedMs(headline))}
+              </p>
             </motion.div>
           ) : (
             <motion.p
@@ -247,41 +292,61 @@ export function MissionControl({
       {/* Hand-off confirm */}
       <Dialog open={confirmFor !== null} onOpenChange={(o) => !o && setConfirmFor(null)}>
         <DialogContent>
-          {confirmFor && (
+          {confirmFor &&
+            (() => {
+              const others = runningOthers(confirmFor);
+              const blocker = powerBlocker(operations, confirmFor);
+              const preempting = blocker && !blocker.holdsPower ? blocker : undefined;
+              return (
             <>
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <PowerGlyph className="h-4 w-4" style={{ color: GAMES[confirmFor].tint }} />
-                  Switch servers?
+                  {others.length > 0 ? "Switch servers?" : "Start anyway?"}
                 </DialogTitle>
+                {/* BOTH consequences, in one dialog. Whichever applies. */}
                 <DialogDescription>
-                  This will{" "}
-                  <strong>
-                    save and stop {runningOthers(confirmFor).map((g) => GAMES[g].name).join(" and ")}
-                  </strong>
-                  , then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing will
-                  be disconnected. Takes about a minute.
+                  {others.length > 0 && (
+                    <>
+                      This will{" "}
+                      <strong>save and stop {others.map((g) => GAMES[g].name).join(" and ")}</strong>,
+                      then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing
+                      will be disconnected. Takes about a minute.
+                    </>
+                  )}
+                  {preempting && (
+                    <>
+                      {others.length > 0 ? " " : ""}
+                      <strong>{GAMES[confirmFor].name}</strong> is also being worked on —{" "}
+                      {fileOperationLabel(preempting, elapsedMs(preempting))} — and starting now cuts
+                      that short. If it is a backup, the archive will be incomplete and is deleted.
+                    </>
+                  )}
                 </DialogDescription>
               </DialogHeader>
-              <div className="flex flex-wrap items-center justify-center gap-3 py-2 text-xs">
-                {runningOthers(confirmFor).map((g) => (
-                  <span key={g} className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 font-mono">
-                    <GameMark game={g} className="h-3.5 w-3.5" />
-                    {GAMES[g].short} off
+              {/* The switch diagram only makes sense when something is actually being
+                  switched away from. */}
+              {others.length > 0 && (
+                <div className="flex flex-wrap items-center justify-center gap-3 py-2 text-xs">
+                  {others.map((g) => (
+                    <span key={g} className="flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1.5 font-mono">
+                      <GameMark game={g} className="h-3.5 w-3.5" />
+                      {GAMES[g].short} off
+                    </span>
+                  ))}
+                  <ArrowGlyph className="h-4 w-4 text-muted-foreground" />
+                  <span
+                    className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono"
+                    style={{
+                      background: `color-mix(in oklab, ${GAMES[confirmFor].tint} 15%, transparent)`,
+                      color: GAMES[confirmFor].tint,
+                    }}
+                  >
+                    <GameMark game={confirmFor} className="h-3.5 w-3.5" />
+                    {GAMES[confirmFor].short} on
                   </span>
-                ))}
-                <ArrowGlyph className="h-4 w-4 text-muted-foreground" />
-                <span
-                  className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 font-mono"
-                  style={{
-                    background: `color-mix(in oklab, ${GAMES[confirmFor].tint} 15%, transparent)`,
-                    color: GAMES[confirmFor].tint,
-                  }}
-                >
-                  <GameMark game={confirmFor} className="h-3.5 w-3.5" />
-                  {GAMES[confirmFor].short} on
-                </span>
-              </div>
+                </div>
+              )}
               <DialogFooter>
                 <Button variant="outline" onClick={() => setConfirmFor(null)}>
                   Cancel
@@ -290,11 +355,57 @@ export function MissionControl({
                   onClick={() => doControl(confirmFor, "start")}
                   style={{ background: GAMES[confirmFor].tint, color: "var(--background)" }}
                 >
-                  Switch &amp; start
+                  {others.length > 0 ? "Switch & start" : "Start anyway"}
                 </Button>
               </DialogFooter>
             </>
-          )}
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Cutting a file operation short — the POWER OFF path only; the start path goes
+          through the dialog above so the hand-off is never dropped on the floor. */}
+      <Dialog
+        open={confirmPreempt !== null && preemptBlocker !== undefined}
+        onOpenChange={(o) => !o && setConfirmPreempt(null)}
+      >
+        <DialogContent>
+          {confirmPreempt &&
+            (() => {
+              const blocker = preemptBlocker;
+              if (!blocker) return null;
+              const online = games?.[confirmPreempt]?.containerRunning ?? false;
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <PowerGlyph
+                        className="h-4 w-4"
+                        style={{ color: GAMES[confirmPreempt].tint }}
+                      />
+                      {online ? "Power off anyway?" : "Start anyway?"}
+                    </DialogTitle>
+                    <DialogDescription>
+                      <strong>{GAMES[confirmPreempt].name}</strong> is being worked on —{" "}
+                      {fileOperationLabel(blocker, elapsedMs(blocker))}. Going ahead cuts it short.
+                      If it is a backup, the archive will be incomplete and is deleted.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setConfirmPreempt(null)}>
+                      Wait for it
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => doControl(confirmPreempt, online ? "stop" : "start")}
+                    >
+                      {online ? "Power off anyway" : "Start anyway"}
+                    </Button>
+                  </DialogFooter>
+                </>
+              );
+            })()}
         </DialogContent>
       </Dialog>
     </div>
@@ -567,8 +678,4 @@ function Metric({ label, value, tint }: { label: string; value: React.ReactNode;
       </div>
     </div>
   );
-}
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
 }

@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 import { GAMES, otherGames, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
+import { blockedReason, fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
 import { StatusPill, SectionHeading } from "@/components/ui-bits";
 import { AnimatedNumber, Reveal, Stagger, StaggerItem, usePrefersReducedMotion } from "@/components/motion";
 import { PowerGlyph, GearGlyph, GameMark } from "@/components/glyphs";
@@ -54,9 +55,38 @@ export function GameOverview({
   const reduced = usePrefersReducedMotion();
 
   const [confirm, setConfirm] = useState(false);
+  const [confirmPreempt, setConfirmPreempt] = useState<"stop" | "restart" | null>(null);
 
-  const busy = localBusy || serverBusy !== null;
+  /**
+   * The registry, not just the projected power lock.
+   *
+   * This component — the power surface on `/minecraft`, `/7dtd` and `/zomboid`, i.e. the
+   * page each world opens on — never consulted the registry at all, so the *same* Power
+   * off button was gated on `/{game}/server` and ungated here: a running backup got torn
+   * silently from the more obvious of the two pages, and a power-holding operation with
+   * no `action` (the 7 Days to Die update) left every button live and returning 409.
+   */
+  const { operations, elapsedMs } = useOperations();
+  const blocker = powerBlocker(operations, game);
+  const powerHeld = blocker?.holdsPower ? blocker : undefined;
+  const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
+
+  const busy = localBusy || serverBusy !== null || powerHeld !== undefined;
+  // Busy about THIS world, for anything that describes this container's state.
+  // `busy` locks the controls (one world at a time); `ownBusy` is what may claim
+  // this world is doing something. See the long note in `game-controls.tsx`.
+  const ownBusy = localBusy || serverBusy?.game === game || powerHeld?.game === game;
   const busyAction = serverBusy?.action;
+
+  // Drop a pending intent once the operation it was about is gone, so the dialog cannot
+  // be left open with no content (and therefore no accessible name), and cannot re-open
+  // later for a different operation.
+  useEffect(() => {
+    if (!preemptable && confirmPreempt !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConfirmPreempt(null);
+    }
+  }, [preemptable, confirmPreempt]);
 
   // Live memory usage from docker stats (real), instead of a static "reserved"
   // number — 7DTD has no configurable memory anyway.
@@ -92,28 +122,50 @@ export function GameOverview({
 
   function onPower() {
     if (busy) return;
-    if (isOnline) return void control("stop");
-    if (blocking.length > 0) setConfirm(true);
+    if (isOnline) {
+      if (preemptable) return setConfirmPreempt("stop");
+      return void control("stop");
+    }
+    // One dialog for both consequences, the way `game-controls.tsx` does it — never an
+    // early return that drops the hand-off warning.
+    if (blocking.length > 0 || preemptable) setConfirm(true);
     else void control("start");
+  }
+
+  function onRestart() {
+    if (busy) return;
+    if (preemptable) return setConfirmPreempt("restart");
+    void control("restart");
   }
 
   async function control(action: "start" | "stop" | "restart") {
     if (localBusy) return;
     setLocalBusy(true);
     setConfirm(false);
+    setConfirmPreempt(null);
     try {
       const res = await fetch("/api/games/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
       if (!res.ok) return void toast.error(data.error || "Command failed");
-      toast.success(`${meta.name} ${action === "stop" ? "saved & stopped" : action === "restart" ? "restarting" : "powering on"}`);
+      // No success toast: the completion toast carries the server's own summary, which
+      // cannot claim more than was actually observed. "saved & stopped" fired here
+      // before a 300s Project Zomboid stop had even reached the kill.
       setTimeout(refresh, reduced ? 0 : 1200);
     } catch {
-      toast.error("Network error");
+      // The request died; the operation did not. `/api/games/control` awaits the whole
+      // thing, and a Project Zomboid stop is a fixed 300s ending in SIGKILL — past
+      // Cloudflare's ~100s origin read timeout. So the *successful* path routinely ends
+      // with a dead connection, and reporting that as a red "Network error" was the
+      // app's most-hit lie. The strip at the top of the page survives it.
+      toast.info(
+        `Still working on ${meta.name}. The connection timed out before it finished, which is ` +
+          `normal for a long stop — watch the strip at the top of the page.`
+      );
     } finally {
       setLocalBusy(false);
     }
@@ -126,7 +178,7 @@ export function GameOverview({
         title={meta.name}
         sub={meta.tagline}
         tint={meta.tint}
-        action={<StatusPill status={busy && !isOnline ? "starting" : status} tint={meta.tint} />}
+        action={<StatusPill status={ownBusy && !isOnline ? "starting" : status} tint={meta.tint} />}
       />
 
       {/* Hero control panel */}
@@ -159,9 +211,21 @@ export function GameOverview({
               <div>
                 <p className="eyebrow text-muted-foreground">Server</p>
                 <p className="font-display text-2xl font-bold">
-                  {busyAction === "restart" ? "Restarting…" : busyAction === "stop" ? "Stopping…" : busyAction === "start" || (busy && !isOnline) ? "Starting…" : isOnline ? "Running" : "Powered down"}
+                  {ownBusy && busyAction === "restart" ? "Restarting…" : ownBusy && busyAction === "stop" ? "Stopping…" : ownBusy && (busyAction === "start" || !isOnline) ? "Starting…" : isOnline ? "Running" : "Powered down"}
                 </p>
                 <p className="mt-0.5 font-mono text-xs text-muted-foreground">{meta.connect.join("  ·  ")}</p>
+                {/* A disabled control that does not say why is the same failure as a
+                    silent operation, and this page had no such line at all. */}
+                {powerHeld ? (
+                  <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                    {blockedReason(powerHeld, elapsedMs(powerHeld))}
+                  </p>
+                ) : preemptable ? (
+                  <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                    {meta.name} is being worked on — {fileOperationLabel(preemptable, elapsedMs(preemptable))}.
+                    Powering off or restarting now cuts it short; you&apos;ll be asked to confirm.
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -177,11 +241,15 @@ export function GameOverview({
                 }}
               >
                 <PowerGlyph className="h-4 w-4" />
-                {busy ? "Working…" : isOnline ? "Power off" : "Power on"}
+                {ownBusy ? "Working…" : isOnline ? "Power off" : "Power on"}
               </button>
               {isOnline && (
-                <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy} onClick={() => control("restart")}>
-                  <RotateCw className={cn("h-4 w-4", busyAction === "restart" && "animate-spin")} />
+                <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy} onClick={onRestart}>
+                  {/* Not a spinner. `animate-spin` on a 1s CSS loop claims liveness it
+                      does not have, which is this codebase's defect class at the
+                      animation layer — and it was removed everywhere else in this
+                      feature and left here. */}
+                  <RotateCw className="h-4 w-4" />
                   {busyAction === "restart" ? "Restarting…" : "Restart"}
                 </Button>
               )}
@@ -265,8 +333,20 @@ export function GameOverview({
               <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              This will <strong>save and stop {blockingNames}</strong>, then start{" "}
-              <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
+              {blocking.length > 0 && (
+                <>
+                  This will <strong>save and stop {blockingNames}</strong>, then start{" "}
+                  <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
+                </>
+              )}
+              {preemptable && (
+                <>
+                  {blocking.length > 0 ? " " : ""}
+                  <strong>{meta.name}</strong> is also being worked on —{" "}
+                  {fileOperationLabel(preemptable, elapsedMs(preemptable))} — and starting now cuts
+                  that short. If it is a backup, the archive will be incomplete and is deleted.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -274,9 +354,44 @@ export function GameOverview({
               Cancel
             </Button>
             <Button onClick={() => control("start")} style={{ background: meta.tint, color: "var(--background)" }}>
-              Switch &amp; start
+              {blocking.length > 0 ? "Switch & start" : "Start anyway"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cutting a file operation short. Same copy as `/{game}/server`, because the same
+          click on the same world must mean the same thing on both pages. `open` is
+          derived from the content so the modal cannot outlive its own subject. */}
+      <Dialog
+        open={confirmPreempt !== null && preemptable !== undefined}
+        onOpenChange={(o) => !o && setConfirmPreempt(null)}
+      >
+        <DialogContent>
+          {preemptable && confirmPreempt && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} />
+                  {confirmPreempt === "stop" ? "Power off anyway?" : "Restart anyway?"}
+                </DialogTitle>
+                <DialogDescription>
+                  <strong>{meta.name}</strong> is being worked on —{" "}
+                  {fileOperationLabel(preemptable, elapsedMs(preemptable))}. Going ahead cuts it
+                  short. If it is a backup, the archive will be incomplete and is deleted; if it is
+                  a mod install, some mods will be missing.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setConfirmPreempt(null)}>
+                  Wait for it
+                </Button>
+                <Button variant="destructive" onClick={() => control(confirmPreempt)}>
+                  {confirmPreempt === "stop" ? "Power off anyway" : "Restart anyway"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

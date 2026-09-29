@@ -127,6 +127,11 @@ export function Modpacks() {
         setNewName("");
         setNewDesc("");
         toast.success("Modpack created");
+      } else {
+        // No `else` at all before this, so a 403 or a 500 produced total silence and
+        // the row either did or did not appear depending on a code path nobody could see.
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || "Couldn't create the modpack");
       }
     } finally {
       setCreating(false);
@@ -139,6 +144,9 @@ export function Modpacks() {
     if (res.ok) {
       setModpacks((prev) => prev.filter((p) => p.id !== id));
       toast.success("Modpack deleted");
+    } else {
+      const d = await res.json().catch(() => ({}));
+      toast.error(d.error || "Couldn't delete the modpack");
     }
   }
 
@@ -276,17 +284,35 @@ export function Modpacks() {
         });
       }
 
-      if (data.installed === 0 && data.total > 0) {
-        toast.error(`No mods installed (0 of ${data.total}). The server has no mods now.`);
-      } else if (missing > 0) {
-        toast.warning(`Installed ${data.installed} of ${data.total} mods — ${missing} failed.`);
-      } else {
-        toast.success(
-          `Installed ${data.installed} mod${data.installed === 1 ? "" : "s"}. Restart the server to apply.`
-        );
-      }
+      // NO outcome toast here, for any outcome.
+      //
+      // The operation's own completion toast carries `op.summary`, which is derived
+      // server-side from the recorded count and cannot overstate — and the
+      // visibility-suppression rule only silences `ok`, so these two fired *together*
+      // for exactly the non-clean outcomes: "Installed 142 of 166 mods — 24 failed."
+      // beside "Installed 142 of 166 mods; 24 failed. Open the report for which ones.",
+      // filling two of three toast slots with one sentence. `setInstallReport` above
+      // stays: the scrollable per-mod dialog carries detail no summary can.
     } catch {
-      toast.error("Failed to install modpack");
+      // Up to 166 sequential Modrinth fetches, so past ~100s a *successful* apply
+      // reported failure — and `setInstallReport` never ran, so the scrollable per-mod
+      // dialog built specifically because "166 failures in one toast is unreadable"
+      // never opened. Open it with what we know, and say the truth about the response.
+      setInstallReport({
+        packName,
+        installed: 0,
+        total: 0,
+        errors: [],
+        warnings: [
+          "The connection timed out before the install finished. It is still running on the " +
+            "server — watch the strip at the top of the page for the per-mod result, and don't " +
+            "start it again.",
+        ],
+      });
+      toast.info(
+        `Still installing ${packName}. The connection timed out before it finished, which is ` +
+          `normal for a large pack — watch the strip at the top of the page.`
+      );
     } finally {
       setInstalling(null);
     }
@@ -587,6 +613,16 @@ export function Modpacks() {
                   const urls = exportData?.mods
                     .filter((m) => m.downloadUrl)
                     .map((m) => m.downloadUrl!) || [];
+                  // The green "Starting download of 0 mods…" below used to fire
+                  // unconditionally — which is exactly the case for the 224 legacy
+                  // `ModpackMod` rows that carry no `downloadUrl` at all.
+                  if (urls.length === 0) {
+                    toast.warning(
+                      "None of these mods has a download link recorded, so there is nothing to " +
+                        "download. Re-import the pack to repair it."
+                    );
+                    return;
+                  }
                   for (const url of urls) {
                     const a = document.createElement("a");
                     a.href = url;

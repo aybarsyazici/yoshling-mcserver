@@ -7,6 +7,8 @@ import { mkdir, writeFile, rm, readdir, readFile, stat } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
 import { verifyUploadToken } from "@/lib/upload-token";
+import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
+import { conflictResponse, isConflict } from "@/lib/operation-response";
 
 // This route can be hit cross-origin from direct.yoshling.xyz (the non-Cloudflare
 // host used for large uploads). Allow that specific origin for CORS.
@@ -163,30 +165,90 @@ export async function POST(request: NextRequest) {
   const workDir = path.join(TMP_DIR, `world-work-${file.size}`);
 
   try {
+    return await runOperation(
+      {
+        kind: "world.upload",
+        game: "7dtd",
+        title: "Uploading a world",
+        startedBy: session?.user?.name ? { name: session.user.name } : null,
+      },
+      (op) => placeUpload(op, { file, zipPath, workDir, userId: userId!, json })
+    );
+  } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
+    return json({ error: (e as Error).message || "Upload failed" }, 500);
+  }
+}
+
+/**
+ * The server half of the upload, as an operation holding `files:7dtd`.
+ *
+ * The browser-to-server transfer stays client-only: the real percentage there is
+ * `xhr.upload.onprogress`, and the server has nothing at all to report until the body
+ * has landed. So the record begins at "Writing the upload to disk", which is honest
+ * about which half it can see.
+ *
+ * And "uploads are admin-only and serialized in practice" — the comment above
+ * `zipPath` — is now serialized in fact: two uploads of the same size share
+ * `world-upload-${size}.zip` and each one begins by overwriting it.
+ */
+async function placeUpload(
+  op: OpHandle,
+  {
+    file,
+    zipPath,
+    workDir,
+    userId,
+    json,
+  }: {
+    file: File;
+    zipPath: string;
+    workDir: string;
+    userId: string;
+    json: (body: object, status?: number) => NextResponse;
+  }
+): Promise<OpSuccess<NextResponse>> {
+  try {
     // Persist the upload to disk.
+    op.step("Writing the upload to disk");
+    op.detail(`${(file.size / 1e9).toFixed(2)} GB`);
     const buf = Buffer.from(await file.arrayBuffer());
     await writeFile(zipPath, buf);
+    op.settle(`Wrote the upload to disk — ${(file.size / 1e9).toFixed(2)} GB`);
 
     // Validate + list contents (also rejects non-zips / zip bombs early).
+    op.step("Checking the upload");
     const { stdout: listing } = await execFileAsync("unzip", ["-l", zipPath], { maxBuffer: 16 * 1024 * 1024 });
     if (/\.\.\//.test(listing)) {
-      return json({ error: "Zip contains unsafe paths" }, 400);
+      op.reject("Rejected the upload — it contains unsafe paths");
+      return { value: json({ error: "Zip contains unsafe paths" }, 400) };
     }
     const lower = listing.toLowerCase();
     const looksWorld = WORLD_MARKERS.some((m) => lower.includes(m.toLowerCase()));
     const looksSave = SAVE_MARKERS.some((m) => lower.includes(m.toLowerCase()));
 
     if (!looksWorld && !looksSave) {
-      return json(
-        { error: "This doesn't look like a 7DTD world or save. A world zip should contain files like dtm.raw / biomes.png / prefabs.xml." },
-        400
-      );
+      op.reject("Rejected the upload — not a 7 Days to Die world or save");
+      return {
+        value: json(
+          { error: "This doesn't look like a 7DTD world or save. A world zip should contain files like dtm.raw / biomes.png / prefabs.xml." },
+          400
+        ),
+      };
     }
+    const entryCount = listing.split("\n").filter((l) => /^\s*\d+\s/.test(l)).length;
+    op.settle(`Checked the upload — ${looksWorld ? "a world map" : "a save"}`, {
+      count: { done: entryCount, noun: "files" },
+    });
 
     // Extract to a clean work dir first, then place into the right home.
+    op.step("Unpacking the upload");
     await rm(workDir, { recursive: true, force: true });
     await mkdir(workDir, { recursive: true });
     await execFileAsync("unzip", ["-o", "-q", zipPath, "-d", workDir], { maxBuffer: 16 * 1024 * 1024, timeout: 240000 });
+    op.settle(`Unpacked ${entryCount.toLocaleString()} files`, {
+      count: { done: entryCount, noun: "files" },
+    });
 
     // Find the folder that actually contains the world/save markers (handles a
     // wrapping top-level folder in the zip).
@@ -208,34 +270,58 @@ export async function POST(request: NextRequest) {
       // including the live one. Require a real name, and re-check the path we
       // are about to delete really is a child of GeneratedWorlds.
       if (!/[a-zA-Z0-9]/.test(worldName) || path.dirname(dest) !== WORLDS_DIR) {
-        return json(
-          {
-            error: `Couldn't work out a world name from "${file.name}". Rename the zip (or the folder inside it) using plain letters and numbers, then upload again.`,
-          },
-          400
-        );
+        op.reject("Couldn't work out a world name from the zip");
+        return {
+          value: json(
+            {
+              error: `Couldn't work out a world name from "${file.name}". Rename the zip (or the folder inside it) using plain letters and numbers, then upload again.`,
+            },
+            400
+          ),
+        };
       }
       // Installing over an existing world deletes it, so refuse the same worlds
       // DELETE refuses rather than silently taking out a map in use.
       // "replace", not "delete": an upload of the same name may replace terrain a
       // backup references, but must never take out the world the server is running.
       const blocked = await protectedWorldReason(worldName, "replace");
-      if (blocked) return json({ error: blocked }, 409);
+      if (blocked) {
+        op.reject(`Refused to place the world — ${blocked}`);
+        return { value: json({ error: blocked }, 409) };
+      }
 
+      op.step("Placing the world");
       replacedExisting = await stat(dest).then(() => true).catch(() => false);
       await mkdir(WORLDS_DIR, { recursive: true });
       await rm(dest, { recursive: true, force: true });
       await execFileAsync("mv", [rootDir, dest]);
       installedAs = worldName;
+      op.settle(
+        replacedExisting
+          ? `Placed the world "${worldName}", replacing the copy already on the box`
+          : `Placed the world "${worldName}"`
+      );
     } else {
       kind = "save";
+      op.step("Placing the save");
       // Place the save under Saves/<parent>/<name> preserving its structure.
       const dest = path.join(SAVES_DIR, "Saves");
       await mkdir(dest, { recursive: true });
       // Copy contents of the extracted tree into Saves/ (merge).
       await execFileAsync("cp", ["-a", `${rootDir}/.`, `${dest}/`]);
       installedAs = path.basename(rootDir);
+      op.settle(`Placed the save "${installedAs}" under Saves`);
     }
+
+    // Read it back. "We ran mv" is not evidence the files are where the server will
+    // look for them, and the rule here is that a success rests on something observed
+    // after the work — an operation that returns without a fact renders `unverified`.
+    const landed = await stat(
+      kind === "world" ? path.join(WORLDS_DIR, installedAs) : path.join(SAVES_DIR, "Saves")
+    ).then(
+      (st) => st.isDirectory(),
+      () => false
+    );
 
     try {
       await db.activity.create({
@@ -247,18 +333,35 @@ export async function POST(request: NextRequest) {
       });
     } catch {}
 
-    return json({
-      success: true,
-      kind,
-      name: installedAs,
-      replacedExisting,
-      hint:
-        kind === "world"
-          ? `World "${installedAs}" installed${replacedExisting ? ", replacing the copy that was already on the box" : ""}. In Settings → set Game World to "${installedAs}" and start a new game on it.`
-          : `Save "${installedAs}" installed under Saves. Set Game World / Game Name to match it, then start the server.`,
-    });
-  } catch (e) {
-    return json({ error: (e as Error).message || "Upload failed" }, 500);
+    return {
+      facts: [
+        { label: "Installed as", value: installedAs },
+        {
+          label: "On disk",
+          value: landed ? "found where the server will look for it" : "not found after the move",
+          verdict: landed ? undefined : "bad",
+        },
+        ...(replacedExisting
+          ? [
+              {
+                label: "Replaced",
+                value: "an existing copy of the same name",
+                verdict: "warn" as const,
+              },
+            ]
+          : []),
+      ],
+      value: json({
+        success: true,
+        kind,
+        name: installedAs,
+        replacedExisting,
+        hint:
+          kind === "world"
+            ? `World "${installedAs}" installed${replacedExisting ? ", replacing the copy that was already on the box" : ""}. In Settings → set Game World to "${installedAs}" and start a new game on it.`
+            : `Save "${installedAs}" installed under Saves. Set Game World / Game Name to match it, then start the server.`,
+      }),
+    };
   } finally {
     await rm(zipPath, { force: true }).catch(() => {});
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
