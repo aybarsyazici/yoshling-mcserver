@@ -3,17 +3,10 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
-import { GAMES, otherGames, type GameId } from "@/lib/games";
+import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
-import {
-  blockedReason,
-  fileOperationLabel,
-  liveFileOperations,
-  namedFileOperations,
-  powerBlocker,
-} from "@/lib/operation-ui";
-import { liveStep } from "@/lib/operations-types";
+import { liveFileOperations, namedFileOperations, powerBlocker, powerState } from "@/lib/operation-ui";
 import { StatusPill } from "@/components/ui-bits";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { PowerGlyph } from "@/components/glyphs";
@@ -79,62 +72,30 @@ export function GameControls({ game }: { game: GameId }) {
    * shipped to remove, reintroduced for the longest operation on the box.
    */
   const powerHeld = blocker?.holdsPower ? blocker : undefined;
-  // Busy if THIS tab fired a request, or a *power* operation is in flight anywhere
-  // (another admin, another tab, the Workshop watcher). Either way, controls lock.
-  const busy = localBusy || serverBusy !== null || powerHeld !== undefined;
-  const busyAction = serverBusy?.action;
 
   /**
-   * Busy *about this world*, as opposed to busy at all.
+   * Everything about this world's power state, derived in ONE place.
    *
-   * The distinction matters because the two drive different things. Every power
-   * control locks on any power operation anywhere — one world at a time, so someone
-   * else's start is our business. But the **status panel** describes one container,
-   * and it must not borrow another world's activity: with only the global flag, a
-   * Minecraft hand-off made the Project Zomboid page report "Working…", show the
-   * `starting` pill and animate a blue Power Core, directly under a sentence that
-   * correctly said *Minecraft* was starting. Project Zomboid was stopped the whole
-   * time.
-   *
-   * Pre-dates the operations registry (the same expression is in 08abbc8) — the
-   * registry only made it legible, by naming the other world in the reason text and
-   * so putting the contradiction on screen in one glance.
+   * This logic was born here and is correct here; it was the other two surfaces
+   * (`/{game}` and `/home`) that never got the `a7d76b8` reachability fix and offered a
+   * `docker start` no-op for a wedged world. `powerState` is the shared derivation, so
+   * the three can no longer disagree about one container. See its docstring for the two
+   * properties that carry the fix.
    */
-  /**
-   * The live step of the blocking power operation, when that step is about THIS world.
-   *
-   * A hand-off is one operation whose `game` is the world coming **up**, and its steps are
-   * tagged per world — so the world being saved and shut down appears only in the steps.
-   * Keying ownership on `op.game` alone therefore left the outgoing world's own page
-   * claiming nothing was happening to it: measured on production 2m 35s into Project
-   * Zomboid's save+stop, `/zomboid/server` read "Running / Online / 0h 14m" with its uptime
-   * still counting up, and the only mention of its shutdown was inside a sentence about
-   * Minecraft. That is a five-minute window on every hand-off, and it is the mirror image
-   * of the bug 8760454 fixed.
-   */
-  const ownStep = powerHeld && liveStep(powerHeld)?.game === game ? liveStep(powerHeld) : undefined;
-  const ownBusy =
-    localBusy || serverBusy?.game === game || powerHeld?.game === game || ownStep !== undefined;
-  /**
-   * What is being done to THIS world, which is not always the operation's own action.
-   *
-   * On a hand-off away from us the operation's action is `start` (of the other world) while
-   * what is happening here is a stop — so the pill must not say "Booting" and the Power
-   * Core must not animate as though we were coming up.
-   */
-  const ownAction: "start" | "stop" | "restart" | undefined =
-    powerHeld?.game === game ? powerHeld.action : ownStep ? "stop" : serverBusy?.action;
-  const ownStopping = ownAction === "stop";
-
-  // Only one world can hold the box at a time, but check every other one
-  // rather than assume which — a stale container would otherwise be missed.
-  const blocking = otherGames(game).filter((g) => {
-    const s = games?.[g]?.status;
-    return s === "online" || s === "starting";
+  const power = powerState({
+    game,
+    games,
+    can,
+    localBusy,
+    serverBusy,
+    powerHeld,
+    preemptable,
+    elapsedMs,
+    clockSkewMs,
   });
-  const blockingNames = blocking.map((g) => GAMES[g].name).join(" and ");
-  const blockingVerb = blocking.length > 1 ? "are" : "is";
-  const blockingThem = blocking.length > 1 ? "them" : "it";
+  const { busy, ownBusy, ownAction, ownStopping, containerUp } = power;
+
+  const blockingNames = power.blocking.map((g) => GAMES[g].name).join(" and ");
 
   const coreState: CoreState =
     ownBusy && !isOnline
@@ -147,33 +108,10 @@ export function GameControls({ game }: { game: GameId }) {
       ? { kind: "holding", game }
       : { kind: "idle" };
 
-  /**
-   * The container is up but the game is not answering.
-   *
-   * This is its own state, not "stopped". Treating it as stopped is what left a
-   * wedged server unrecoverable from the dashboard: the UI offered **Power on**,
-   * which runs `docker start` on an already-running container — a silent no-op —
-   * while Restart was disabled because Restart required `isOnline`. Both the useful
-   * action and the honest label were missing at once.
-   */
-  const containerUp = snap?.containerRunning ?? isOnline;
-  const unreachable = containerUp && !isOnline;
-  // A normal boot also sits here, so only call it stuck once it has taken clearly
-  // longer than a boot ever does. Below that, it is just starting.
-  // Skew-corrected: `startedAtMs` is the box's clock (docker's `StartedAt`), so a laptop
-  // a few minutes fast declared a healthy 30-second boot "Not responding", and one a few
-  // minutes slow would never say it at all.
-  const startedFor = snap?.startedAtMs ? Date.now() + clockSkewMs - snap.startedAtMs : 0;
-  const looksStuck = unreachable && startedFor > 12 * 60 * 1000;
-
-  // Power on cannot help when the container is already up, so offer stop instead —
-  // and Restart, below, becomes the recommended way out.
-  const canPower = containerUp ? can.stop : can.start;
-
   // Only *this* world's work should caption this card — but a hand-off's save-and-stop of
   // this world IS this world's work, and it lives in the step rather than in `busy.stage`.
   const busyStage =
-    ownStep?.label ?? (serverBusy?.game === game ? serverBusy.stage : undefined);
+    power.ownStep?.label ?? (serverBusy?.game === game ? serverBusy.stage : undefined);
 
   // Drop the pending intent once the thing it was about is gone, so a later file
   // operation on this world cannot re-open a dialog nobody asked for.
@@ -192,7 +130,7 @@ export function GameControls({ game }: { game: GameId }) {
       if (cutShort.length > 0) return setConfirmPreempt("stop");
       return void control("stop");
     }
-    if (blocking.length > 0 || cutShort.length > 0) setConfirm(true);
+    if (power.blocking.length > 0 || cutShort.length > 0) setConfirm(true);
     else void control("start");
   }
 
@@ -250,20 +188,10 @@ export function GameControls({ game }: { game: GameId }) {
         <div className="flex items-start justify-between">
           <div>
             <p className="eyebrow text-muted-foreground">Status</p>
-            <p className="mt-1 font-display text-2xl font-bold">
-              {/* `ownBusy`, not `busy`: this line states what THIS container is
-                  doing. Another world's operation locks our buttons but does not
-                  change our state. */}
-              {isOnline
-                ? "Running"
-                : ownBusy
-                ? "Working…"
-                : looksStuck
-                ? "Not responding"
-                : unreachable
-                ? "Starting…"
-                : "Stopped"}
-            </p>
+            {/* `power.heading` is derived from `ownBusy`, not `busy`: this line states
+                what THIS container is doing. Another world's operation locks our
+                buttons but does not change our state. */}
+            <p className="mt-1 font-display text-2xl font-bold">{power.heading}</p>
           </div>
           <StatusPill
             status={ownBusy && !isOnline ? (ownStopping ? "stopping" : "starting") : status}
@@ -319,7 +247,7 @@ export function GameControls({ game }: { game: GameId }) {
         <p className="eyebrow text-muted-foreground">Controls</p>
         <button
           onClick={onPower}
-          disabled={busy || !canPower}
+          disabled={busy || !power.canPower}
           className="inline-flex h-12 items-center justify-center gap-2 rounded-xl font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-60"
           style={{
             background: isOnline ? "transparent" : meta.tint,
@@ -328,59 +256,34 @@ export function GameControls({ game }: { game: GameId }) {
           }}
         >
           <PowerGlyph className="h-5 w-5" />
-          {/* Only narrate a verb for an operation on THIS world. A Minecraft
-              hand-off used to relabel Project Zomboid's button "Starting…". The
-              button is still disabled either way; the reason line below says why. */}
-          {ownBusy ? busyLabel(busyAction) : containerUp ? "Power off" : "Power on"}
+          {/* `ownAction`, via `power.label` — NOT the operation's own `action`.
+              The *gate* was fixed to be per-world and the verb was not, so during a
+              hand-off this button read the incoming world's verb: pressing Power on for
+              Minecraft relabelled Project Zomboid's own button "Starting…" while PZ was
+              being shut down. `ownAction` falls back to `serverBusy.action`, so
+              everything that is not a hand-off is byte-identical. */}
+          {power.label}
         </button>
-        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !containerUp || !can.restart} onClick={onRestart}>
+        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !power.canRestart} onClick={onRestart}>
           {/* Not a spinner. `animate-spin` on a 1s CSS loop says "something is
               happening" whether or not anything is, which is the claim we refuse to
               make anywhere in this feature. */}
           <RotateCw className="h-4 w-4" />
-          {ownBusy && busyAction === "restart" ? "Restarting…" : "Restart"}
+          {ownBusy && ownAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
 
+        {/* One sentence, from one derivation, for every "why is this dead / what will
+            this do" case — so this and `/{game}`, `/home`, `/{game}/backups` and the
+            7DTD maintenance card cannot drift. It covers the action-less power holder
+            (the 7DTD update), which the old inline `serverBusy` branch structurally
+            could not see.
+
+            The words used to be bolded here with `<strong>` and nowhere else, including
+            in the `powerHeld` case *in this same box*, which already rendered
+            `blockedReason` unstyled. Plain text throughout is the consistent half of
+            that pair, and it is what buys a single copy. */}
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
-          {powerHeld ? (
-            // One helper for every "why is this dead" sentence in the app, so this and
-            // `/{game}/backups` and the 7DTD maintenance card cannot drift. It also
-            // covers the action-less power holder (the 7DTD update), which the old
-            // inline `serverBusy` branch structurally could not see — and it no longer
-            // lowercases the stage, which now embeds world names ("saving project
-            // zomboid").
-            <span>{blockedReason(powerHeld, elapsedMs(powerHeld))}</span>
-          ) : preemptable ? (
-            <span>
-              <strong className="text-foreground">{meta.name}</strong> is being worked on —{" "}
-              {fileOperationLabel(preemptable, elapsedMs(preemptable))}. Powering off or restarting
-              now cuts it short; you&apos;ll be asked to confirm.
-            </span>
-          ) : looksStuck ? (
-            <span>
-              The container is up but the game has not answered for{" "}
-              {Math.round(startedFor / 60000)} minutes. It is most likely wedged —{" "}
-              <strong className="text-foreground">Restart</strong> is the way out. Powering off and
-              on again does the same thing more slowly.
-            </span>
-          ) : unreachable ? (
-            <span>
-              Running but still loading, so it can&apos;t answer yet. Watch the bar at the top of the
-              page for progress; <strong className="text-foreground">Restart</strong> is available if
-              it stops moving.
-            </span>
-          ) : !canPower && !can.restart ? (
-            "You can view this server but not power it. Ask an admin for Mod access."
-          ) : blocking.length > 0 ? (
-            <span>
-              <strong className="text-foreground">{blockingNames}</strong> {blockingVerb} running.
-              Starting this one stops {blockingThem} first.
-            </span>
-          ) : isOnline ? (
-            "Stopping saves the world first."
-          ) : (
-            "Only one server runs at a time."
-          )}
+          {power.reason}
         </div>
       </div>
 
@@ -422,7 +325,7 @@ export function GameControls({ game }: { game: GameId }) {
               <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              {blocking.length > 0 && (
+              {power.blocking.length > 0 && (
                 <>
                   This saves and stops <strong>{blockingNames}</strong>, then starts{" "}
                   <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
@@ -433,7 +336,7 @@ export function GameControls({ game }: { game: GameId }) {
                   same-world and false everywhere else. */}
               {cutShort.length > 0 && (
                 <>
-                  {blocking.length > 0 ? " " : ""}
+                  {power.blocking.length > 0 ? " " : ""}
                   Work is in progress and starting now cuts it short:{" "}
                   <strong>{namedFileOperations(cutShort, elapsedMs)}</strong>.
                   Any backup among them is deleted rather than kept as a restore point.
@@ -446,7 +349,7 @@ export function GameControls({ game }: { game: GameId }) {
               Cancel
             </Button>
             <Button onClick={() => control("start")} style={{ background: meta.tint, color: "var(--background)" }}>
-              {blocking.length > 0 ? "Switch & start" : "Start anyway"}
+              {power.blocking.length > 0 ? "Switch & start" : "Start anyway"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -497,18 +400,8 @@ export function GameControls({ game }: { game: GameId }) {
   );
 }
 
-function busyLabel(action?: "start" | "stop" | "restart"): string {
-  switch (action) {
-    case "restart":
-      return "Restarting…";
-    case "stop":
-      return "Stopping…";
-    case "start":
-      return "Starting…";
-    default:
-      return "Working…";
-  }
-}
+// `busyLabel` lived here; it is in `operation-ui.ts` now, next to the `ownAction` that
+// is the only thing it may correctly be fed.
 
 function Cell({ label, value, tint }: { label: string; value: string; tint: string }) {
   return (

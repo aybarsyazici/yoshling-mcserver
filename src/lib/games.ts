@@ -23,15 +23,26 @@ export interface GameMeta {
   /** CSS custom-property names for the accent (already themed light/dark) */
   tint: string; // var(--mc) | var(--sd) | var(--pz)
   tintSoft: string;
-  tintDeep: string;
+  // There was a third, `tintDeep` (`var(--mc-deep)` &c). Zero consumers in any
+  // component — the accent is always `tint`, and the chart's second series is
+  // `tintSoft`. Deleted; the `--*-deep` CSS values still exist in `globals.css`.
   /** The connect address(es) players use. Multiple = show all (e.g. hostname + IP). */
   connect: string[];
   /**
-   * Rough RAM this world wants, in GB. Display fallback ONLY — the real figure
-   * comes from the compose file via /api/games/status, because this one goes
-   * stale the moment the setting or the box changes.
+   * How long a graceful stop of this world takes, in seconds.
+   *
+   * Here because the UI was stating one number for all three: the hand-off confirm and
+   * the memory card both promised "about a minute" for every world, and Project
+   * Zomboid's stop is a measured 5m 03s — so the single most-pressed control on the box
+   * understated its own duration by 5×, which is how "I clicked Restart and it sat
+   * there" became a bug report about something working as designed.
+   *
+   * Project Zomboid is 300 because it never exits on SIGTERM: `docker stop` burns its
+   * whole `stop_grace_period` and ends in SIGKILL. **That is a floor, not a worst
+   * case** — it is the fallback budget, and shortening the copy needs a measured fast
+   * stop first, not an optimistic guess here.
    */
-  ramGb: number;
+  stopSeconds: number;
   /** Label for the free-form `detail` metric (uptime, in-game day, …) */
   detailLabel: string;
   /** Routes the shared components (console/backups/files) call for this game. */
@@ -61,9 +72,8 @@ export const GAMES: Record<GameId, GameMeta> = {
     base: "/minecraft",
     tint: "var(--mc)",
     tintSoft: "var(--mc-soft)",
-    tintDeep: "var(--mc-deep)",
     connect: ["mc.yoshling.xyz"],
-    ramGb: 4,
+    stopSeconds: 30,
     detailLabel: "Uptime",
     api: {
       console: "/api/server/console",
@@ -80,11 +90,12 @@ export const GAMES: Record<GameId, GameMeta> = {
     base: "/7dtd",
     tint: "var(--sd)",
     tintSoft: "var(--sd-soft)",
-    tintDeep: "var(--sd-deep)",
     // Show both: the hostname, and the raw IP (7DTD's direct-connect box only
     // reliably accepts a literal IP, so the IP is the sure thing).
     connect: ["7dtd.yoshling.xyz:26900", `${HOST_IP}:26900`],
-    ramGb: 5,
+    // Its entrypoint really does `trap exit_handler SIGINT SIGTERM`, so it exits
+    // on its own: `docker inspect` reports `Exit=0`, not the 137 a SIGKILL leaves.
+    stopSeconds: 45,
     detailLabel: "In-game day",
     api: {
       console: "/api/7dtd/console",
@@ -105,9 +116,10 @@ export const GAMES: Record<GameId, GameMeta> = {
     base: "/zomboid",
     tint: "var(--pz)",
     tintSoft: "var(--pz-soft)",
-    tintDeep: "var(--pz-deep)",
     connect: ["pz.yoshling.xyz:16261", `${HOST_IP}:16261`],
-    ramGb: 4,
+    // PZ never exits on SIGTERM, so 300 is a floor, not a worst case: `docker stop`
+    // waits out the full `stop_grace_period` and then SIGKILLs. Measured 5m 03s.
+    stopSeconds: 300,
     detailLabel: "Uptime",
     api: {
       console: "/api/zomboid/console",
@@ -125,11 +137,11 @@ export const GAMES: Record<GameId, GameMeta> = {
 
 export const GAME_LIST: GameMeta[] = [GAMES.minecraft, GAMES["7dtd"], GAMES.zomboid];
 
-/**
- * Fallback only. The real host size is reported by /api/games/status; this
- * exists so nothing crashes if that hasn't loaded yet.
- */
-export const HOST_RAM_GB = 8;
+// `HOST_RAM_GB = 8` and `GameMeta.ramGb` used to live here as "display fallbacks".
+// Both had zero readers — `useGames` carries `hostGb` and `memoryGb` from
+// `/api/games/status`, which derives them from `/proc/meminfo` and the compose file.
+// They are deleted rather than kept, because the one thing a stale fallback reliably
+// does is outlive the hardware: `8` was the Hetzner box, and this one has 16 GB.
 
 /** The other worlds — the ones that must be stopped for `id` to get the box. */
 export function otherGames(id: GameId): GameId[] {
@@ -142,10 +154,26 @@ export function isGameId(v: string | null | undefined): v is GameId {
 
 export type ServerStatus = "online" | "offline" | "starting" | "stopping" | "installing";
 
+/**
+ * One vocabulary for one container.
+ *
+ * These are the `StatusPill` labels, and they used to be a second, different set of
+ * words for the same five states the headings already named: the pill said
+ * "Online / Offline / Booting" two inches from a heading saying
+ * "Running / Stopped / Starting…", so a single container described itself twice and
+ * disagreed with itself both times.
+ *
+ * `stopping` was the worse one. It read **"Saving"**, which is true for the first
+ * ~1 second of a Project Zomboid stop and false for the remaining ~300: the save
+ * completes in ~100–150 ms and the rest is `docker stop` waiting out the grace period.
+ * So the pill spent five minutes claiming a save that had already finished — the
+ * house defect ("reports something it did not observe") at the label layer. It now
+ * says what is actually true for the whole window.
+ */
 export const STATUS_LABEL: Record<ServerStatus, string> = {
-  online: "Online",
-  offline: "Offline",
-  starting: "Booting",
-  stopping: "Saving",
+  online: "Running",
+  offline: "Stopped",
+  starting: "Starting",
+  stopping: "Stopping",
   installing: "Installing",
 };

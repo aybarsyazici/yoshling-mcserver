@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
-import { GAMES, otherGames, type GameId } from "@/lib/games";
+import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
-import { blockedReason, fileOperationLabel, powerBlocker } from "@/lib/operation-ui";
+import { fileOperationLabel, powerBlocker, powerState } from "@/lib/operation-ui";
 import { StatusPill, SectionHeading } from "@/components/ui-bits";
 import { AnimatedNumber, Reveal, Stagger, StaggerItem, usePrefersReducedMotion } from "@/components/motion";
 import { PowerGlyph, GearGlyph, GameMark } from "@/components/glyphs";
@@ -48,7 +48,7 @@ export function GameOverview({
 }) {
   const meta = GAMES[game];
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, busy: serverBusy, refresh } = useGames(localBusy ? 1500 : 5000);
+  const { games, busy: serverBusy, can, clockSkewMs, refresh } = useGames(localBusy ? 1500 : 5000);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
@@ -71,12 +71,36 @@ export function GameOverview({
   const powerHeld = blocker?.holdsPower ? blocker : undefined;
   const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
 
-  const busy = localBusy || serverBusy !== null || powerHeld !== undefined;
-  // Busy about THIS world, for anything that describes this container's state.
-  // `busy` locks the controls (one world at a time); `ownBusy` is what may claim
-  // this world is doing something. See the long note in `game-controls.tsx`.
-  const ownBusy = localBusy || serverBusy?.game === game || powerHeld?.game === game;
-  const busyAction = serverBusy?.action;
+  /**
+   * The same derivation `/{game}/server` and `/home` use — this page had its own, and
+   * its own was the stale one.
+   *
+   * Three things were wrong here and all three came from testing `isOnline` where the
+   * question is "is the container up": Restart was rendered only `{isOnline && …}`, so
+   * the one state that needs it most (up, wedged, not answering) was the one state that
+   * hid it; Power on was offered for that same container, which makes `docker start`
+   * a no-op that toasts success and changes nothing; and the heading had no "Not
+   * responding" case, so a wedged world read "Starting…" forever. `a7d76b8` fixed
+   * exactly this on `/{game}/server` and never touched this file — the page each world
+   * *opens on*.
+   *
+   * Two more, now covered by the shared helper: `can` was read **nowhere** here, so a
+   * MEMBER pressed Power on and got an unexplained 403; and `ownBusy` omitted
+   * `ownStep`, so the world being saved during a hand-off read "Running" with a
+   * climbing uptime for the whole five minutes.
+   */
+  const power = powerState({
+    game,
+    games,
+    can,
+    localBusy,
+    serverBusy,
+    powerHeld,
+    preemptable,
+    elapsedMs,
+    clockSkewMs,
+  });
+  const { busy, ownBusy, ownAction, containerUp } = power;
 
   // Drop a pending intent once the operation it was about is gone, so the dialog cannot
   // be left open with no content (and therefore no accessible name), and cannot re-open
@@ -114,21 +138,20 @@ export function GameOverview({
   }, [game, isOnline]);
 
   // The world(s) that would have to be saved and stopped to start this one.
-  const blocking = otherGames(game).filter((g) => {
-    const s = games?.[g]?.status;
-    return s === "online" || s === "starting";
-  });
-  const blockingNames = blocking.map((g) => GAMES[g].name).join(" and ");
+  const blockingNames = power.blocking.map((g) => GAMES[g].name).join(" and ");
 
   function onPower() {
     if (busy) return;
-    if (isOnline) {
+    // `containerUp`, not `isOnline`: a wedged server is still running, so the only
+    // meaningful power action is to stop it. Branching on `isOnline` here is what sent
+    // a `start` at an already-started container — accepted, no-op, reported as success.
+    if (containerUp) {
       if (preemptable) return setConfirmPreempt("stop");
       return void control("stop");
     }
     // One dialog for both consequences, the way `game-controls.tsx` does it — never an
     // early return that drops the hand-off warning.
-    if (blocking.length > 0 || preemptable) setConfirm(true);
+    if (power.blocking.length > 0 || preemptable) setConfirm(true);
     else void control("start");
   }
 
@@ -178,7 +201,14 @@ export function GameOverview({
         title={meta.name}
         sub={meta.tagline}
         tint={meta.tint}
-        action={<StatusPill status={ownBusy && !isOnline ? "starting" : status} tint={meta.tint} />}
+        action={
+          <StatusPill
+            status={
+              ownBusy && !isOnline ? (power.ownStopping ? "stopping" : "starting") : status
+            }
+            tint={meta.tint}
+          />
+        }
       />
 
       {/* Hero control panel */}
@@ -210,29 +240,26 @@ export function GameOverview({
               </motion.div>
               <div>
                 <p className="eyebrow text-muted-foreground">Server</p>
-                <p className="font-display text-2xl font-bold">
-                  {ownBusy && busyAction === "restart" ? "Restarting…" : ownBusy && busyAction === "stop" ? "Stopping…" : ownBusy && (busyAction === "start" || !isOnline) ? "Starting…" : isOnline ? "Running" : "Powered down"}
-                </p>
+                {/* The four states this page could not name. It used to collapse
+                    "up but not answering" into "Starting…" with no upper bound and had
+                    no "Not responding" at all, so the one state that needs Restart
+                    looked like the one state that just needs patience. `power.heading`
+                    is the same string `/{game}/server` shows for the same container. */}
+                <p className="font-display text-2xl font-bold">{power.heading}</p>
                 <p className="mt-0.5 font-mono text-xs text-muted-foreground">{meta.connect.join("  ·  ")}</p>
                 {/* A disabled control that does not say why is the same failure as a
-                    silent operation, and this page had no such line at all. */}
-                {powerHeld ? (
-                  <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-                    {blockedReason(powerHeld, elapsedMs(powerHeld))}
-                  </p>
-                ) : preemptable ? (
-                  <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-                    {meta.name} is being worked on — {fileOperationLabel(preemptable, elapsedMs(preemptable))}.
-                    Powering off or restarting now cuts it short; you&apos;ll be asked to confirm.
-                  </p>
-                ) : null}
+                    silent operation, and this page had no such line at all — then had
+                    one for two cases out of eight. `power.reason` is the whole set,
+                    including "you can view this server but not power it", which is what
+                    a MEMBER got a bare 403 for instead. */}
+                <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">{power.reason}</p>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={onPower}
-                disabled={busy}
+                disabled={busy || !power.canPower}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60"
                 style={{
                   background: isOnline ? "transparent" : meta.tint,
@@ -241,16 +268,32 @@ export function GameOverview({
                 }}
               >
                 <PowerGlyph className="h-4 w-4" />
-                {ownBusy ? "Working…" : isOnline ? "Power off" : "Power on"}
+                {/* `power.label` branches on `containerUp`: offering "Power on" for a
+                    container that is already up sends a `docker start` that does
+                    nothing and toasts success, which is how a wedged world became
+                    unrecoverable from this page. */}
+                {power.label}
               </button>
-              {isOnline && (
-                <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy} onClick={onRestart}>
+              {/* Rendered on `containerUp`, NOT `isOnline`. Gating it on `isOnline` hid
+                  Restart in precisely the state that needs it — up, wedged, not
+                  answering — and that inversion is the whole of the `a7d76b8` fix,
+                  which this page never received. */}
+              {power.containerUp && (
+                <Button
+                  variant="outline"
+                  className="h-11 disabled:cursor-not-allowed"
+                  disabled={busy || !power.canRestart}
+                  onClick={onRestart}
+                >
                   {/* Not a spinner. `animate-spin` on a 1s CSS loop claims liveness it
                       does not have, which is this codebase's defect class at the
                       animation layer — and it was removed everywhere else in this
                       feature and left here. */}
                   <RotateCw className="h-4 w-4" />
-                  {busyAction === "restart" ? "Restarting…" : "Restart"}
+                  {/* `ownAction`, not the global `busy.action`: during a hand-off the
+                      latter is the *other* world's verb, so a Minecraft restart made
+                      this button read "Restarting…" on a Project Zomboid page. */}
+                  {ownBusy && ownAction === "restart" ? "Restarting…" : "Restart"}
                 </Button>
               )}
               <Link
@@ -333,7 +376,7 @@ export function GameOverview({
               <PowerGlyph className="h-4 w-4" style={{ color: meta.tint }} /> Switch servers?
             </DialogTitle>
             <DialogDescription>
-              {blocking.length > 0 && (
+              {power.blocking.length > 0 && (
                 <>
                   This will <strong>save and stop {blockingNames}</strong>, then start{" "}
                   <strong>{meta.name}</strong>. Players on {blockingNames} will be disconnected.
@@ -341,7 +384,7 @@ export function GameOverview({
               )}
               {preemptable && (
                 <>
-                  {blocking.length > 0 ? " " : ""}
+                  {power.blocking.length > 0 ? " " : ""}
                   <strong>{meta.name}</strong> is also being worked on —{" "}
                   {fileOperationLabel(preemptable, elapsedMs(preemptable))} — and starting now cuts
                   that short. If it is a backup, the archive will be incomplete and is deleted.
@@ -354,7 +397,7 @@ export function GameOverview({
               Cancel
             </Button>
             <Button onClick={() => control("start")} style={{ background: meta.tint, color: "var(--background)" }}>
-              {blocking.length > 0 ? "Switch & start" : "Start anyway"}
+              {power.blocking.length > 0 ? "Switch & start" : "Start anyway"}
             </Button>
           </DialogFooter>
         </DialogContent>
