@@ -70,9 +70,15 @@ evidence back" to be sayable.
   `[data-sonner-toast][data-styled=true]` at specificity (0,2,0), which beat the class
   (0,1,0) on exactly those four properties — so every toast looked identical regardless
   of severity and the class was, in effect, dead. Source order cannot help.
-- **`.op-warn` / `.op-bad` exist because `text-chart-5` measures 2.15:1 in Latte.** They
-  mix the tone toward `--foreground`, which clears AA in Latte and is automatically
-  right in Mocha. Use them for any outcome stated as text.
+- **`.op-warn` / `.op-bad` exist because `text-chart-5` measures 2.15:1 in Latte.** Use
+  them for any outcome stated as text. **The first version of this note claimed the
+  foreground-mix "clears AA in Latte" and that was wrong** — measured on production it
+  came out at 2.50–2.66:1, i.e. barely better than what it replaced. Latte now has a
+  dedicated `--op-warn: #7c4d02` (5.47:1 on the strip wash, still amber); `.op-bad`
+  keeps the mix, which does clear (4.43–4.70:1). Mocha was always fine (12.19:1). The
+  lesson is the reusable one: **a colour token's contrast is a measurement, not a
+  derivation** — a mix toward `--foreground` does not guarantee anything on a tinted
+  background.
 - **A stalled synthetic boot is a third reachability state** (`OperationView.stalled`),
   bounded by the same 12 minutes `game-controls.tsx` uses for "Not responding". Keep the
   two thresholds in step or the strip and the controls will disagree about the same
@@ -84,6 +90,41 @@ evidence back" to be sayable.
   blocking world in the reason text. Anything that claims this world is doing something
   must read `ownBusy`.
 
+## Rules the live run added
+
+Two blockers came out of running this against real containers, and both are rules rather
+than one-off fixes:
+
+- **A fact may belong to a different world than its operation.** A hand-off is ONE
+  operation whose `game` is the world coming *up*, and it records a `Shutdown` fact about
+  the world going *down*. Before `OperationFact.game` existed, starting 7DTD over a
+  running PZ summarised as *"7 Days to Die — started in 5m 04s, but **it** had to be
+  killed after 300s"* — blaming the arriving world for the departing world's SIGKILL and
+  sending anyone reading it to the wrong container. Any new summary template that names a
+  world must read **the fact's** world and fall back to `entry.game` only when the fact
+  carries none. Verified live afterwards: a dirty hand-off reads *"Switched to 7 Days to
+  Die in 5m 03s — Project Zomboid had to be killed after 300s"* (`partial`), and a clean
+  one reads *"Switched to Project Zomboid in 33s — 7 Days to Die stopped first"* (`ok`).
+- **Never derive a verdict from `State.ExitCode` without having observed the container
+  running.** The field persists across runs, so a stop against an already-stopped world
+  read the *previous* run's exit code and fabricated a save, a stop, a `Shutdown`
+  verdict and a durable `Activity` row for work that never happened — **and, because
+  admission is what marks live file operations `preempted`, it deleted a valid 290 MB
+  backup that was 11 minutes into copying.** `powerOff`, `restartGame` and
+  `narratedStop` now check state first and answer that case as outcome `nothing`.
+  The no-op deliberately runs with **`resources: []`** so it can pre-empt nothing — do
+  not give it `POWER_RESOURCES` for symmetry.
+- `powerOff` returns whether it actually stopped something and `powerOn` returns `[]`
+  when nothing happened; both control routes gate the durable `Activity` row and the
+  `GameState` write on that. A new caller that ignores it reintroduces "a log of things
+  that did not happen".
+- **`assertResourceFree()` / `fileLaneBusy()`** is how a sub-second writer joins the
+  resource lanes without entering a record of its own (a record would double-toast).
+  Seven config/settings routes use it; a new config writer should.
+- **Pre-emption is global, so every confirm dialog must be.** `liveFileOperations()` +
+  `namedFileOperations()` in `operation-ui.ts` are the one definition. `powerBlocker`
+  stays per-world — that is the *disable* decision and it is correct.
+
 ## What is deliberately not fixed
 
 - **A routine PZ restore or mod update shows an amber toast, not green**, because PZ's
@@ -91,9 +132,10 @@ evidence back" to be sayable.
   agrees with them. Making `concludeOperation` ignore that warn would trade a truthful
   amber for a comfortable lie.
 - **Pre-emption cannot cancel work.** `refuseIfPreempted` declines to *publish* a torn
-  archive and deletes it, so the confirm dialog's promise is true for backups. An
-  in-flight `cp -r` or a 166-mod install still runs to completion; the mod path has no
-  artefact to delete, so its dialog's "some mods will be missing" remains a prediction.
+  archive and deletes it, so the confirm dialog's promise is true for backups, and a
+  live pre-empted record now says so in the strip. But an in-flight `cp -r` or a
+  166-mod install still runs to completion; the mod path has no artefact to delete, so
+  its dialog's "some mods will be missing" remains a prediction.
 - **No `Activity` row on any operation's failure path**, so the durable log still records
   only successes. Non-`ok` records are kept in memory for 6 hours, which covers a
   distracted admin but not a web-container restart.
@@ -101,7 +143,39 @@ evidence back" to be sayable.
   which blocks the event loop and is what stalls the heartbeat on a large upload. A
   pre-existing performance defect, not a notification one.
 
-## Verified by rendering it, not by reading it
+## Proven on production, 2026-09-29
+
+Deployed and exercised against real containers, not inferred:
+
+- **The cross-layer `globalThis` fix is proven for two of three layers.** A
+  `backup.create` entered by a **route handler** appeared in `/api/operations` *and* in
+  the server-rendered HTML of `/home` (the **server component** layer), so
+  refresh-survival is real — confirmed three times on live operations with `curl`, no JS
+  executed. **The third layer, `instrumentation.ts`, is still unproven**: there were 0
+  stale Workshop mods all session, so `zomboid-updates.ts` returns `{action:"none"}`
+  before reaching either of its `runOperation` sites. The timer was observed ticking
+  eight times, so it is alive — the only missing ingredient is a genuinely stale mod.
+  **This is the last unproven path and it is the one nobody clicks.**
+- **A real PZ backup's summary matched disk exactly.** `Backup created — 291 MB, world
+  map included.` against a 291 M file; `tar -tzf` reads every member; the claimed parts
+  are all present (`Saves` 444,028 members, `db` 7, `Server` 9, plus `manifest.json`).
+  The `.work-` staging dir was cleaned up.
+- **Both hand-off directions summarise correctly** — see the world-aware-facts rule
+  above.
+- **Stopping an already-stopped world does nothing and says so**, writes no `Activity`
+  row, and leaves the backup count unchanged.
+- **`busy` is null for operations that hold no power** (a backup), and non-null **with an
+  `action`** for a power operation, with `beat` advancing while `since` stays put — the
+  heartbeat-not-total-duration lock policy working.
+
+**Measured, and worth knowing:** a PZ backup copies **442,064 files and takes ~11
+minutes**, not the ~4m20s the route's own comment predicts. It is far past Cloudflare's
+100 s origin timeout, so the browser request is dead long before the work finishes —
+which is the whole argument for the persistent ledger. The world copy is also a single
+opaque step for 10.5 of those minutes; file count *is* knowable here, so that row is the
+least informative in the system and is the obvious next improvement.
+
+## Also verified by rendering it, not by reading it
 
 Driven locally against a real build with a fixture operation
 (`next start`, a hand-minted session cookie — see the recipe in
