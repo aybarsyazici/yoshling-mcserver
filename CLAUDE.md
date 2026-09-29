@@ -37,6 +37,7 @@ then they stop being true.** Keep this one short enough to re-read.
 
 | Working on | Read first |
 |------------|-----------|
+| **Adding anything that takes more than ~10s**, or touching banners/toasts | **[`docs/OPERATIONS.md`](docs/OPERATIONS.md)** — the operation registry. A route cannot state its own outcome, and that is enforced by the compiler |
 | **Any pre-existing bug, or "is this feature actually correct?"** | **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)** — 185 reviewed findings across every route. Check it before assuming a defect is new, and check its §5 before trusting any finding |
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
 | A broken/misbehaving PZ **mod** | [`docs/PZ-MOD-BACKLOG.md`](docs/PZ-MOD-BACKLOG.md) — open defect list; check its harmless list before investigating |
@@ -118,14 +119,12 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     reported "updated 0 of 1 mods". Don't reintroduce a total-duration cap.
   - `setControlStage()` lets a long operation describe itself; it surfaces as
     `busy.stage` and is rendered as a progress line in `game-controls.tsx`.
-  - **`OperationBanner` (mounted in `dash-shell.tsx`) shows that stage on EVERY
-    page**, plus elapsed time, and toasts on the start/end transitions. It is a
-    banner and not only a toast on purpose: a mod-update apply takes ~6 minutes and
-    a toast is gone in seconds, so anyone who looked a little late saw silence — the
-    original bug wearing a hat. Measured 2026-09-15: an apply ran 18:30:25 →
-    18:36:23 with the power buttons correctly locked and **nothing anywhere saying
-    why**, which reads as the feature having done nothing. Disabled controls now
-    state their reason too. If you add another long operation, give it a stage.
+  - **Every long operation goes through the operation registry — see
+    [`docs/OPERATIONS.md`](docs/OPERATIONS.md).** `OperationBanner` is **gone**,
+    replaced by `OperationLedger`. The control lock is now a projection of that
+    registry rather than the source of truth, so `busy` still means what it always
+    did for `game-controls.tsx` and `mission-control.tsx`. **If you add a long
+    operation, wrap it in `runOperation` — do not invent a second mechanism.**
   - **"Container running but unreachable" is its own state — FIXED 2026-09-27
     (`a7d76b8`), don't collapse it back into "stopped".** The status probe asks the
     game (RCON/telnet), so a container that is up but not answering used to render
@@ -631,8 +630,9 @@ Still open:
   that. `deploy.sh` now **refuses and prints the diff** instead of reverting silently
   (`FORCE_COMPOSE=1` overrides). The real fix — have those features write to git, or
   drop compose from the checkout — is still open, so don't add another writer.
-- **There is no test suite and no `error.tsx`.** Every fix is verified by hand against a
-  live server, and any render throw white-screens the whole app.
+- **There is no test suite.** Every fix is verified by hand against a live server.
+  (`error.tsx` and `global-error.tsx` now exist, so a render throw no longer
+  white-screens the whole app.)
 - **The 7DTD Difficulty and Day length quick settings still render** for XML properties
   that do not exist. The API now reports them as `ignored`; the controls should be
   deleted from `src/app/7dtd/settings/page.tsx`.
