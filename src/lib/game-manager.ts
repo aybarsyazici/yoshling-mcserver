@@ -5,7 +5,7 @@ import path from "path";
 import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
-import { getPzStatus, pzSave, readModState } from "@/lib/zomboid";
+import { getPzStatus, pzConsole, pzSave, readModState } from "@/lib/zomboid";
 import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
 import {
   POWER_RESOURCES,
@@ -55,7 +55,6 @@ export interface GameRuntime {
   service: string;
   /** Directory (mounted in the web container) that holds this game's files */
   dir: string;
-  ram: string;
   /**
    * How this game's JVM heap is configured, or undefined when it has none.
    * 7 Days to Die is a Unity native server with no heap setting, so there is
@@ -70,7 +69,6 @@ export const RUNTIME: Record<GameId, GameRuntime> = {
     container: "yoshling-mc",
     service: "minecraft",
     dir: process.env.MC_SERVER_DIR || "/minecraft",
-    ram: "4G",
     // itzg/minecraft-server: MEMORY sets both -Xms and -Xmx.
     memory: { keys: ["MEMORY"], format: (gb) => `${gb}G` },
   },
@@ -78,13 +76,11 @@ export const RUNTIME: Record<GameId, GameRuntime> = {
     container: "yoshling-7dtd",
     service: "sevendtd",
     dir: process.env.SDTD_SERVER_DIR || "/sevendtd",
-    ram: "5G",
   },
   zomboid: {
     container: "yoshling-pz",
     service: "zomboid",
     dir: process.env.PZ_SERVER_DIR || "/zomboid",
-    ram: "4G",
     // The PZ image passes MAX_MEMORY straight to -Xmx.
     memory: { keys: ["MAX_MEMORY"], format: (gb) => `${gb * 1024}m` },
   },
@@ -207,9 +203,9 @@ interface GameDriver {
   start(): Promise<void>;
   /**
    * Ask the game to write the world out. Split from `stop()` so the two can be
-   * narrated separately: for Project Zomboid the save takes 433 ms and the stop
-   * takes the full 300 s, and one combined "Saving and stopping" step spends five
-   * minutes implying the save is what's slow.
+   * narrated separately: for Project Zomboid the save takes ~100–170 ms while the
+   * stop used to take the full 300 s, and one combined "Saving and stopping" step
+   * spends five minutes implying the save is what's slow.
    *
    * **Returns whether the game actually answered.** It used to swallow every error in a
    * bare `catch {}` and return `void`, so `narratedStop` settled "Saved Project Zomboid"
@@ -218,11 +214,22 @@ interface GameDriver {
    * data depends on without having done it.
    */
   save(): Promise<boolean>;
-  /** Stop the container, with this game's own grace period. */
-  stop(): Promise<void>;
-  /** Graceful: `save()` then `stop()`. */
-  gracefulStop(): Promise<void>;
-  restart(): Promise<void>;
+  /**
+   * Stop the container, with this game's own grace period.
+   *
+   * Both options exist for Project Zomboid, the one game that does not stop on
+   * SIGTERM (see `PZ_STOP_TIMEOUT`); Minecraft and 7 Days to Die ignore them and
+   * are plain `docker stop`.
+   *
+   * - `narrate` reports what the stop is *currently* waiting on. A stop that takes
+   *   more than a moment has to be able to say why, or it is indistinguishable from
+   *   hung — which is precisely how PZ's five-minute stop got reported.
+   * - `answering` is whether the game replied to the `save()` that just ran. It is
+   *   the only cheap evidence of whether asking it anything else is worth trying,
+   *   and it keeps a wedged server's stop from paying for a shutdown handshake it
+   *   provably cannot complete.
+   */
+  stop(opts?: { narrate?: (detail: string) => void; answering?: boolean }): Promise<void>;
 }
 
 function offlineStatus(game: GameId): GameStatus {
@@ -316,7 +323,9 @@ const DEFAULT_LOG_LINES = 200;
  * exec's buffer, whereupon the console route handed the buffer error back as if
  * the server had printed it. One place for the clamp and the buffer so the three
  * console routes cannot drift apart again (only PZ's had a `maxBuffer`).
- * 1000 lines of PZ log measures ~167 KB, so 4 MB leaves a wide margin.
+ * 1000 lines of PZ log measures ~85 KB (87,394 bytes, measured 2026-09-29 — three
+ * identical reads of `docker logs --tail 1000 yoshling-pz | wc -c`), so 4 MB leaves a
+ * wide margin. This said ~167 KB, which was not measured against this world.
  */
 export async function tailContainerLog(game: GameId, lines: number): Promise<string> {
   const tail = Number.isFinite(lines)
@@ -450,16 +459,6 @@ const minecraftDriver: GameDriver = {
   async stop() {
     await execAsync(`docker stop ${RUNTIME.minecraft.container}`);
   },
-  async gracefulStop() {
-    await minecraftDriver.save();
-    await minecraftDriver.stop();
-  },
-  async restart() {
-    try {
-      await rconSend("save-all flush");
-    } catch {}
-    await execAsync(`docker restart ${RUNTIME.minecraft.container}`);
-  },
 };
 
 // ── 7 Days to Die driver ────────────────────────────────────────────────────
@@ -558,26 +557,77 @@ const sevenDtdDriver: GameDriver = {
   async stop() {
     await execAsync(`docker stop ${RUNTIME["7dtd"].container}`);
   },
-  async gracefulStop() {
-    await sevenDtdDriver.save();
-    await sevenDtdDriver.stop();
-  },
-  async restart() {
-    try {
-      await sdtdSaveWorld();
-    } catch {}
-    await execAsync(`docker restart ${RUNTIME["7dtd"].container}`);
-  },
 };
 
 // ── Project Zomboid driver ──────────────────────────────────────────────────
 
-// The container's entrypoint traps SIGTERM, writes `quit` to the server console
-// and blocks until the world is written out. Saving can take well over docker's
-// default 10s grace period, so every stop/restart passes an explicit timeout.
-// 120s proved too short with a player connected — docker escalated to SIGKILL
-// mid-save. Keep this in step with `stop_grace_period` in docker-compose.yml.
+// ## Why Project Zomboid needs a shutdown command and the other two do not
+//
+// This comment used to say: "the container's entrypoint traps SIGTERM, writes
+// `quit` to the server console and blocks until the world is written out […] 120s
+// proved too short with a player connected — docker escalated to SIGKILL mid-save."
+//
+// **Every clause of that was false, and it cost three audits.** It described a
+// working graceful shutdown whose only problem was being slow, so each audit read
+// "PZ stops take five minutes" as a tuning question that had already been answered
+// and moved on. Measured on production 2026-09-29:
+//
+//   - There is no trap. `grep -c trap /server/scripts/entry.sh` → 0, and
+//     `grep -rn trap /server/scripts/` is empty across every script in the image.
+//   - `entry.sh` is a bash script running as PID 1, and it launches the game through
+//     `su - steam -c`, so the JVM is a *grandchild* in its own session and process
+//     group — nothing would forward a signal to it even if something caught one.
+//   - `grep SigCgt /proc/1/status` → `0000000000010002`, i.e. bits 1 and 16 =
+//     SIGINT(2) and SIGCHLD(17). SIGTERM(15) would be bit 14 (`0x4000`) and is not
+//     there. **The kernel discards uncaught signals sent to a namespace's PID 1**, so
+//     `docker stop`'s SIGTERM is not merely unforwarded — it is thrown away. The
+//     process could never have exited on it, at any timeout.
+//   - The 120s→300s causation was impossible. A save takes ~100–170 ms: ten consecutive
+//     RCON `save` calls answered in 100.7–101.1 ms, and the game's own log reported
+//     102.6–170.9 ms for the saves themselves. Nothing was ever "SIGKILLed mid-save" —
+//     it is three orders of magnitude inside a 120s budget. Raising the timeout only
+//     bought a longer wait before the identical SIGKILL, which is what
+//     `journalctl -u docker` shows: 14 × "failed to exit within 5m0s of signal 15" in
+//     three days, every one of them this container (`yoshling-pz` is the only service
+//     with a 300s `StopTimeout`, and all 14 lines say 5m0s).
+//
+// So the world was never being written out by signal handling. It was written by the
+// `save()` this module sends over RCON just before the stop, and the five minutes
+// that followed were pure waiting for a SIGKILL.
+//
+// What actually makes it exit is asking the game itself: RCON `quit`
+// ("* quit : Save and quit the server", confirmed against the live server's `help`).
+// `stop()` below does that first and keeps `docker stop` as the fallback.
+//
+// Verified end-to-end against production on 2026-09-29, 0 players: `save` then `quit`
+// over RCON, and the container was `exited` **9.0 s** later (quit at 15:53:33.758Z,
+// `.State.FinishedAt` 15:53:42.680Z) with **exit code 0, not 137**. Its log ran
+// "Saving took 115.79 ms" → "waiting for UdpEngine thread termination" → "Shutdown
+// handling finished", and `journalctl -u docker` gained **no** new "failed to exit"
+// line. Same operation before this change: 300 s and a SIGKILL, every time.
+//
+// `PZ_STOP_TIMEOUT` therefore stays at 300 and stays in step with
+// `stop_grace_period` in docker-compose.yml. It is **not** headroom for a slow save;
+// it is the budget for a server that has stopped answering RCON at all — the
+// documented 2026-09-22 wedge, where `quit` is exactly the thing that cannot land.
+// Lowering it without a mechanism that makes the process genuinely exit just
+// SIGKILLs a wedged world sooner.
 const PZ_STOP_TIMEOUT = 300;
+
+/**
+ * How long to wait for an RCON `quit` to actually take the container down before
+ * falling back to `docker stop`.
+ *
+ * A clean quit is fast — measured 9.0 s end to end on production (the save is ~100–170
+ * ms; the rest is the UdpEngine thread and JVM teardown). 60 s is ~6× that, because the
+ * costs are asymmetric: being too generous adds seconds to the rare fallback path, while
+ * being too mean abandons a shutdown that was working and SIGKILLs the world mid-exit.
+ *
+ * This is a bound on the wait, not an expectation. The loop below exits as soon as the
+ * container does, so the healthy path never spends it.
+ */
+const PZ_QUIT_WAIT_MS = 60_000;
+const PZ_QUIT_POLL_MS = 500;
 
 /**
  * How far into its boot Project Zomboid is, read out of the container log.
@@ -671,18 +721,70 @@ const zomboidDriver: GameDriver = {
       return false;
     }
   },
-  async stop() {
-    await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${RUNTIME.zomboid.container}`);
-  },
-  async gracefulStop() {
-    await zomboidDriver.save();
-    await zomboidDriver.stop();
-  },
-  async restart() {
+  /**
+   * Ask the game to quit, then fall back to `docker stop`.
+   *
+   * See the comment above `PZ_STOP_TIMEOUT` for why `docker stop` alone can never
+   * work here: SIGTERM is discarded by the kernel, so this was a guaranteed 300s
+   * wait ending in SIGKILL, 14 times in the three days before this was written.
+   */
+  async stop(opts) {
+    const { container } = RUNTIME.zomboid;
+
+    // `answering === false` means the `save()` that just ran got no reply, so the
+    // server is not listening on RCON and `quit` provably cannot land either. Skip
+    // the handshake rather than spending PZ_QUIT_WAIT_MS proving it again — that
+    // would make the one genuinely broken case (the 2026-09-22 wedge) *slower* than
+    // it is today, which is the opposite of the point.
+    if (opts?.answering === false) {
+      opts?.narrate?.(
+        `The server is not answering RCON, so it cannot be asked to quit — waiting up to ` +
+          `${PZ_STOP_TIMEOUT}s for SIGTERM, which it will not act on, then the kernel kills it`
+      );
+      await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${container}`);
+      return;
+    }
+
     try {
-      await pzSave();
-    } catch {}
-    await execAsync(`docker restart -t ${PZ_STOP_TIMEOUT} ${RUNTIME.zomboid.container}`);
+      await pzConsole("quit");
+    } catch {
+      // Not necessarily a failure. `quit` makes the server close the connection, so
+      // losing the reply is an expected *shape of success* and is indistinguishable
+      // here from a refusal. Either way the poll below reads the container rather
+      // than trusting the reply, and `docker stop` settles whatever it finds — so
+      // there is nothing to decide at this point.
+    }
+
+    const t0 = Date.now();
+    opts?.narrate?.("Asked the server to quit over RCON — waiting for it to exit");
+    let exited = false;
+    while (Date.now() - t0 < PZ_QUIT_WAIT_MS) {
+      if ((await containerState(container)) !== "running") {
+        exited = true;
+        opts?.narrate?.(`Exited on its own ${((Date.now() - t0) / 1000).toFixed(1)}s after being asked`);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, PZ_QUIT_POLL_MS));
+    }
+    if (!exited) {
+      // The one case this change makes SLOWER, and it is worth saying so: a server that
+      // answered the save but then ignored `quit` costs PZ_QUIT_WAIT_MS before the
+      // fallback starts its own PZ_STOP_TIMEOUT. That is a failure mode we have never
+      // observed — and being told which of the two mechanisms is being waited on is
+      // worth more than the seconds, because "Restarting…" with no stage for five
+      // minutes is the complaint that started all of this.
+      opts?.narrate?.(
+        `Still running ${PZ_QUIT_WAIT_MS / 1000}s after being asked to quit — falling back to ` +
+          `SIGTERM and up to ${PZ_STOP_TIMEOUT}s before the kernel kills it`
+      );
+    }
+
+    // UNCONDITIONAL, and must stay that way. On a container that has already exited
+    // this is an instant no-op, so it costs nothing on the happy path — and it is the
+    // entire fallback when `quit` did not take. Making it conditional on the poll
+    // having seen the exit would leave a server that ignored `quit` running while this
+    // returned success, which is the defect class this module exists to prevent.
+    await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${container}`);
   },
 };
 
@@ -817,6 +919,12 @@ async function containerExit(container: string): Promise<{ state: string; exitCo
  * so every PZ stop reported a clean success and hid the kill. `.State.ExitCode` is
  * the only place that fact exists; 137 is 128 + SIGKILL.
  *
+ * `zomboidDriver.stop()` now asks the game to quit over RCON first, so the healthy
+ * path exits 0 and this reports it as such. That makes the check *more* load-bearing,
+ * not less: a 137 here is now a real signal — it means `quit` did not land and the
+ * fallback had to kill a wedged server — where before it was the routine outcome and
+ * told nobody anything.
+ *
  * ## Why it reads the container first
  *
  * `.State.ExitCode` **persists across runs**, so reading it without having observed
@@ -863,12 +971,24 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
 
   const grace = game === "zomboid" ? PZ_STOP_TIMEOUT : null;
   op.step(`Stopping ${name}`, { game });
+
+  // The save result stays on the line for the whole stop. It is the fact a player's
+  // data depends on, and a stop can run for minutes — so it must not be replaced by
+  // the driver's progress, only extended by it.
+  const savedPrefix = saved ? `Saved in ${savedMs} ms` : "Not saved";
+  // Zomboid's driver narrates its own phases within a few hundred ms and the first of
+  // them is "asked it to quit", so do NOT open with "waiting up to 300s" here: that is
+  // the fallback budget, and stating it up front is what made a 9-second stop look like
+  // a five-minute one before the operator had any other line to read.
   op.detail(
     grace
-      ? `${saved ? `Saved in ${savedMs} ms` : "Not saved"} — waiting up to ${grace}s for the process to exit`
-      : `${saved ? `Saved in ${savedMs} ms` : "Not saved"} — waiting for the process to exit`
+      ? `${savedPrefix} — asking it to shut down`
+      : `${savedPrefix} — waiting for the process to exit`
   );
-  await DRIVERS[game].stop();
+  await DRIVERS[game].stop({
+    answering: saved,
+    narrate: (line) => op.detail(`${savedPrefix} — ${line}`),
+  });
 
   const { state, exitCode } = await containerExit(RUNTIME[game].container);
   if (state === "running") {
@@ -1154,16 +1274,24 @@ export async function containerImage(game: GameId): Promise<string> {
 }
 
 /**
- * Restart, as stop-then-start rather than `driver.restart()`.
+ * Restart, as `narratedStop` then `narratedStart` — two named phases, never one
+ * opaque `docker restart`.
  *
- * Every driver's `restart()` is "save, then `docker restart`" — one opaque call,
- * so it could not report which half it was in. For Project Zomboid the stop half
- * alone is up to `PZ_STOP_TIMEOUT` (300s), and with no stage set the UI showed a
- * spinning "Restarting…" and nothing else for minutes, which reads as hung.
- * Splitting it is behaviourally identical (`gracefulStop` = save + `docker stop
- * -t N`, `start` = `docker start`) and lets each phase name itself.
+ * Each driver used to carry a `restart()` ("save, then `docker restart`") and a
+ * `gracefulStop()` ("save, then `stop`"). Both were deleted in this pass, because
+ * **both had zero callers** and the one that remained reachable was a trap: PZ's was
+ * a bare `docker restart -t 300`, i.e. exactly the single opaque call this function
+ * was written to replace, left sitting in the driver ready for the next person to
+ * reach for. One combined call cannot report which half it is in, and for Project
+ * Zomboid the stop half dominates — so the UI showed a spinning "Restarting…" with no
+ * stage for minutes, which is indistinguishable from hung and got reported as hung.
  *
- * `start()` returns as soon as the container is up, so the lock releases early
+ * Deleting them is **not** licence to reintroduce a `docker restart`. The `save()` /
+ * `stop()` split on `GameDriver` stays: it is what lets each phase name itself, and
+ * it is what lets `stop()` know whether the game answered the save — which is now
+ * load-bearing for PZ's shutdown (see `PZ_STOP_TIMEOUT`).
+ *
+ * `narratedStart` returns as soon as the container is up, so the lock releases early
  * and the UI falls through to the richer per-boot progress (`snap.boot`).
  */
 export async function restartGame(game: GameId, startedBy?: string | null): Promise<void> {
