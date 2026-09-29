@@ -177,10 +177,16 @@ async function applyModpack(
   const hasWorld = await stat(path.join(MC_DIR, "world")).then(() => true).catch(() => false);
 
   if (!hasWorld) {
-    // Nothing to protect, so nothing to refuse. Still recorded as a `noop` rather than
-    // passed over in silence: the reader should be able to tell "no backup was needed"
-    // from "a backup was taken".
-    op.settle("Nothing to back up — there is no world on disk yet", { kind: "noop" });
+    // Settled `done`, NOT `noop`, and that distinction is load-bearing:
+    // `concludeOperation` turns any `noop` step into a `partial` outcome, so marking
+    // this one would have painted a flawless 166-mod apply amber on every server that
+    // has no world yet — inventing trouble, which is the thing this pass is cleaning up.
+    // Nothing went wrong here; there was simply nothing to do. `/api/7dtd/reset` settles
+    // its equivalent branch ("No existing save to back up") exactly this way.
+    //
+    // The fact still records it, so the outcome is `ok` rather than `unverified` and a
+    // reader can tell "no backup was needed" from "a backup was taken".
+    op.settle("Nothing to back up — there is no world on disk yet");
     op.fact({ label: "Rollback point", value: "no world on disk yet, so none was needed" });
   } else {
     try {

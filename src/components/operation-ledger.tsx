@@ -211,6 +211,9 @@ export function OperationLedger({
   /** Expanded with more than one live operation, the line names the group, not a record. */
   const groupOpen = open && !primaryStale && runningCount > 1;
   const needsName = groupOpen ? oneWorld : !primaryLede.includes(primaryName);
+  /** The two extra collapsed lines, computed once — both are read twice below. */
+  const primaryDetail = primary && !primary.endedAt ? collapsedDetail(primary) : undefined;
+  const primaryConcern = primary && !primary.endedAt ? newestConcern(primary) : undefined;
 
   return (
     <>
@@ -410,9 +413,9 @@ export function OperationLedger({
           changes every few seconds. `announce()` stays label-only so a screen reader is
           never talked over — see its docstring.
         */}
-        {!open && !primary.endedAt && collapsedDetail(primary) && (
+        {!open && primaryDetail && (
           <p className="op-chrome mt-1 truncate pl-[43px] font-mono text-[11px]" aria-hidden>
-            {collapsedDetail(primary)}
+            {primaryDetail}
           </p>
         )}
 
@@ -428,18 +431,30 @@ export function OperationLedger({
           been saved *after* the SIGKILL — i.e. after the only window in which a human
           could have done anything about it.
 
+          It names the world when the fact is about a DIFFERENT one from the operation's
+          own, which on this box is the common case rather than an edge case: a hand-off is
+          one operation whose `game` is the world coming *up*, and the warnings it collects
+          ("the world was not saved", "killed after 300s") are about the world going
+          *down*. That is exactly what `OperationFact.game` exists to disambiguate — the
+          derived summary once read "Minecraft — started in 5m 04s, but it had to be killed
+          after 300s" when it was Project Zomboid that was SIGKILLed. Printing this fact
+          bare under a "Starting Minecraft" heading would have reintroduced that mix-up in
+          a new place.
+
           Not `aria-hidden`: a fact is appended once and does not churn, and this sits
           outside the `role="status"` region above, so it is read on navigation and never
           announced over the user.
         */}
-        {!open && !primary.endedAt && newestConcern(primary) && (
+        {!open && primaryConcern && (
           <p
             className={cn(
               "mt-1 truncate pl-[43px] text-[11px]",
-              newestConcern(primary)!.verdict === "bad" ? "op-bad" : "op-warn"
+              primaryConcern.verdict === "bad" ? "op-bad" : "op-warn"
             )}
           >
-            {newestConcern(primary)!.value}
+            {primaryConcern.game && primaryConcern.game !== primary.game
+              ? `${GAMES[primaryConcern.game].name}: ${primaryConcern.value}`
+              : primaryConcern.value}
           </p>
         )}
 
