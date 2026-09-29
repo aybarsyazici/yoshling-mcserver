@@ -72,6 +72,10 @@ export function GameOverview({
   const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
 
   const busy = localBusy || serverBusy !== null || powerHeld !== undefined;
+  // Busy about THIS world, for anything that describes this container's state.
+  // `busy` locks the controls (one world at a time); `ownBusy` is what may claim
+  // this world is doing something. See the long note in `game-controls.tsx`.
+  const ownBusy = localBusy || serverBusy?.game === game || powerHeld?.game === game;
   const busyAction = serverBusy?.action;
 
   // Drop a pending intent once the operation it was about is gone, so the dialog cannot
@@ -174,7 +178,7 @@ export function GameOverview({
         title={meta.name}
         sub={meta.tagline}
         tint={meta.tint}
-        action={<StatusPill status={busy && !isOnline ? "starting" : status} tint={meta.tint} />}
+        action={<StatusPill status={ownBusy && !isOnline ? "starting" : status} tint={meta.tint} />}
       />
 
       {/* Hero control panel */}
@@ -207,7 +211,7 @@ export function GameOverview({
               <div>
                 <p className="eyebrow text-muted-foreground">Server</p>
                 <p className="font-display text-2xl font-bold">
-                  {busyAction === "restart" ? "Restarting…" : busyAction === "stop" ? "Stopping…" : busyAction === "start" || (busy && !isOnline) ? "Starting…" : isOnline ? "Running" : "Powered down"}
+                  {ownBusy && busyAction === "restart" ? "Restarting…" : ownBusy && busyAction === "stop" ? "Stopping…" : ownBusy && (busyAction === "start" || !isOnline) ? "Starting…" : isOnline ? "Running" : "Powered down"}
                 </p>
                 <p className="mt-0.5 font-mono text-xs text-muted-foreground">{meta.connect.join("  ·  ")}</p>
                 {/* A disabled control that does not say why is the same failure as a
@@ -237,7 +241,7 @@ export function GameOverview({
                 }}
               >
                 <PowerGlyph className="h-4 w-4" />
-                {busy ? "Working…" : isOnline ? "Power off" : "Power on"}
+                {ownBusy ? "Working…" : isOnline ? "Power off" : "Power on"}
               </button>
               {isOnline && (
                 <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy} onClick={onRestart}>

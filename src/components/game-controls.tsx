@@ -68,6 +68,24 @@ export function GameControls({ game }: { game: GameId }) {
   const busy = localBusy || serverBusy !== null || powerHeld !== undefined;
   const busyAction = serverBusy?.action;
 
+  /**
+   * Busy *about this world*, as opposed to busy at all.
+   *
+   * The distinction matters because the two drive different things. Every power
+   * control locks on any power operation anywhere — one world at a time, so someone
+   * else's start is our business. But the **status panel** describes one container,
+   * and it must not borrow another world's activity: with only the global flag, a
+   * Minecraft hand-off made the Project Zomboid page report "Working…", show the
+   * `starting` pill and animate a blue Power Core, directly under a sentence that
+   * correctly said *Minecraft* was starting. Project Zomboid was stopped the whole
+   * time.
+   *
+   * Pre-dates the operations registry (the same expression is in 08abbc8) — the
+   * registry only made it legible, by naming the other world in the reason text and
+   * so putting the contradiction on screen in one glance.
+   */
+  const ownBusy = localBusy || serverBusy?.game === game || powerHeld?.game === game;
+
   // Only one world can hold the box at a time, but check every other one
   // rather than assume which — a stale container would otherwise be missed.
   const blocking = otherGames(game).filter((g) => {
@@ -78,7 +96,8 @@ export function GameControls({ game }: { game: GameId }) {
   const blockingVerb = blocking.length > 1 ? "are" : "is";
   const blockingThem = blocking.length > 1 ? "them" : "it";
 
-  const coreState: CoreState = busy && !isOnline ? { kind: "booting", game } : isOnline ? { kind: "holding", game } : { kind: "idle" };
+  const coreState: CoreState =
+    ownBusy && !isOnline ? { kind: "booting", game } : isOnline ? { kind: "holding", game } : { kind: "idle" };
 
   /**
    * The container is up but the game is not answering.
@@ -183,9 +202,12 @@ export function GameControls({ game }: { game: GameId }) {
           <div>
             <p className="eyebrow text-muted-foreground">Status</p>
             <p className="mt-1 font-display text-2xl font-bold">
+              {/* `ownBusy`, not `busy`: this line states what THIS container is
+                  doing. Another world's operation locks our buttons but does not
+                  change our state. */}
               {isOnline
                 ? "Running"
-                : busy
+                : ownBusy
                 ? "Working…"
                 : looksStuck
                 ? "Not responding"
@@ -194,7 +216,7 @@ export function GameControls({ game }: { game: GameId }) {
                 : "Stopped"}
             </p>
           </div>
-          <StatusPill status={busy && !isOnline ? "starting" : status} tint={meta.tint} />
+          <StatusPill status={ownBusy && !isOnline ? "starting" : status} tint={meta.tint} />
         </div>
 
         <div className="my-4 flex justify-center">
@@ -254,14 +276,17 @@ export function GameControls({ game }: { game: GameId }) {
           }}
         >
           <PowerGlyph className="h-5 w-5" />
-          {busy ? busyLabel(busyAction) : containerUp ? "Power off" : "Power on"}
+          {/* Only narrate a verb for an operation on THIS world. A Minecraft
+              hand-off used to relabel Project Zomboid's button "Starting…". The
+              button is still disabled either way; the reason line below says why. */}
+          {ownBusy ? busyLabel(busyAction) : containerUp ? "Power off" : "Power on"}
         </button>
         <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !containerUp || !can.restart} onClick={onRestart}>
           {/* Not a spinner. `animate-spin` on a 1s CSS loop says "something is
               happening" whether or not anything is, which is the claim we refuse to
               make anywhere in this feature. */}
           <RotateCw className="h-4 w-4" />
-          {busyAction === "restart" ? "Restarting…" : "Restart"}
+          {ownBusy && busyAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
 
         <div className="mt-1 rounded-lg bg-background/50 p-3 text-xs text-muted-foreground ring-1 ring-foreground/10">
