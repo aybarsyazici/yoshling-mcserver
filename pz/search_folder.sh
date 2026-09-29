@@ -104,9 +104,15 @@ search_folder() {
     #   - `Muldraugh, KY` — entry.sh appends it, and it must stay last.
     #   - anything not in `cells` — a map that was uninstalled, or a stock map that
     #     ships with the game and is not ours to place.
+    # `tr -d '\r'`: the live .ini has LF endings today (checked), but
+    # /api/zomboid/config/import writes an uploaded file verbatim, so an .ini brought
+    # over from a Windows server really can be CRLF — and then the last name in the
+    # list would be "Muldraugh, KY\r", matching neither the skip below nor any key of
+    # `cells`. entry.sh strips \r from this very script "for good measure" for the same
+    # reason.
     local ini="${HOMEDIR}/Zomboid/Server/${SERVERNAME}.ini"
     local existing=""
-    [ -f "$ini" ] && existing=$(grep -m1 '^Map=' "$ini" | cut -d= -f2-)
+    [ -f "$ini" ] && existing=$(grep -m1 '^Map=' "$ini" | cut -d= -f2- | tr -d '\r')
 
     local -A emitted=()
     local list=""
