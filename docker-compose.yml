@@ -24,8 +24,14 @@ services:
     # unbounded crash loop, and on a host reboot it would start Minecraft regardless
     # of which world was meant to be running -- and only one fits on the box.
     restart: "no"
-    # Docker's default is 10s, which is not enough to save a 217 MB world; PZ only
-    # got a grace period after a save was SIGKILLed halfway.
+    # Docker's default is 10s, which is not enough to save a 217 MB world. Minecraft
+    # DOES exit on SIGTERM (verified: a stop leaves `.State.ExitCode` 0), so this is a
+    # real grace period that gets used, not a timeout that gets waited out.
+    #
+    # This used to add "PZ only got a grace period after a save was SIGKILLed halfway".
+    # That never happened -- a PZ save takes ~100-170 ms (measured 2026-09-29) and could
+    # not overrun any of these timeouts; PZ's 300s is there because it ignores SIGTERM
+    # entirely. See the zomboid block below.
     stop_grace_period: 120s
     # The heap is 4G and a booted, empty server measured 1.93 GiB. 6g leaves the JVM
     # its non-heap overhead plus page cache without the cgroup living at its ceiling
@@ -38,9 +44,13 @@ services:
     stdin_open: true
 
   # 7 Days to Die dedicated server (LinuxGSM-based image).
-  # START_MODE=1 = start the server. It shares the 8GB box with Minecraft, so
-  # only one should run at a time — the web UI gracefully stops the other before
-  # starting this. NOTE: do not use restart:unless-stopped with START_MODE 0/2/4.
+  # START_MODE=1 = start the server. It shares the box with Minecraft and Project
+  # Zomboid, so only one should run at a time — the web UI gracefully stops the
+  # others before starting this. The ceiling is NOT hardcoded anywhere: this said
+  # "the 8GB box" long after the move to a 16 GB one, and `maxGameGb()` derives it
+  # from /proc/meminfo at request time. Don't substitute today's number here — that
+  # is the same mistake one migration later.
+  # NOTE: do not use restart:unless-stopped with START_MODE 0/2/4.
   sevendtd:
     image: vinanrra/7dtd-server
     container_name: yoshling-7dtd
@@ -126,11 +136,47 @@ services:
     volumes:
       - pz-data:/home/steam/Zomboid
       - pz-workshop:/home/steam/pz-dedicated/steamapps/workshop
-    # The entrypoint traps SIGTERM, writes `quit` to the server console and waits
-    # for the world to be saved. Docker's default 10s grace period would SIGKILL
-    # it mid-save. 120s turned out to be too short as well: with a player
-    # connected and mods loaded, a save overran it and docker escalated to
-    # SIGKILL (exit 137). 5 minutes.
+    # ## This is a FALLBACK budget, not headroom for a slow save.
+    #
+    # This comment used to claim "the entrypoint traps SIGTERM, writes `quit` to the
+    # server console and waits for the world to be saved […] 120s turned out to be too
+    # short as well: with a player connected and mods loaded, a save overran it and
+    # docker escalated to SIGKILL (exit 137)."
+    #
+    # **None of that is true**, and because it read as a solved-but-slow shutdown, three
+    # separate audits saw "PZ stops take five minutes", believed the question was already
+    # answered, and moved on. Measured on production 2026-09-29:
+    #
+    #   - `grep -c trap /server/scripts/entry.sh` -> 0, and `grep -rn trap
+    #     /server/scripts/` is empty. There is no trap, and never was.
+    #   - `entry.sh` runs as PID 1 and starts the game via `su - steam -c`, so the JVM is
+    #     a grandchild in its own session and process group.
+    #   - `grep SigCgt /proc/1/status` -> 0000000000010002 = SIGINT(2) + SIGCHLD(17).
+    #     SIGTERM(15) would be bit 14 (0x4000) and is absent, and the kernel DISCARDS
+    #     uncaught signals aimed at a namespace's PID 1. So `docker stop`'s SIGTERM is
+    #     not merely unforwarded, it is thrown away -- the process could never have
+    #     exited on it at any timeout.
+    #   - A save is ~100-170 ms (ten consecutive RCON `save` calls answered in 100.7-101.1
+    #     ms; the game's own log reported 102.6-170.9 ms for the saves), so nothing was
+    #     ever "SIGKILLed mid-save" -- it is three orders of magnitude inside 120s.
+    #     Raising 120s -> 300s only bought a longer wait before the identical SIGKILL:
+    #     `journalctl -u docker` shows 14 "failed to exit within 5m0s of signal 15" in the
+    #     three days before this was written, and every one was this service (it is the
+    #     only one with a 300s StopTimeout, and all 14 lines say 5m0s).
+    #
+    # What actually stops it is asking the game: RCON `quit` ("* quit : Save and quit the
+    # server"). `zomboidDriver.stop()` in src/lib/game-manager.ts does that first.
+    # Verified against production 2026-09-29 with 0 players: the container was `exited`
+    # 9.0s after the quit, with exit code 0 instead of 137, and journalctl gained no new
+    # "failed to exit" line.
+    #
+    # KEEP 300s, and keep it in step with PZ_STOP_TIMEOUT in game-manager.ts. It is the
+    # budget for a server that has stopped answering RCON at all (the 2026-09-22 game-loop
+    # wedge), which is exactly when `quit` cannot land. Lowering it without a mechanism
+    # that makes the process genuinely exit just SIGKILLs a wedged world sooner.
+    # Do NOT add `init: true` here either -- tini signals its direct child, and `su`
+    # re-sessions the JVM out of reach, so it would kill entry.sh and leave the JVM to be
+    # SIGKILLed as an orphan with no shutdown at all. Strictly worse.
     stop_grace_period: 300s
     # Same as 7DTD: never auto-start, the web UI powers it on deliberately so the
     # box never tries to run two worlds at once.
@@ -147,6 +193,12 @@ services:
     # 14g is also the practical maximum: 15.6 GiB box, minus ~1 GiB for the
     # dashboard and the OS. If Project Zomboid ever needs more than this, the heap
     # has to come down rather than the ceiling going up.
+    #
+    # These are per-world CEILINGS, not reservations, and they deliberately sum to more
+    # than the box (6 + 10 + 14 + 3 = 33g on a 15.6 GiB host). That is sound because only
+    # one world runs at a time; it is the one-at-a-time invariant, not arithmetic on these
+    # numbers, that keeps the box solvent. So do not "fix" the overcommit by lowering this
+    # one -- 13g was already tried and measured, and the paragraph above is why it failed.
     mem_limit: 14g
     # PZ is the reason this exists: its container log reached 123 MB of the box's
     # 122 MB total, growing ~7.8 MB/day, and the only way to reset it was recreating
@@ -225,6 +277,22 @@ services:
     # world gets powered back on, so it has to come back after a host reboot even
     # though nothing else does.
     restart: unless-stopped
+    # The only container that had NO limit (verified: `docker inspect yoshling-web-1
+    # --format '{{.HostConfig.Memory}}'` -> 0, while the three games all had one). That
+    # made it the one process on the box able to take the whole host down, and it is
+    # also the one that buffers uploads and forks `docker`/`tar`.
+    #
+    # Sized against the 2 GB world-upload cap: `/api/7dtd/world` does not stream, and
+    # Caddy's `request_body { max_size 2GB }` on direct.yoshling.xyz is what it has to
+    # survive. Steady state is nothing like that -- measured 2026-09-29, `memory.current`
+    # was 195 MB with a 954 MB `memory.peak` -- so this is headroom for one upload, not a
+    # working-set estimate. **Do not lower this without streaming that upload first**, and
+    # once it streams this can come down to ~1g.
+    #
+    # An unbounded web container is worse than an overcommitted ceiling: with a limit the
+    # kernel kills the dashboard, which restarts and loses nothing, instead of letting it
+    # push a live world into OOM.
+    mem_limit: 3g
     logging:
       driver: "json-file"
       options: { max-size: "20m", max-file: "3" }
