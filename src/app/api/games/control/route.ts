@@ -91,6 +91,36 @@ export async function POST(request: NextRequest) {
           details: JSON.stringify({ game, action, gameName: GAMES[game].name }),
         },
       });
+      /**
+       * A hand-off stops other worlds, and until now nothing durable said so.
+       *
+       * Measured on production 2026-09-29: six hand-offs stopped six worlds and the
+       * Activity table contains **not one** `server_stop` row across that window, because
+       * this route only ever wrote a row for the world that was *requested*. The ledger
+       * forgets in minutes, so "when did 7 Days to Die go down, and who stopped it?" was
+       * unanswerable shortly afterwards. `powerOn` already returns the evicted worlds as
+       * `{step:"stop", game}`, so the data was sitting at the call site.
+       *
+       * Still gated on `changed`: a no-op start returns no steps, so this writes nothing.
+       */
+      if (action === "start") {
+        for (const s of steps) {
+          if (s.step !== "stop" || !s.game || s.game === game) continue;
+          const stopped = s.game;
+          await db.activity.create({
+            data: {
+              userId: session.user.id,
+              action: "server_stop",
+              details: JSON.stringify({
+                game: stopped,
+                action: "stop",
+                gameName: isGameId(stopped) ? GAMES[stopped].name : stopped,
+                handoffFor: game,
+              }),
+            },
+          });
+        }
+      }
     } catch {}
   }
 
