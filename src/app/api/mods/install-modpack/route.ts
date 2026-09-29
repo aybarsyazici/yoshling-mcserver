@@ -152,6 +152,61 @@ async function applyModpack(
     warnings: string[];
   }
 ): Promise<OpSuccess<NextResponse>> {
+  // Refuse before taking a backup, and before deleting anything, if this pack cannot
+  // actually be installed.
+  //
+  // The order below is destroy-then-create, so a pack whose rows carry no download
+  // source wipes every installed jar and puts nothing back. That is not
+  // hypothetical: 224 `ModpackMod` rows predate the importer fix in f2018a4
+  // (2026-05-27, Modrinth returns `id` not `project_id`), and one saved pack —
+  // Fabulously Optimized, 45 mods — has a source for *none* of them. Reporting the
+  // 0/45 honestly was only half the fix; the other half is not starting.
+  //
+  // This check used to sit *after* the backup block, so a refusal still tarred the whole
+  // world first — and since nothing prunes `/app/data/backups`, the archive stayed, and
+  // `/api/server/backups` GET offered it as a restore point for a world that was never
+  // touched. A live run on 2026-09-29 recorded one such orphan at 173,283,913 bytes;
+  // three of the six saved packs have 0 installable mods, so that was the cost of every
+  // click on any of them.
+  //
+  // Verified by measurement when this was moved: built at the old ordering, applying a
+  // 45-mod pack with no download sources reached the backup step and failed there
+  // (`mkdir '/app'`) *before* ever counting the mods; built at the new ordering the same
+  // request answers 409 without touching the backup directory, while a pack that does
+  // have a source still flows straight through to the backup step. A refusal that
+  // changes nothing must also cost nothing.
+  const installable = modpack.mods.filter(
+    (m: { downloadUrl?: string | null; modrinthId?: string | null }) =>
+      m.downloadUrl || m.modrinthId
+  ).length;
+  op.step("Reading the modpack list");
+  if (installable === 0) {
+    op.settle(
+      `Read the modpack list: ${modpack.mods.length} mods, none with a download source`,
+      { kind: "noop", count: { done: 0, total: modpack.mods.length, noun: "installable mods" } }
+    );
+    return {
+      value: NextResponse.json(
+        {
+          error:
+            `None of the ${modpack.mods.length} mods in "${modpack.name}" has a download source, ` +
+            `so installing it would remove every current mod and add nothing. ` +
+            `This pack was imported before a fix to the importer — re-import it to repair it.`,
+        },
+        { status: 409 }
+      ),
+    };
+  }
+  op.settle(`Read the modpack list: ${modpack.mods.length} mods`, {
+    count: { done: installable, total: modpack.mods.length, noun: "installable" },
+  });
+  if (installable < modpack.mods.length) {
+    warnings.push(
+      `${modpack.mods.length - installable} of ${modpack.mods.length} mods in this pack have no ` +
+        `download source and will be skipped — re-import the pack to repair it.`
+    );
+  }
+
   // Auto-backup the world before touching mods.
   //
   // Four things were wrong with this block, and they compounded into the worst
@@ -218,46 +273,6 @@ async function applyModpack(
         ),
       };
     }
-  }
-
-  // Refuse before deleting anything if this pack cannot actually be installed.
-  //
-  // The order below is destroy-then-create, so a pack whose rows carry no download
-  // source wipes every installed jar and puts nothing back. That is not
-  // hypothetical: 224 `ModpackMod` rows predate the importer fix in f2018a4
-  // (2026-05-27, Modrinth returns `id` not `project_id`), and one saved pack —
-  // Fabulously Optimized, 45 mods — has a source for *none* of them. Reporting the
-  // 0/45 honestly was only half the fix; the other half is not starting.
-  const installable = modpack.mods.filter(
-    (m: { downloadUrl?: string | null; modrinthId?: string | null }) =>
-      m.downloadUrl || m.modrinthId
-  ).length;
-  op.step("Reading the modpack list");
-  if (installable === 0) {
-    op.settle(
-      `Read the modpack list: ${modpack.mods.length} mods, none with a download source`,
-      { kind: "noop", count: { done: 0, total: modpack.mods.length, noun: "installable mods" } }
-    );
-    return {
-      value: NextResponse.json(
-        {
-          error:
-            `None of the ${modpack.mods.length} mods in "${modpack.name}" has a download source, ` +
-            `so installing it would remove every current mod and add nothing. ` +
-            `This pack was imported before a fix to the importer — re-import it to repair it.`,
-        },
-        { status: 409 }
-      ),
-    };
-  }
-  op.settle(`Read the modpack list: ${modpack.mods.length} mods`, {
-    count: { done: installable, total: modpack.mods.length, noun: "installable" },
-  });
-  if (installable < modpack.mods.length) {
-    warnings.push(
-      `${modpack.mods.length - installable} of ${modpack.mods.length} mods in this pack have no ` +
-        `download source and will be skipped — re-import the pack to repair it.`
-    );
   }
 
   // Remove all currently installed mods. A jar that survives this loads alongside

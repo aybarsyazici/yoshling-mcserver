@@ -25,15 +25,26 @@ interface ServerConfig {
   modLoader: string;
 }
 
+/**
+ * `uuid` is optional on the way *out* and always present on the way *in*.
+ *
+ * This page used to push `uuid: ""` for every name typed in, and Minecraft matches
+ * both of these files by UUID and discards an entry it cannot resolve — so the save
+ * reported success and granted nobody anything. The routes now resolve the name to
+ * the id the game derives (computed locally in offline mode, looked up from Mojang
+ * otherwise) and refuse the write if they can't, so there is nothing for the page to
+ * send. Don't reintroduce a blank one to satisfy a type: the empty string is exactly
+ * the value that made this fail silently.
+ */
 interface OpEntry {
-  uuid: string;
+  uuid?: string;
   name: string;
   level: number;
   bypassesPlayerLimit: boolean;
 }
 
 interface WhitelistEntry {
-  uuid: string;
+  uuid?: string;
   name: string;
 }
 
@@ -278,11 +289,18 @@ export default function SettingsPage() {
             </p>
           ) : (
             <>
-              {/* Say why the list is short, so a missing key doesn't read as a bug. */}
+              {/*
+                Say why the list is short, so a missing key doesn't read as a bug.
+
+                This used to name only "RCON, the server port and the level name", which made
+                the omission look deliberate and complete — while the API was in fact also
+                printing Minecraft 26's whole `management-server-*` block, bearer token
+                included. The list has to name everything that is withheld, or it becomes the
+                reason nobody checks.
+              */}
               <p className="text-xs text-muted-foreground">
-                RCON, the server port and the level name aren&apos;t listed: the deployment owns
-                them, and changing them here would cut the dashboard off from the server or leave
-                backups pointing at a folder the server no longer writes.
+                RCON, the management server, the server port and the level name aren&apos;t listed
+                here — they&apos;re the dashboard&apos;s own control channel.
               </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {Object.entries(properties).map(([key, value]) => {
@@ -357,7 +375,7 @@ export default function SettingsPage() {
               onChange={(e) => setNewOp(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && newOp.trim()) {
-                  setOps((prev) => [...prev, { uuid: "", name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
+                  setOps((prev) => [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
                   setNewOp("");
                 }
               }}
@@ -365,7 +383,7 @@ export default function SettingsPage() {
             />
             <Button variant="outline" onClick={() => {
               if (newOp.trim()) {
-                setOps((prev) => [...prev, { uuid: "", name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
+                setOps((prev) => [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
                 setNewOp("");
               }
             }}>
@@ -386,6 +404,7 @@ export default function SettingsPage() {
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
             Players who can join the server when whitelist is enabled in Game Settings above.
+            Usernames are resolved to the UUID Minecraft matches on when you save.
           </p>
           <div className="flex flex-wrap gap-2">
             {whitelist.map((wl) => (
@@ -408,7 +427,7 @@ export default function SettingsPage() {
               onChange={(e) => setNewWl(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && newWl.trim()) {
-                  setWhitelist((prev) => [...prev, { uuid: "", name: newWl.trim() }]);
+                  setWhitelist((prev) => [...prev, { name: newWl.trim() }]);
                   setNewWl("");
                 }
               }}
@@ -416,7 +435,7 @@ export default function SettingsPage() {
             />
             <Button variant="outline" onClick={() => {
               if (newWl.trim()) {
-                setWhitelist((prev) => [...prev, { uuid: "", name: newWl.trim() }]);
+                setWhitelist((prev) => [...prev, { name: newWl.trim() }]);
                 setNewWl("");
               }
             }}>

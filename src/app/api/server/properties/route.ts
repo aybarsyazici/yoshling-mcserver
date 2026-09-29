@@ -44,6 +44,35 @@ const LOCKED = new Set([
 ]);
 
 /**
+ * Locked **by shape as well as by name**, so a version bump that adds a new
+ * credential key is hidden by default rather than after somebody notices.
+ *
+ * The named set above predates Minecraft 26's Management Server API, and the gap
+ * was real, not theoretical. Read live from the box: `server.properties` contains
+ * `management-server-secret=vQIr…` (a 40-character bearer token) and
+ * `management-server-tls-keystore-password`, and this editor printed both into the
+ * browser of anyone with Minecraft access — the GET is deliberately open to a
+ * MEMBER. `management-server-enabled` was writable too, so a read-only viewer could
+ * be shown a switch that turns on a remote-admin HTTP API.
+ *
+ * The whole `management-server-` block is locked for the same reason `enable-rcon`
+ * is: it is a second control channel, and none of it is the dashboard's to hand out.
+ *
+ * Checked against the live file (71 keys, of which the GET returned 66): this rule
+ * newly hides exactly the eight `management-server-*` keys and nothing else, leaving
+ * 58 editable and no key matching /password|secret|token/ visible.
+ * `enforce-secure-profile` is the only near-miss and does not match ("secure", not
+ * "secret").
+ */
+function isLocked(key: string): boolean {
+  return (
+    LOCKED.has(key) ||
+    key.startsWith("management-server-") ||
+    /password|secret|token/.test(key)
+  );
+}
+
+/**
  * A newline in a value would end the line early and turn the rest into further
  * `key=value` pairs — which is how a locked key gets set through an unlocked one
  * (`motd=hi\nlevel-name=other`). Same guard as PZ's `sanitizeValue`.
@@ -68,7 +97,7 @@ export async function GET() {
       if (line.startsWith("#") || !line.includes("=")) continue;
       const [key, ...valueParts] = line.split("=");
       const name = key.trim();
-      if (LOCKED.has(name)) continue;
+      if (isLocked(name)) continue;
       properties[name] = valueParts.join("=").trim();
     }
 
@@ -114,7 +143,7 @@ export async function PUT(request: NextRequest) {
   // before this deploy will submit, since it still has the field on screen.
   const locked: string[] = [];
   for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
-    if (LOCKED.has(key)) {
+    if (isLocked(key)) {
       locked.push(key);
       continue;
     }

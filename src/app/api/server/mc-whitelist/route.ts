@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
+import { resolveEntryUuids } from "@/lib/mc-identity";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
@@ -23,6 +24,10 @@ interface WhitelistEntry {
  * and the game parses this file at boot. If it can't, nobody gets in while
  * `white-list=true` — so validate the shape here rather than discover it as a
  * server full of people who can't join.
+ *
+ * A missing `uuid` is accepted *here* and filled in by `resolveEntryUuids` before
+ * the write, because the page only knows the name. It is never persisted empty —
+ * see the PUT.
  */
 function parseWhitelist(body: unknown): { entries: WhitelistEntry[] } | { error: string } {
   if (!Array.isArray(body)) return { error: "Expected an array of players" };
@@ -88,8 +93,24 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
+  // Minecraft matches whitelist entries by UUID and discards any entry whose UUID
+  // it cannot resolve. Verified on the box: this route answered
+  // `{"success":true,"count":1}` for `{"uuid":"","name":"ZZUuidProbe"}` — which is
+  // byte-for-byte what the settings page used to send — and the game then said
+  // "There are no whitelisted players". So a blank UUID is a successful write of a
+  // file that grants nobody anything, and enabling `white-list` after using this
+  // page would have locked everyone out.
+  //
+  // Refuse the whole request rather than persist a blank for the one name that
+  // wouldn't resolve: a partial write is the same silent-nothing failure, just
+  // harder to notice.
+  const withIds = await resolveEntryUuids(parsed.entries);
+  if (!withIds.ok) {
+    return NextResponse.json({ error: withIds.error }, { status: withIds.status });
+  }
+
   try {
-    await writeFile(WHITELIST_FILE, JSON.stringify(parsed.entries, null, 2), "utf-8");
+    await writeFile(WHITELIST_FILE, JSON.stringify(withIds.entries, null, 2), "utf-8");
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
@@ -102,7 +123,7 @@ export async function PUT(request: NextRequest) {
         details: JSON.stringify({
           game: "minecraft",
           file: "whitelist.json",
-          count: parsed.entries.length,
+          count: withIds.entries.length,
         }),
       },
     });
@@ -112,5 +133,5 @@ export async function PUT(request: NextRequest) {
     console.error("[mc-whitelist] activity log failed", e);
   }
 
-  return NextResponse.json({ success: true, count: parsed.entries.length });
+  return NextResponse.json({ success: true, count: withIds.entries.length });
 }

@@ -17,7 +17,30 @@ export async function GET() {
   if (denied) return denied;
 
   const config = await db.serverConfig.findUnique({ where: { id: "main" } });
-  return NextResponse.json(config);
+  if (!config) return NextResponse.json(null);
+
+  // An explicit projection, never the whole row.
+  //
+  // This used to be `NextResponse.json(config)`, and `ServerConfig` carries
+  // `rconPassword`. Verified on the box: the value this returned was byte-identical
+  // to `password=` in the Minecraft container's `/minecraft/.rcon-cli.env` — so the
+  // live RCON password went, in cleartext, into the page of anyone with Minecraft
+  // access. That is the exact secret `/api/server/properties` keeps a `LOCKED` set
+  // to hide, handed out unredacted one route over.
+  //
+  // `rconPort` and `serverPort` are left out too. They are not secrets, but they are
+  // deployment-owned (the compose port mapping fixes them) and the properties editor
+  // already locks `rcon.port`/`server-port` for that reason; returning them here
+  // would only invite a second editor for values that cannot be changed.
+  //
+  // Additive, not subtractive: a future column is absent from this response until
+  // someone adds it, rather than exposed until someone notices.
+  return NextResponse.json({
+    id: config.id,
+    mcVersion: config.mcVersion,
+    modLoader: config.modLoader,
+    maxMemory: config.maxMemory,
+  });
 }
 
 export async function PUT(request: NextRequest) {
