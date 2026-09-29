@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Reveal } from "@/components/motion";
+import { useOperations } from "@/components/operations-provider";
+import { blockedReason, powerBlocker } from "@/lib/operation-ui";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -16,7 +18,11 @@ import { Switch } from "@/components/ui/switch";
 const FIELDS = [
   { key: "PublicName", label: "Server name", hint: "Shown in the server browser", kind: "text" },
   { key: "Password", label: "Password", hint: "Leave blank for an open server", kind: "text" },
-  { key: "MaxPlayers", label: "Max players", hint: "Mind the 8 GB box", kind: "number" },
+  // Was "Mind the 8 GB box". The box has had 16 GB since the netcup migration, and the
+  // ceiling is derived at request time by `maxGameGb()` anyway — a figure hardcoded in a
+  // hint is a figure that outlives the hardware, which is how this one came to
+  // under-provision by half.
+  { key: "MaxPlayers", label: "Max players", hint: "Mind the box's RAM", kind: "number" },
   { key: "Public", label: "List in the server browser", hint: "Off = join by IP only", kind: "bool" },
   { key: "PVP", label: "Players can hurt each other", hint: "", kind: "bool" },
   {
@@ -32,6 +38,15 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
+
+  /**
+   * `/api/zomboid/config` PUT takes the `files:zomboid` lane, and a power operation
+   * declares every file lane — so a restore, a backup or a hand-off all make this Save
+   * return 409. Without the gate the button stayed live, and the reply was a red toast
+   * for a refusal nothing had explained.
+   */
+  const { operations, elapsedMs } = useOperations();
+  const blocker = powerBlocker(operations, "zomboid");
 
   useEffect(() => {
     fetch("/api/zomboid/config")
@@ -120,13 +135,17 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
         <div className="flex flex-wrap items-center gap-3 border-t border-border/50 pt-5">
           <Button
             onClick={save}
-            disabled={saving || dirty.length === 0}
+            disabled={saving || dirty.length === 0 || blocker !== undefined}
             style={{ background: tint, color: "var(--background)" }}
           >
             {saving ? "Saving…" : "Save settings"}
           </Button>
+          {/* The reason ships with the disable. A control that goes dead without saying
+              why is the same failure as a silent operation. */}
           <p className="text-xs text-muted-foreground">
-            {dirty.length > 0
+            {blocker
+              ? blockedReason(blocker, elapsedMs(blocker))
+              : dirty.length > 0
               ? `${dirty.length} changed · applies on the next restart`
               : "Changes apply on the next server restart."}
           </p>

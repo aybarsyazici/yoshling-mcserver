@@ -53,9 +53,20 @@ export interface GamesState {
    */
   access: GameId[];
   /**
-   * Which power controls this user may use, so the UI can hide or disable a
-   * button instead of letting it 403. Restart is open to MOD; start/stop are
-   * ADMIN-only, because starting a world stops whichever one is running.
+   * Which power controls this user may use, so the UI can disable a button instead of
+   * letting it 403.
+   *
+   * ADMIN and MOD all three; MEMBER none. MOD differs from ADMIN only in *scope*
+   * (`access`), not capability — see `permissions.ts`. Changed 2026-09-14; power used to
+   * be ADMIN-only.
+   *
+   * This used to say "Restart is open to MOD; start/stop are ADMIN-only", which the
+   * table it describes has contradicted since that change (`"server.start"` and
+   * `"server.stop"` are both `["ADMIN","MOD"]`). Worth naming the risk, because the
+   * tempting way to "reconcile" a comment with its code is the wrong direction here:
+   * tightening `permissions.ts` back to ADMIN-only re-breaks exactly what 2026-09-14
+   * fixed — a trusted mod could not restart after a Workshop mod update locked players
+   * out. The role table is not restated here; one copy is the only kind that stays true.
    */
   can: { start: boolean; stop: boolean; restart: boolean };
   /** Configured heap per world, from the compose file. null = no heap setting. */

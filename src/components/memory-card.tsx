@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { GAMES, type GameId } from "@/lib/games";
+import { useOperations } from "@/components/operations-provider";
+import { blockedReason, powerBlocker, spellMinutes } from "@/lib/operation-ui";
 import { AlertTriangle, Check, MemoryStick } from "lucide-react";
 
 interface MemoryState {
@@ -18,6 +20,15 @@ interface MemoryState {
 }
 
 /**
+ * Everything after the stop: `docker compose create --force-recreate`, then the boot.
+ * An allowance, not a measurement — a Project Zomboid boot with 87 Workshop mods is
+ * minutes, and the point of the sentence is that the number is not "about a minute".
+ * Deliberately not on `GameMeta`: nothing else needs it, and a second per-game duration
+ * table is a second thing to keep true.
+ */
+const RECREATE_AND_BOOT_SECONDS = 120;
+
+/**
  * Server memory, with proof it took effect.
  *
  * A container's environment is fixed when it's created, so editing the compose
@@ -30,6 +41,17 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   const [state, setState] = useState<MemoryState | null>(null);
   const [gb, setGb] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+
+  /**
+   * Saving here IS a power operation — `setMemory` holds `POWER_RESOURCES`, saves and
+   * stops the world, recreates the container and starts it again. This card never
+   * consulted the registry, so during any other power operation Save stayed enabled, the
+   * PUT came back 409 and the user got a red toast: the exact "pressed the button, got
+   * an unexplained refusal" shape the `can:{}` flags were shipped to remove, on the one
+   * settings control that is itself a power operation.
+   */
+  const { operations, elapsedMs } = useOperations();
+  const blocker = powerBlocker(operations, game);
 
   async function load() {
     try {
@@ -157,12 +179,20 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
 
             <Button
               onClick={save}
-              disabled={saving || !dirty}
+              disabled={saving || !dirty || blocker !== undefined}
               style={{ background: tint, color: "var(--background)" }}
             >
               {saving ? "Applying…" : "Save memory"}
             </Button>
           </div>
+
+          {/* A newly disabled control without its reason is the defect being fixed, not
+              the fix. Same three lines as `game-backups.tsx`. */}
+          {blocker && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              {blockedReason(blocker, elapsedMs(blocker))}
+            </p>
+          )}
 
           <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
             {state.applied && !dirty ? (
@@ -173,7 +203,16 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
                   : `In effect: the server container is running with ${state.liveGb} GB.`}
               </>
             ) : state.running ? (
-              "Saving saves the world, recreates the container and starts it again — expect about a minute of downtime."
+              // The downtime, from `GameMeta.stopSeconds` rather than the flat "about a
+              // minute" this used to promise for all three worlds. Project Zomboid's stop
+              // alone is a measured 5m 03s — it never exits on SIGTERM — so the one world
+              // whose heap you are most likely to change understated its own downtime by
+              // 5×, and the operation that followed looked hung.
+              meta.stopSeconds >= 120
+                ? `Saving saves the world, recreates the container and starts it again. ` +
+                  `${meta.name} takes up to ${spellMinutes(meta.stopSeconds)} to stop, so expect ` +
+                  `${spellMinutes(meta.stopSeconds + RECREATE_AND_BOOT_SECONDS)} of downtime.`
+                : "Saving saves the world, recreates the container and starts it again — expect about a minute of downtime."
             ) : (
               "The server is stopped, so this applies without starting it."
             )}

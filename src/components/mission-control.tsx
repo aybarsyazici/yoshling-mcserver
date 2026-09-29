@@ -8,7 +8,15 @@ import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
-import { liveFileOperations, namedFileOperations } from "@/lib/operation-ui";
+import {
+  blockedReason,
+  liveFileOperations,
+  namedFileOperations,
+  powerState,
+  slowestStopSeconds,
+  spellMinutes,
+  type PowerSurface,
+} from "@/lib/operation-ui";
 import { formatElapsed, liveStep } from "@/lib/operations-types";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { RamBudget } from "@/components/ram-budget";
@@ -43,7 +51,7 @@ export function MissionControl({
   access: GameId[];
 }) {
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, activeGame, busy: serverBusy, memoryGb, hostGb, loading, refresh } =
+  const { games, activeGame, busy: serverBusy, can, memoryGb, hostGb, clockSkewMs, loading, refresh } =
     useGames(localBusy ? 1500 : 5000);
   /**
    * The live operation, read from the registry rather than kept here.
@@ -95,13 +103,70 @@ export function MissionControl({
     }
   }, [preemptBlocker, confirmPreempt]);
 
+  /**
+   * The core's state, from three sources in falling order of specificity.
+   *
+   * The third case is the one that was missing. `pending` is this tab's own intent and
+   * `serverBusy` is the *projected* lock — and `projectLock()` deliberately refuses to
+   * project an operation with no `action`, because `busy.action` drives a rendered verb.
+   * `/api/7dtd/update` holds `POWER_RESOURCES` with no action, so for the ~20 minutes of
+   * an update both were null and the core fell through to `activeGame`/idle: it sat
+   * "idle" directly underneath its own caption narrating the update. Reading
+   * `powerHolder` — the registry, which has no such restriction — closes it.
+   */
   const coreState: CoreState = busy && pending
     ? { kind: "handoff", from: activeGame && activeGame !== pending ? activeGame : null, to: pending }
     : busy && serverBusy
     ? { kind: "handoff", from: null, to: serverBusy.game }
+    : busy && powerHolder?.game
+    ? {
+        kind: "handoff",
+        from: activeGame && activeGame !== powerHolder.game ? activeGame : null,
+        to: powerHolder.game,
+      }
     : activeGame
     ? { kind: "holding", game: activeGame }
     : { kind: "idle" };
+
+  /**
+   * Each card's power state, from the same derivation `/{game}` and `/{game}/server`
+   * use. The cards had their own, and it was missing two things:
+   *
+   *  - no `can` check at all, so a MEMBER's three Power buttons looked live and each
+   *    returned an unexplained 403 — the exact shape `can:{}` was shipped to remove.
+   *  - `isBusyThis` keyed on `pending`, which is this tab's own intent and is cleared in
+   *    `doControl`'s `finally`. For Project Zomboid that fires at the ~100s origin
+   *    timeout while the operation runs five minutes, so from ~100s on — and after any
+   *    reload — /home showed three dead buttons wearing normal labels. The registry
+   *    survives both, which is why `powerState` reads it instead.
+   */
+  function surfaceFor(game: GameId): PowerSurface {
+    return powerState({
+      game,
+      games,
+      can,
+      localBusy: localBusy && pending === game,
+      tabBusy: localBusy,
+      serverBusy,
+      powerHeld: powerHolder,
+      elapsedMs,
+      clockSkewMs,
+    });
+  }
+
+  /**
+   * Why every card's buttons are dead, said ONCE, under the grid rather than per card.
+   *
+   * Per card would be more precise and is the wrong shape here: the cards are
+   * `items-stretch`, so a sentence that appears on one of three unbalances the row. And
+   * the dominant reason on this page is global anyway — one world at a time means one
+   * power operation blocks all three cards for the same reason.
+   */
+  const landingReason = powerHolder
+    ? blockedReason(powerHolder, elapsedMs(powerHolder))
+    : !can.start && !can.stop && !can.restart
+    ? "You can view these servers but not power them. Ask an admin for Mod access."
+    : null;
 
   /** The other worlds currently holding (or claiming) the box. */
   function runningOthers(game: GameId): GameId[] {
@@ -111,7 +176,10 @@ export function MissionControl({
     });
   }
 
-  function onPowerClick(game: GameId, isOnline: boolean) {
+  // `containerUp`, not `isOnline` — the parameter was called `isOnline` while the caller
+  // has always passed `containerRunning`, which is the sort of name that eventually gets
+  // believed and then `isOnline` gets passed for real. Naming it for what it is.
+  function onPowerClick(game: GameId, containerUp: boolean) {
     if (busy) return;
     // A file operation (a backup, a modpack apply) does not disable the button — Power
     // off is the recovery path and must never be held hostage — but cutting it short
@@ -122,7 +190,7 @@ export function MissionControl({
     // while another world's backup ran skipped the dialog entirely and deleted that
     // backup with nothing said at all.
     const preempting = liveFileOperations(operations).length > 0;
-    if (isOnline) {
+    if (containerUp) {
       // Power OFF: the pre-empt dialog alone is the whole story.
       if (preempting) return setConfirmPreempt(game);
       void doControl(game, "stop");
@@ -275,13 +343,20 @@ export function MissionControl({
             game={g.id}
             snapshot={games?.[g.id]}
             loading={loading}
-            busy={busy}
-            pending={pending}
+            power={surfaceFor(g.id)}
             onPower={onPowerClick}
             delay={0.1 + i * 0.08}
           />
         ))}
       </div>
+
+      {/* The sentence the cards used to be missing entirely. Height is not reserved
+          because it sits under the grid, not inside a card. */}
+      {landingReason && (
+        <p className="mx-auto mt-3 max-w-2xl text-center text-xs text-muted-foreground">
+          {landingReason}
+        </p>
+      )}
 
       {/* RAM budget bar */}
       <motion.div
@@ -303,6 +378,20 @@ export function MissionControl({
               // pre-empts all of them, so a dialog that names one is a promise about the
               // others it quietly breaks.
               const cutShort = liveFileOperations(operations);
+              /**
+               * How long this actually takes, from `GameMeta.stopSeconds`.
+               *
+               * This sentence used to end "Takes about a minute." for every hand-off, on
+               * a box where stopping Project Zomboid is a measured 5m 03s — it never
+               * exits on SIGTERM, so `docker stop` waits out the whole grace period. The
+               * owner clicked the button, read "about a minute", and watched it sit for
+               * five; the estimate was the defect, not the stop. Slow worlds get their
+               * own clause rather than an appended figure, because the reason it is slow
+               * is the part that stops it reading as broken.
+               */
+              const slowest = others.filter((g) => GAMES[g].stopSeconds >= 120);
+              const stopSecs = slowestStopSeconds(others);
+              const totalSecs = stopSecs + GAMES[confirmFor].stopSeconds;
               return (
             <>
               <DialogHeader>
@@ -317,7 +406,19 @@ export function MissionControl({
                       This will{" "}
                       <strong>save and stop {others.map((g) => GAMES[g].name).join(" and ")}</strong>,
                       then start <strong>{GAMES[confirmFor].name}</strong>. Anyone currently playing
-                      will be disconnected. Takes about a minute.
+                      will be disconnected.
+                      {slowest.length === 0 ? (
+                        " Takes about a minute."
+                      ) : (
+                        <>
+                          {" "}
+                          {slowest.map((g) => GAMES[g].name).join(" and ")}{" "}
+                          {slowest.length > 1 ? "do" : "does"} not shut down when asked, so this
+                          waits out {slowest.length > 1 ? "their" : "its"}{" "}
+                          {spellMinutes(stopSecs)} timeout first — expect{" "}
+                          {spellMinutes(totalSecs)} before {GAMES[confirmFor].name} is up.
+                        </>
+                      )}
                     </>
                   )}
                   {cutShort.length > 0 && (
@@ -547,27 +648,24 @@ function WorldCard({
   game,
   snapshot,
   loading,
-  busy,
-  pending,
+  power,
   onPower,
   delay,
 }: {
   game: GameId;
   snapshot?: import("@/lib/use-games").GameSnapshot;
   loading: boolean;
-  busy: boolean;
-  pending: GameId | null;
-  onPower: (g: GameId, online: boolean) => void;
+  /** Derived in `MissionControl` by the one shared `powerState`. */
+  power: PowerSurface;
+  onPower: (g: GameId, containerUp: boolean) => void;
   delay: number;
 }) {
   const meta = GAMES[game];
   const status = snapshot?.status ?? "offline";
   const isOnline = status === "online";
-  // The container being up is a different fact from the game answering. Offering
-  // "Power on" for a running-but-unresponsive server runs `docker start` on
-  // something already started — a no-op that looks like the dashboard ignoring you.
-  const containerUp = snapshot?.containerRunning ?? isOnline;
-  const isBusyThis = busy && pending === game;
+  // `ownBusy`, not the old `busy && pending === game`: `pending` is this tab's intent
+  // and dies with the request, while the operation can outlive it by minutes.
+  const isBusyThis = power.ownBusy;
   const players = snapshot?.players;
 
   return (
@@ -612,7 +710,12 @@ function WorldCard({
           {loading ? (
             <div className="skeleton h-6 w-16 rounded-full" />
           ) : (
-            <StatusPill status={isBusyThis ? "starting" : status} tint={meta.tint} />
+            <StatusPill
+              status={
+                isBusyThis && !isOnline ? (power.ownStopping ? "stopping" : "starting") : status
+              }
+              tint={meta.tint}
+            />
           )}
         </div>
 
@@ -646,10 +749,12 @@ function WorldCard({
 
         {/* Actions */}
         <div className="relative mt-6 flex items-center gap-2">
+          {/* Disabled on `can` too, not only on `busy`: without it these three buttons
+              looked live to a MEMBER and each answered with a bare 403. */}
           <button
-            onClick={() => onPower(game, containerUp)}
-            disabled={busy}
-            className="group/pw relative inline-flex h-11 flex-1 items-center justify-center gap-2 overflow-hidden rounded-xl font-medium transition-all disabled:opacity-60"
+            onClick={() => onPower(game, power.containerUp)}
+            disabled={power.busy || !power.canPower}
+            className="group/pw relative inline-flex h-11 flex-1 items-center justify-center gap-2 overflow-hidden rounded-xl font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60"
             style={{
               background: isOnline ? "transparent" : meta.tint,
               color: isOnline ? meta.tint : "var(--background)",
@@ -657,7 +762,7 @@ function WorldCard({
             }}
           >
             <PowerGlyph className="h-4 w-4" />
-            {isBusyThis ? "Working…" : containerUp ? "Power off" : "Power on"}
+            {power.label}
           </button>
           <Link
             href={meta.base}

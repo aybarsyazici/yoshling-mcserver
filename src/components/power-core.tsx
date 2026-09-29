@@ -22,7 +22,12 @@ export type CoreState =
 /**
  * The Power Core — the signature element.
  * A single power slot that can only energize one world at a time, making the
- * host's 8GB "one world at a time" constraint physical and visible.
+ * host's "one world at a time" constraint physical and visible.
+ *
+ * This said "the host's 8GB constraint" — a figure that was wrong (the netcup box has
+ * 16 GB) and that never belonged here: the constraint this element draws is "one at a
+ * time", and the RAM ceiling is derived at request time by `maxGameGb()`. Naming a
+ * number in a comment about a shape is how it came to outlive the hardware.
  */
 export function PowerCore({
   state,
