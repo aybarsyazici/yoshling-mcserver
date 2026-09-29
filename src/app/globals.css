@@ -289,11 +289,13 @@
 
 /* Toasts.
    `src/components/ui/sonner.tsx` has always set
-   `toastOptions.classNames.toast = "cn-toast"`, and **the class was defined
-   nowhere** — one grep hit in the whole repo, the declaration itself. So every
-   toast in the app has been rendering as unstyled sonner default. `richColors`
-   stays off deliberately: it ships sonner's own green/red, which is a second
-   palette standing next to Catppuccin.
+   `toastOptions.classNames.toast = "cn-toast"`, and **until this block existed the
+   class was defined nowhere** — one grep hit in the whole repo, that declaration
+   itself — so every toast in the app rendered as an unstyled sonner default. Past
+   tense on purpose: this paragraph used to say "has been rendering", i.e. it read as
+   a live bug report sitting on top of its own fix, which is a good way to get the fix
+   deleted by someone who believes it. `richColors` stays off deliberately: it ships
+   sonner's own green/red, which is a second palette standing next to Catppuccin.
 
    **Feed sonner its variables; do not try to out-specify it.** Sonner injects
    `[data-sonner-toast][data-styled=true] { background: var(--normal-bg); border: 1px

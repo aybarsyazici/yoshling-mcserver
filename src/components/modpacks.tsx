@@ -232,9 +232,10 @@ export function Modpacks() {
       const data = await res.json();
       // The endpoint answers {error} on 401/403/404 (a pack deleted in another
       // tab is enough), and storing that opened the dialog on a payload with no
-      // `modpack` — reading .name off undefined throws during render, and with no
-      // error.tsx anywhere that takes the whole app to a blank page instead of
-      // failing just this dialog.
+      // `modpack` — reading .name off undefined throws during render, which, before
+      // `src/app/error.tsx` existed, took the whole app to a blank page. It now lands
+      // in the segment boundary instead, but failing just this dialog is still the
+      // right outcome, so the shape check stays.
       if (!res.ok || !data?.modpack || !Array.isArray(data.mods)) {
         toast.error(data?.error || "Failed to generate export");
         return;
@@ -331,8 +332,14 @@ export function Modpacks() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
+        {/* This said "import from Modrinth/Technic tabs". The Technic tab was removed in
+            e718acd — the page has had exactly two sub-tabs since (My Modpacks / Modrinth,
+            `src/app/minecraft/mods/page.tsx:42-43`), so it pointed at a control that does
+            not exist. True independently of whether the orphaned Technic components are
+            deleted: their upstream `api.technicpack.net` answers 401, so remounting the
+            tab would show an empty browser forever. */}
         <p className="text-sm text-muted-foreground">
-          Create modpacks to group mods together, or import from Modrinth/Technic tabs
+          Create modpacks to group mods together, or import one from the Modrinth tab
         </p>
         <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>
       </div>

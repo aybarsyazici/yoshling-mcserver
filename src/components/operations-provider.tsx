@@ -212,8 +212,11 @@ export function useOperations(): OperationsState {
  * Two rules do most of the work here. **No operation ever gets a "started" toast** —
  * the ledger appearing on every page is the announcement, and it is persistent. And
  * **nothing toasts if the tab was visible for the whole operation**, because the
- * ledger's settled row already says it three rows up; today's banner toasts "is
- * ready" while the banner says the same thing, which is the noise worth removing.
+ * ledger's settled row two lines up already says it. (This said "today's banner toasts
+ * 'is ready' while the banner says the same thing" — present tense about the
+ * predecessor of this file. `OperationBanner` is gone: `grep -rn "OperationBanner" src/`
+ * returns nothing and no `"is ready"` string is toasted anywhere. The *rule* it
+ * justified is still the right rule, which is why only the tense changed.)
  *
  * Because the text IS `op.summary`, and `summary` is derived server-side from
  * recorded steps and facts, the toast cannot claim a success the operation did not

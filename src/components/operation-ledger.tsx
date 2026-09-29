@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronDown, OctagonX } from "lucide-react";
-import { GAMES, type GameId } from "@/lib/games";
+import { AlertTriangle, ChevronDown, OctagonX, Server } from "lucide-react";
+import { GAMES } from "@/lib/games";
 import { cn } from "@/lib/utils";
 import { GameMark } from "@/components/glyphs";
 import { usePrefersReducedMotion } from "@/components/motion";
@@ -15,6 +15,7 @@ import {
   formatElapsed,
   liveStep,
   lowerFirst,
+  type OperationFact,
   type OperationView,
 } from "@/lib/operations-types";
 
@@ -150,7 +151,7 @@ export function OperationLedger({
     : context;
   const primary = shown[0];
 
-  const tint = primary?.game ? GAMES[primary.game].tint : "var(--primary)";
+  const tint = primary ? opTint(primary) : "var(--primary)";
   const primaryStale = primary ? isLost(primary, now) : false;
   /**
    * The bar keeps weight when the outcome was not clean.
@@ -191,6 +192,17 @@ export function OperationLedger({
    * duplication verbatim. Backup summaries open "Backup created —", so they still need
    * the prefix; so does every live record, whose lede is a bare step label ("Copying the
    * world"). Hence: condition it on the text, not remove it.
+   *
+   * **`includes`, not `startsWith`** — and that was the whole bug for the LIVE case.
+   * A settled summary does start with the name, so the guard worked there and the fix
+   * above looked complete. But a live lede is a step *label*, and every power label
+   * embeds the world mid-sentence: `Stopping Project Zomboid`, `Saving Minecraft`,
+   * `Checking 7 Days to Die`. `startsWith` never fired on any of them, so the strip read
+   * "Project Zomboid — Stopping Project Zomboid" and the live region announced it
+   * verbatim, for the entire five minutes of a PZ stop. `includes` still keeps the
+   * hand-off form, where the operation's world and the step's world genuinely differ
+   * ("Minecraft — Stopping Project Zomboid" contains neither name twice). The labels
+   * themselves must NOT lose the world name: naming it is what makes a hand-off legible.
    */
   const primaryLede = primary ? lede(primary, now) : "";
   const primaryName = primary ? headline(primary) : "";
@@ -198,7 +210,7 @@ export function OperationLedger({
   const oneWorld = shown.filter((o) => !o.endedAt).every((o) => o.game === primary?.game);
   /** Expanded with more than one live operation, the line names the group, not a record. */
   const groupOpen = open && !primaryStale && runningCount > 1;
-  const needsName = groupOpen ? oneWorld : !primaryLede.startsWith(primaryName);
+  const needsName = groupOpen ? oneWorld : !primaryLede.includes(primaryName);
 
   return (
     <>
@@ -259,11 +271,7 @@ export function OperationLedger({
               primary.stalled ? (
               <AlertTriangle className="op-warn h-4 w-4" aria-hidden />
             ) : (
-              <GameMark
-                game={(primary.game ?? "minecraft") as GameId}
-                className="h-4 w-4"
-                style={{ color: railTint }}
-              />
+              <OpMark op={primary} className="h-4 w-4" color={railTint} />
             )}
           </span>
           <p
@@ -323,7 +331,10 @@ export function OperationLedger({
                   the server pass and the first client pass, so whenever the elapsed second
                   ticked between them React threw an uncaught #418 text-content hydration
                   error — observed on two page loads in three while an operation was live,
-                  and there is no `error.tsx` anywhere for it to land in. */}
+                  and before `src/app/error.tsx` existed there was nothing for it to land
+                  in. The boundary exists now (added in 4b1e794, the same commit as this
+                  file), but the guard stays: landing in a boundary on two loads in three
+                  is worse UX than not throwing. */}
               <span
                 className="op-chrome flex-shrink-0 font-mono text-xs tabular-nums"
                 aria-hidden
@@ -379,6 +390,59 @@ export function OperationLedger({
           )}
         </div>
 
+        {/*
+          The collapsed strip carries the live step's DETAIL, not only its label.
+
+          This is the founding complaint of this pass. On 2026-09-29 the owner pressed
+          Restart on Project Zomboid and watched it sit for five minutes with no
+          explanation — and the explanation was on the wire the entire time.
+          `narratedStop` sets `op.detail("Saved in 1052 ms — waiting up to 300s for the
+          process to exit")` before it calls `docker stop`, but `lede()` returns only
+          `liveStep(op)?.label` and the panel defaults collapsed, so the one sentence that
+          would have made the wait a non-event was one un-hinted click away for 300
+          seconds.
+
+          A second line rather than an auto-expand: expanding on its own measured 683px
+          on a 375×667 phone — taller than the viewport, with zero product content on the
+          first screen. One truncated line costs 16px.
+
+          `aria-hidden`, and deliberately: for a modpack apply this is the mod name, which
+          changes every few seconds. `announce()` stays label-only so a screen reader is
+          never talked over — see its docstring.
+        */}
+        {!open && !primary.endedAt && collapsedDetail(primary) && (
+          <p className="op-chrome mt-1 truncate pl-[43px] font-mono text-[11px]" aria-hidden>
+            {collapsedDetail(primary)}
+          </p>
+        )}
+
+        {/*
+          A warn/bad fact is shown WHILE the operation runs, not only after it ends.
+
+          `op.fact()` records evidence as it is obtained, and the facts list is only ever
+          appended to — nothing in it is speculative or later rewritten — so there was
+          never a correctness reason to withhold it. The cost of withholding was measured:
+          when Project Zomboid does not answer the save RCON, `narratedStop` records
+          "the world was not saved — the server did not answer" at about second 1 and then
+          blocks in `docker stop` for 300 seconds. The operator learned the world had not
+          been saved *after* the SIGKILL — i.e. after the only window in which a human
+          could have done anything about it.
+
+          Not `aria-hidden`: a fact is appended once and does not churn, and this sits
+          outside the `role="status"` region above, so it is read on navigation and never
+          announced over the user.
+        */}
+        {!open && !primary.endedAt && newestConcern(primary) && (
+          <p
+            className={cn(
+              "mt-1 truncate pl-[43px] text-[11px]",
+              newestConcern(primary)!.verdict === "bad" ? "op-bad" : "op-warn"
+            )}
+          >
+            {newestConcern(primary)!.value}
+          </p>
+        )}
+
         {/* A settled failure has to name a way forward, and the container log is it. */}
         {!active && primary.outcome === "failed" && primary.game && (
           <p className="op-chrome mt-1 pl-[43px] text-[11px]">
@@ -392,13 +456,12 @@ export function OperationLedger({
         {!open && secondary && (
           <p className="op-chrome mt-1 flex items-center gap-1.5 pl-[43px] text-xs">
             <span className="font-mono text-[10px] uppercase tracking-[0.16em]">also</span>
-            <GameMark
-              game={(secondary.game ?? "minecraft") as GameId}
-              className="h-3 w-3 flex-shrink-0"
-              style={{ color: secondary.game ? GAMES[secondary.game].tint : "var(--primary)" }}
-            />
+            <OpMark op={secondary} className="h-3 w-3 flex-shrink-0" color={opTint(secondary)} />
+            {/* Through the same guard as the primary line: this printed the name
+                unconditionally, so a second live power operation read
+                "Project Zomboid — Stopping Project Zomboid" here too. */}
             <span className="min-w-0 truncate">
-              {headline(secondary)} — {lede(secondary, now)}
+              {withName(secondary, lede(secondary, now))}
             </span>
             <span className="flex-shrink-0 font-mono tabular-nums" aria-hidden>
               {mounted ? `+${formatElapsed(elapsedMs(secondary))}` : ""}
@@ -448,11 +511,7 @@ export function OperationLedger({
                   {shown.length > 1 && (
                     <div className="mb-1 flex items-center gap-3">
                       <span className="flex h-4 w-[31px] flex-shrink-0 items-center justify-center">
-                        <GameMark
-                          game={(op.game ?? "minecraft") as GameId}
-                          className="h-3.5 w-3.5"
-                          style={{ color: op.game ? GAMES[op.game].tint : "var(--primary)" }}
-                        />
+                        <OpMark op={op} className="h-3.5 w-3.5" color={opTint(op)} />
                       </span>
                       <h2 className="min-w-0 truncate text-[13px] font-semibold">{op.title}</h2>
                     </div>
@@ -489,7 +548,17 @@ export function OperationLedger({
                       {op.summary}
                     </p>
                   )}
-                  {op.facts.length > 0 && op.endedAt && (
+                  {/* Not gated on `op.endedAt` any more. `op.fact()` appends evidence as
+                      it is obtained and never rewrites it, so every fact already present
+                      is already true — withholding them until the end only meant the
+                      "world was not saved" warning arrived 300s after the moment it
+                      mattered. Checked every `verdict: "warn"` / `"bad"` site in the repo
+                      before making the change: each is recorded immediately after its own
+                      step's `op.settle()` (`narratedStop`'s Save and Shutdown facts,
+                      `/api/7dtd/update`'s Build fact) or in the operation's return
+                      `facts`. So a routine restart cannot flash a warning mid-step — the
+                      only facts visible early are ones whose step has already concluded. */}
+                  {op.facts.length > 0 && (
                     <dl className="op-chrome mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 pl-[43px] font-mono text-[10px]">
                       {op.facts.map((f, i) => (
                         <div key={`${f.label}-${i}`} className="flex gap-1.5">
@@ -525,6 +594,39 @@ function headline(op: OperationView): string {
   return op.game ? GAMES[op.game].name : "The server";
 }
 
+/**
+ * The world's glyph, or a neutral one when the operation names no world.
+ *
+ * `OperationView.game` is `GameId | null` and three call sites here did
+ * `game={(op.game ?? "minecraft") as GameId}` — so the first genuinely cross-world
+ * operation would have been given a creeper face and a green rail, silently attributing
+ * it to Minecraft. `headline()` already had this right ("The server"), which is why the
+ * glyph and the text disagreed; this makes them agree. Nothing produces a world-less
+ * operation today, so this is a latent defect rather than a live one — but the cast was
+ * doing the lying, and a cast is exactly what stops the compiler catching it.
+ *
+ * Not a branch in `glyphs.tsx`: `GameMark` is keyed on `GameId` and the convention is
+ * that it stays the single place a *game* maps to a mark. This is the absence of a game,
+ * which is a different question, so it is answered here rather than by widening `GameMark`.
+ */
+function OpMark({
+  op,
+  className,
+  color,
+}: {
+  op: OperationView;
+  className: string;
+  color: string;
+}) {
+  if (!op.game) return <Server className={className} style={{ color }} aria-hidden />;
+  return <GameMark game={op.game} className={className} style={{ color }} />;
+}
+
+/** The accent for one record — the world's tint, or the app default. */
+function opTint(op: OperationView): string {
+  return op.game ? GAMES[op.game].tint : "var(--primary)";
+}
+
 /** We stopped hearing from it. NOT the same claim as "it failed". */
 function isLost(op: OperationView, now: number): boolean {
   return !op.endedAt && !op.synthetic && now - op.heartbeatAt > OPERATION_STALE_MS;
@@ -550,6 +652,46 @@ function lede(op: OperationView, now: number): string {
 }
 
 /**
+ * The second collapsed line: the most concrete thing known about the live step.
+ *
+ * In preference order, because each is strictly more specific than the next: the step's
+ * own `detail` (set by `op.detail()` — "Saved in 1052 ms — waiting up to 300s for the
+ * process to exit"), then a recorded `count`, then a `fraction`.
+ *
+ * Both progress branches are skipped for a redacted record. `redact()` blanks
+ * `step.label`, `step.detail` and `step.count` but deliberately leaves `progress` alone,
+ * because a redacted synthetic boot needs its percentage — that percentage is the only
+ * thing its pip beats on (`beatSignal`'s synthetic branch excludes `heartbeatAt`). So
+ * reading a count or a percentage off `progress` here would route around the redaction
+ * that `step.count` already gets. The `detail` branch needs no guard: it is already blank.
+ */
+function collapsedDetail(op: OperationView): string | undefined {
+  const d = liveStep(op)?.detail;
+  if (d) return d;
+  if (op.redacted) return undefined;
+  if (op.progress.kind === "count") {
+    return `${op.progress.done} of ${op.progress.total} ${op.progress.noun}`;
+  }
+  if (op.progress.kind === "fraction") return `${op.progress.percent}%`;
+  return undefined;
+}
+
+/**
+ * The newest fact that is bad news, or nothing.
+ *
+ * Newest rather than first: facts accumulate through a hand-off (a `Save` warning for the
+ * world going down, then a `Shutdown` warning for the same world), and the latest one is
+ * the state of play.
+ */
+function newestConcern(op: OperationView): OperationFact | undefined {
+  for (let i = op.facts.length - 1; i >= 0; i--) {
+    const f = op.facts[i];
+    if (f.verdict === "warn" || f.verdict === "bad") return f;
+  }
+  return undefined;
+}
+
+/**
  * `lede` with every per-second figure removed, for the live region.
  *
  * `lede`'s stale branch embeds `formatElapsed(now - heartbeatAt)`, which changes once a
@@ -565,18 +707,26 @@ function announce(op: OperationView, now: number): string {
 }
 
 /**
- * What the live region says: the world, then the sentence — unless the sentence already
- * opens with the world, which every power summary does.
+ * The world, then the sentence — unless the sentence already names the world.
  *
  * The name must stay for the live case, where the text is a bare step label ("Copying the
- * world") and the region is the only place the world is spoken at all (the visible name is
- * `hidden sm:inline` and every `GameMark` is `aria-hidden`). What it must not do is read
- * "Minecraft — Minecraft — started in 5m 04s…", which is what it did.
+ * world") and, in the live region, this is the only place the world is spoken at all (the
+ * visible name is `hidden sm:inline` and every `GameMark` is `aria-hidden`). What it must
+ * not do is read "Minecraft — Minecraft — started in 5m 04s…", which is what it did.
+ *
+ * `includes`, not `startsWith`, for the reason spelled out at `needsName` above: a power
+ * step label names its world **mid-sentence** ("Stopping Project Zomboid"), so the
+ * original `startsWith` guard never fired on a live record and a screen-reader user heard
+ * the duplication verbatim for the whole operation — five minutes, for a PZ stop.
  */
-function announceLine(op: OperationView, now: number): string {
-  const text = announce(op, now);
+function withName(op: OperationView, text: string): string {
   const name = headline(op);
-  return text.startsWith(name) ? text : `${name} — ${text}`;
+  return text.includes(name) ? text : `${name} — ${text}`;
+}
+
+/** What the live region says. */
+function announceLine(op: OperationView, now: number): string {
+  return withName(op, announce(op, now));
 }
 
 /**
@@ -724,6 +874,22 @@ function useBeats(ops: OperationView[]): Map<string, { tick: number; at: number 
   return beats;
 }
 
+/**
+ * `progress` is deliberately NOT in the real-operation signature, and does not need to be.
+ *
+ * Every `OpHandle` mutator in `operations.ts` — `step`, `settle`, `reject`, `detail`,
+ * `fact` and `progress` — ends with `entry.heartbeatAt = Date.now()`, and `heartbeatAt` is
+ * the first field below. So a lone `op.progress({kind:"count", …})` with no other change
+ * already moves the pip. Adding `progress` here would be redundant for a real operation.
+ *
+ * And it must NOT be added to the synthetic branch, which is the one that looks like it is
+ * missing it. `syntheticBoots` re-derives each boot on every read with `heartbeatAt: now`,
+ * which is exactly why that branch excludes it: including a value that changes on every
+ * poll would make the pip beat forever and fake liveness for a container that has stopped
+ * answering — the failure this whole component is built to refuse. Synthetic boots only
+ * ever carry `fraction` or `indeterminate` progress, never `count`, so there is nothing
+ * for a `count` case to do there anyway.
+ */
 function beatSignal(op: OperationView): string {
   if (op.synthetic) {
     const pct = op.progress.kind === "fraction" ? op.progress.percent : "";
