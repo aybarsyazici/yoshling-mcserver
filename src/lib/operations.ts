@@ -87,12 +87,25 @@ export interface ControlLock {
 // ── resources and admission ──────────────────────────────────────────────────
 
 /**
- * What a power operation holds: the power slot AND every world's files.
+ * The power slot AND every world's files — total exclusivity.
  *
- * It takes the file lanes too because a power operation may save and stop any
- * world, and therefore may be writing any world's files. Declaring them all
- * reproduces today's total exclusivity in one line rather than reasoning at
- * runtime about which world happens to be running.
+ * This used to be the default for every power-adjacent kind, with the reasoning
+ * that a power operation may save and stop any world and therefore may be writing
+ * any world's files, so declaring them all "reproduces today's total exclusivity in
+ * one line rather than reasoning at runtime about which world happens to be running".
+ *
+ * **That was too broad for the common case and it destroyed real backups.** On a
+ * one-world box the *stopped* worlds are precisely the ones whose files nothing is
+ * touching, so their backups are the only clean ones — and they were the ones being
+ * thrown away. Measured on production 2026-09-29: two 7 Days to Die archives (~600 MB)
+ * were invalidated and deleted by power operations on Minecraft and on Project Zomboid
+ * while 7DTD had been `Exited (0)` for two minutes and nothing had opened its files.
+ *
+ * So `power` and `settings` now declare the lanes they can actually touch (see
+ * `DEFAULT_RESOURCES`, and `powerOn`, which names the worlds it is about to evict).
+ * This full set stays for the rare, long, genuinely box-wide operations —
+ * `mods.update`, `world.reset`, `game.update`, `backup.restore` — and is still
+ * imported by `/api/7dtd/update`, `/api/7dtd/reset` and `zomboid-updates.ts`.
  */
 export const POWER_RESOURCES: OperationResource[] = [
   "power",
@@ -100,8 +113,12 @@ export const POWER_RESOURCES: OperationResource[] = [
 ];
 
 const DEFAULT_RESOURCES: Record<OperationKind, (g: GameId | null) => OperationResource[]> = {
-  power: () => POWER_RESOURCES,
-  settings: () => POWER_RESOURCES,
+  // Power holds `power` — which every world-starting path claims, so admission is what
+  // serialises them — plus only its *own* world's files. A hand-off has more than one
+  // world's files to claim, and `powerOn` passes them explicitly because only it knows
+  // which worlds it found running.
+  power: (g) => (g ? ["power", `files:${g}`] : POWER_RESOURCES),
+  settings: (g) => (g ? ["power", `files:${g}`] : POWER_RESOURCES),
   "mods.update": () => POWER_RESOURCES,
   "world.reset": () => POWER_RESOURCES,
   "game.update": () => POWER_RESOURCES,
@@ -228,8 +245,22 @@ const FINISHED_MAX = 20;
 const FINISHED_TTL_MS = 10 * 60 * 1000;
 const FINISHED_TTL_BAD_MS = 6 * 60 * 60 * 1000;
 
-function finishedTtl(e: Entry): number {
-  return e.outcome === "ok" ? FINISHED_TTL_MS : FINISHED_TTL_BAD_MS;
+/**
+ * Clean means `ok` **or** `nothing`, and `nothing` used to be on the six-hour side.
+ *
+ * That was wrong in both directions. A no-op has nothing to preserve — there is no
+ * failure to diagnose and no side effect to remember — and it is the single most
+ * common outcome here, because clicking the running world's card, or Stop on a world
+ * that is already down, produces one. Measured on production 2026-09-29: of the twenty
+ * slots in a full ring, **eight were held by `nothing` records**, each for six hours,
+ * which is what starved the ring of room for the successes people were watching.
+ */
+function isCleanOutcome(outcome: Outcome | undefined): boolean {
+  return outcome === "ok" || outcome === "nothing";
+}
+
+function finishedTtl(e: { outcome?: Outcome }): number {
+  return isCleanOutcome(e.outcome) ? FINISHED_TTL_MS : FINISHED_TTL_BAD_MS;
 }
 
 const HEARTBEAT_MS = 20_000;
@@ -1085,9 +1116,56 @@ function pruneFinished(): void {
     if (now - (FINISHED[i].endedAt ?? 0) > finishedTtl(FINISHED[i])) FINISHED.splice(i, 1);
   }
   while (FINISHED.length > FINISHED_MAX) {
-    const oldestClean = FINISHED.findIndex((e) => e.outcome === "ok");
-    FINISHED.splice(oldestClean >= 0 ? oldestClean : 0, 1);
+    const newest = FINISHED[FINISHED.length - 1];
+    const victim = evictionIndex(FINISHED, newest.endedAt ?? now);
+    if (victim < 0) break;
+    FINISHED.splice(victim, 1);
   }
+}
+
+/**
+ * Which slot the over-cap loop gives up, given the record that just arrived.
+ *
+ * Exported and pure so it can be asserted on; the ring itself needs a live registry
+ * and 21 real operations to reproduce.
+ *
+ * ## The bug this shape exists to stop
+ *
+ * The previous rule was `FINISHED.findIndex(e => e.outcome === "ok")` — the oldest
+ * clean record, whatever its age. With twenty non-clean records in the ring, the
+ * newly-pushed success is the *only* clean one, so its own `push` selected it and
+ * spliced it out synchronously. Measured on production 2026-09-29: a memory change
+ * that really recreated a container (env 5G → 4G, new `Created` timestamp) and a
+ * restart that really cycled one left **no record at all** — `finished` read twenty
+ * entries, none of them `ok`, before and after. Proven by contrast: restarting the web
+ * container emptied the ring, and the very next clean operations were retained. So the
+ * dashboard could not report the operation the user had just watched succeed, which is
+ * the exact class of defect this module was written to prevent.
+ *
+ * So the clean candidate must also be **older than the incoming record**. That leaves
+ * the design rule intact — a failure still outlives a success, because nothing else
+ * records a failure — while making the newest success un-evictable by its own arrival.
+ * If no such candidate exists (a ring of nothing but failures), give up the oldest slot
+ * by `endedAt`; ties resolve to the lowest index, and the incoming record is always the
+ * highest, so it still cannot be the victim.
+ */
+export function evictionIndex(
+  entries: { outcome?: Outcome; endedAt?: number }[],
+  incomingEndedAt: number
+): number {
+  for (let i = 0; i < entries.length; i++) {
+    if (isCleanOutcome(entries[i].outcome) && (entries[i].endedAt ?? 0) < incomingEndedAt) return i;
+  }
+  let oldest = -1;
+  for (let i = 0; i < entries.length; i++) {
+    if (oldest < 0 || (entries[i].endedAt ?? 0) < (entries[oldest].endedAt ?? 0)) oldest = i;
+  }
+  return oldest;
+}
+
+/** Exported for the retention test: the TTL rule is half of what starved the ring. */
+export function finishedTtlFor(outcome: Outcome | undefined): number {
+  return finishedTtl({ outcome });
 }
 
 // ── reading ──────────────────────────────────────────────────────────────────
