@@ -64,7 +64,11 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
     // above it could not arrive even if the route allowed it.
     if (f.size > MAX_WORLD_UPLOAD_BYTES) {
       toast.error(
-        `That file is ${formatBytes(f.size)} — the limit is ${MAX_WORLD_UPLOAD_LABEL}. Upload the world on its own, without the Saves folder.`
+        // Advice that is true for BOTH inputs this control accepts. It used to end
+        // "Upload the world on its own, without the Saves folder" — but the route accepts a
+        // save zip too (`looksSave`/`SAVE_MARKERS`), so someone whose oversize file *is*
+        // the save was told to remove the thing they were uploading.
+        `That file is ${formatBytes(f.size)} — the limit is ${MAX_WORLD_UPLOAD_LABEL}. Upload the world and the save as separate zips, or split it.`
       );
       return;
     }
@@ -180,7 +184,8 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
           <>
             <span className="text-sm font-medium">Drop a .zip here or click to browse</span>
             <span className="text-xs text-muted-foreground">
-              A world zip has files like dtm.raw / biomes.png / prefabs.xml — up to {MAX_WORLD_UPLOAD_LABEL}
+              A world zip has files like dtm.raw / biomes.png / prefabs.xml; a save zip has a
+              region/ folder. Up to {MAX_WORLD_UPLOAD_LABEL} each
             </span>
           </>
         )}

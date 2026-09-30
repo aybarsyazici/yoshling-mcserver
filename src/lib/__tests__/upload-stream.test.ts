@@ -260,6 +260,71 @@ describe("writeStreamToFile", () => {
     expect(size).toBeLessThanOrEqual(maxBytes + 8 * 1024);
   });
 
+  /**
+   * **The property this module exists for**, and the one nothing pinned.
+   *
+   * The header says the first of "the two things that make it actually stream" is that
+   * `pipeline()` is not decoration — "a `ws.write(chunk)` loop that ignores the return
+   * value moves the 2 GB out of a Blob and into the WriteStream's internal queue, which is
+   * the same bug wearing a hat". That regression was reintroduced on purpose and the whole
+   * 244-test suite stayed green: the bytes on disk are identical either way, and the bytes
+   * on disk are all the other tests look at.
+   *
+   * So this asserts the thing that differs: how far ahead of the sink the SOURCE is
+   * allowed to get. A slow sink (one that defers its `_write` callback) plus a real file
+   * is impossible on a laptop — a local file never blocks long enough — which is why
+   * `createSink` exists.
+   *
+   * Bounded by "a few chunks", not by an exact number: the highWaterMark arithmetic is a
+   * tuning detail, whereas "does not track the payload size" is the property. The
+   * discriminating power is enormous — the write loop pulls all 64 chunks before the first
+   * callback fires, `pipeline` pulls a handful.
+   */
+  it("does not read ahead of a slow sink — peak in flight is bounded, not payload-sized", async () => {
+    const dir = await tmp();
+    const dest = path.join(dir, "out.zip");
+    const CHUNK = 64 * 1024;
+    const CHUNKS = 64; // 4 MiB
+    const { Writable } = await import("node:stream");
+
+    let pulled = 0;
+    let flushed = 0;
+    let peakInFlight = 0;
+    async function* source(): AsyncGenerator<Buffer, void> {
+      for (let i = 0; i < CHUNKS; i++) {
+        pulled++;
+        peakInFlight = Math.max(peakInFlight, pulled - flushed);
+        yield Buffer.alloc(CHUNK, i & 0xff);
+      }
+    }
+
+    const slow = new Writable({
+      highWaterMark: CHUNK,
+      write(_chunk, _enc, cb) {
+        // Defer: this is what a network or a loaded disk does, and what a local file
+        // never does long enough to observe.
+        setTimeout(() => {
+          flushed++;
+          cb();
+        }, 1);
+      },
+    });
+
+    const { bytesWritten } = await writeStreamToFile({
+      source: source(),
+      destPath: dest,
+      maxBytes: 64 * 1024 * 1024,
+      createSink: () => slow,
+    });
+
+    expect(bytesWritten).toBe(CHUNK * CHUNKS);
+    expect(pulled).toBe(CHUNKS);
+    // A handful, not all 64. With back-pressure honoured this is 2-3; a `write()` loop
+    // that ignores the return value reads the whole payload into the queue and makes it
+    // 64, i.e. proportional to the payload — the exact defect being guarded.
+    expect(peakInFlight).toBeLessThanOrEqual(8);
+  });
+
   it("leaves no successful result when the upload is truncated", async () => {
     const dir = await tmp();
     const dest = path.join(dir, "out.zip");

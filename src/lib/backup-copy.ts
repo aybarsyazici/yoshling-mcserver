@@ -17,14 +17,24 @@
 //
 // `fs.cp` is itself implemented in JavaScript in Node's `internal/fs/cp` — the same
 // `readdir` + `copyFile` recursion — so this is the same order of work, not a slower
-// reimplementation of a native call. Two behaviours are matched deliberately:
+// reimplementation of a native call. Three behaviours, and the third was got wrong first
+// time:
 //
 //   - **timestamps are not preserved**, exactly as `fs.cp` does not preserve them
-//     (`preserveTimestamps` defaults to false), so the archive is byte-for-byte the same
-//     shape the previous implementation produced;
+//     (`preserveTimestamps` defaults to false);
 //   - **ownership is not preserved**, also as before. The PZ restore path already knows
 //     this and re-applies ownership from `PZ_DIR` with `chown -R` afterwards, because the
-//     web container writes as root and the game runs as uid 1000.
+//     web container writes as root and the game runs as uid 1000;
+//   - **directory modes ARE preserved**, because `fs.cp` preserves them and the first
+//     version of this did not. Measured: a source `inner/` at 0700 copied by `fs.cp` came
+//     out 0700 and by a bare `mkdir(to, {recursive: true})` came out 0755, because `mkdir`
+//     takes 0777 & ~umask and Node's own `internal/fs/cp` follows its `mkdir` with a
+//     `setDestMode(dest, srcMode)` this walk had no equivalent of. File modes survive
+//     either way — `copyFile` carries them. The drift was toward *more* permissive over
+//     every directory in a 442,064-file world, and the comment claiming parity with
+//     `fs.cp` ("the archive is byte-for-byte the same shape the previous implementation
+//     produced") was never checked. One `lstat` per directory against a per-file
+//     `copyFile` is not a cost worth trading a false claim for.
 //
 // Symlinks are recreated as symlinks rather than followed: following one inside a save
 // directory would copy its target into the archive and, on restore, write through it.
@@ -32,7 +42,7 @@
 // counted as skipped and reported — silently omitting part of a save is precisely the
 // "reports success after doing nothing" shape.
 
-import { copyFile, mkdir, readdir, readlink, symlink } from "fs/promises";
+import { chmod, copyFile, lstat, mkdir, readdir, readlink, symlink } from "fs/promises";
 import path from "path";
 
 /** Every file, symlink and other non-directory entry under `src`. Directories excluded. */
@@ -91,6 +101,10 @@ export async function copyTreeCounting(
 
   async function walk(from: string, to: string): Promise<void> {
     await mkdir(to, { recursive: true });
+    // Match the source's mode, as `fs.cp` does. Best-effort: a mode that could not be
+    // applied is not a reason to abandon a backup, and the restore re-applies ownership
+    // over the whole tree afterwards anyway.
+    await chmod(to, (await lstat(from)).mode & 0o7777).catch(() => {});
     dirs++;
     const entries = await readdir(from, { withFileTypes: true });
     for (const e of entries) {

@@ -91,6 +91,34 @@ describe("countTree / copyTreeCounting", () => {
     expect(seen).toEqual([0]);
   });
 
+  /**
+   * The fidelity property, and the one the first version of this module got wrong while a
+   * comment claimed parity with `fs.cp`. Measured then: a 0700 source directory came out
+   * 0755, because `mkdir` takes 0777 & ~umask and Node's `internal/fs/cp` follows its
+   * `mkdir` with a `setDestMode`. File modes were never the problem — `copyFile` carries
+   * them — which is exactly why the gap went unnoticed: every file in the archive looked
+   * right.
+   *
+   * Asserted against `fs.cp` itself rather than against a literal, so the test says
+   * "matches the thing it replaced" and cannot drift from what Node does.
+   */
+  it("preserves directory modes, as the `fs.cp` it replaced does", async () => {
+    const { cp, chmod, stat } = await import("fs/promises");
+    await mkdir(path.join(src, "private"), { recursive: true });
+    await writeFile(path.join(src, "private", "f"), "x", "utf-8");
+    await chmod(path.join(src, "private", "f"), 0o640);
+    await chmod(path.join(src, "private"), 0o700);
+
+    const viaCp = path.join(root, "viaCp");
+    await cp(src, viaCp, { recursive: true });
+    await copyTreeCounting(src, dest, () => {});
+
+    const mode = async (p: string) => (await stat(p)).mode & 0o777;
+    expect(await mode(path.join(dest, "private"))).toBe(await mode(path.join(viaCp, "private")));
+    expect(await mode(path.join(dest, "private"))).toBe(0o700);
+    expect(await mode(path.join(dest, "private", "f"))).toBe(0o640);
+  });
+
   it("counts nothing for a directory it cannot read, rather than throwing", async () => {
     expect(await countTree(path.join(root, "does-not-exist"))).toBe(0);
   });

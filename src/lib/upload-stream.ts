@@ -343,6 +343,17 @@ export async function writeStreamToFile(opts: {
   maxBytes: number;
   /** Called as bytes land. Throttle inside the callback if it is expensive. */
   onProgress?: (bytesWritten: number) => void;
+  /**
+   * The sink, for tests only. Defaults to `createWriteStream(destPath)`.
+   *
+   * It exists because the property this whole module was written for — peak memory flat
+   * in payload size — was **not pinned by any of its 45 tests**. Replacing the
+   * `pipeline()` below with the `ws.write()` loop the header warns against left all 244
+   * tests green, because the bytes on disk are identical either way and only the memory
+   * behaviour changes. A test needs a destination that drains slowly to tell the two
+   * apart, and a real file on a laptop never does.
+   */
+  createSink?: () => NodeJS.WritableStream;
 }): Promise<{ bytesWritten: number }> {
   const counted = { bytes: 0 };
   async function* limit(): AsyncGenerator<Buffer, void> {
@@ -354,7 +365,7 @@ export async function writeStreamToFile(opts: {
     }
   }
   // `pipeline`, not a write loop: it is what honours `ws.write()` returning false.
-  await pipeline(limit(), createWriteStream(opts.destPath));
+  await pipeline(limit(), opts.createSink ? opts.createSink() : createWriteStream(opts.destPath));
   return { bytesWritten: counted.bytes };
 }
 

@@ -28,5 +28,17 @@
  */
 export const MAX_WORLD_UPLOAD_BYTES = 2_000_000_000;
 
-/** The cap as it is written in user-facing copy. Kept next to the number it describes. */
-export const MAX_WORLD_UPLOAD_LABEL = "2 GB";
+/**
+ * The cap as it is written in user-facing copy. Kept next to the number it describes.
+ *
+ * **"1.86 GiB", not "2 GB"**, because the app's own `formatBytes` is binary and labels
+ * GiB. The first version said "2 GB" beside a size rendered with `formatBytes`, so every
+ * refused file between 1.86 and 2.00 GiB produced "That file is 1.96 GiB — the limit is
+ * 2 GB", which reads as 1.96 being under 2. `format.ts`'s own docstring records this exact
+ * trap as already paid for once ("the unit label has to match the arithmetic … every
+ * backup summary understated its own file by ~5%"), and this is the second instance.
+ *
+ * The decimal 2 GB stays in the comment above, where it belongs: it is Caddy's number,
+ * not the user's.
+ */
+export const MAX_WORLD_UPLOAD_LABEL = "1.86 GiB";
