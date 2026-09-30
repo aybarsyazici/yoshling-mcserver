@@ -252,8 +252,18 @@ export function powerState(input: PowerSurfaceInput): PowerSurface {
 
   // Only one world can hold the box, but check every other one rather than assume
   // which: a stale container would otherwise be missed.
+  // `containerRunning`, with `status` only as the fallback for a snapshot that predates
+  // the field.
+  //
+  // This read `status === "online" || "starting"`, which under-reports the exact state the
+  // `a7d76b8` split exists to name: a container that is up but not answering RCON reports
+  // `status: "offline"`, so the "Switch servers?" dialog did not name it — while `powerOn`
+  // checks `containerState` and stops it regardless. The dialog under-promised and then the
+  // eviction happened anyway, which is the same shape as the honest-label bug one layer up.
   const blocking = otherGames(game).filter((g) => {
-    const s = games?.[g]?.status;
+    const snap = games?.[g];
+    if (snap?.containerRunning !== undefined) return snap.containerRunning;
+    const s = snap?.status;
     return s === "online" || s === "starting";
   });
 

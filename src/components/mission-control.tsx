@@ -191,10 +191,20 @@ export function MissionControl({
     ? "You can view these servers but not power them. Ask an admin for Mod access."
     : null;
 
-  /** The other worlds currently holding (or claiming) the box. */
+  /**
+   * The other worlds currently holding (or claiming) the box.
+   *
+   * Must stay identical to `powerState`'s `blocking` — this is the predicate that decides
+   * whether the "Switch servers?" dialog appears at all, and that one decides what it
+   * says, so a divergence produces a dialog that names nothing or no dialog at all. Both
+   * key on `containerRunning`, because a world that is up but not answering RCON reports
+   * `status: "offline"` and `powerOn` will still stop it.
+   */
   function runningOthers(game: GameId): GameId[] {
     return otherGames(game).filter((g) => {
-      const s = games?.[g]?.status;
+      const snap = games?.[g];
+      if (snap?.containerRunning !== undefined) return snap.containerRunning;
+      const s = snap?.status;
       return s === "online" || s === "starting";
     });
   }
@@ -783,8 +793,22 @@ function WorldCard({
           ) : (
             <StatusPill
               status={
-                isBusyThis && !isOnline ? (power.ownStopping ? "stopping" : "starting") : status
+                isBusyThis && !isOnline
+                  ? power.ownStopping
+                    ? "stopping"
+                    : "starting"
+                  : // An unreachable container is amber, not grey. The `status` it carries is
+                    // literally `offline`, and this pill printed "Stopped" beside a button
+                    // reading "Power off" — the last unfixed half of the `a7d76b8` honest-label
+                    // work, and the only one of the three power surfaces that still had it.
+                    // `game-controls.tsx` and `game-overview.tsx` both print `power.heading`.
+                    power.unreachable
+                    ? "starting"
+                    : status
               }
+              // The words come from the one shared derivation, so "Starting…" and "Not
+              // responding" cannot be worded differently here than on the other two surfaces.
+              label={!isBusyThis && power.unreachable ? power.heading : undefined}
               tint={meta.tint}
             />
           )}

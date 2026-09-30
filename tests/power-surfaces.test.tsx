@@ -89,12 +89,13 @@ interface Surface {
    * Whether this surface prints `power.heading` ("Not responding" / "Starting…" /
    * "Running" / "Stopped").
    *
-   * `/home`'s card prints a `StatusPill` driven by the raw `snapshot.status` instead, so a
-   * wedged container reads "Stopped" there beside a "Power off" button. That pairing is
-   * self-contradictory and it is the surviving half of the `a7d76b8` gap — reported, not
-   * fixed here (this workstream may not touch application code). The states table below
-   * therefore asserts the heading only where one is rendered, and the *label* — which all
-   * three do share — everywhere.
+   * All three do, as of the integration pass. `/home`'s card used to print a `StatusPill`
+   * driven by the raw `snapshot.status`, so a wedged container read "Stopped" there beside a
+   * "Power off" button — the surviving half of the `a7d76b8` gap, and the one surface where
+   * the honest label was still missing. The pill now takes `label={power.heading}` when the
+   * container is unreachable, so this flag is `true` everywhere and the states table below
+   * asserts the heading on every surface. Kept as a flag rather than deleted: a fourth
+   * surface may legitimately not have room for one, and the flag is where that gets said.
    */
   heading: boolean;
 }
@@ -124,7 +125,7 @@ const SURFACES: Surface[] = [
     render: () => void render(<MissionControl access={[GAME]} />),
     restartControl: false,
     reasonLine: false,
-    heading: false,
+    heading: true,
   },
 ];
 
@@ -414,6 +415,79 @@ describe("the documented way out of a wedged container is always reachable", () 
   });
 });
 
+// ── co-residency: the notice, on every surface that claims to carry it ──────
+
+/**
+ * Two worlds at once, rendered.
+ *
+ * The same gap as the rest of this file, one round later: `coResidency()` was added to four
+ * components and pinned only as arithmetic, so nothing proved any surface printed it. The
+ * fixture makes that easy to get wrong in the other direction too — `running` is derived
+ * from the snapshots in `gamesState`, so a test that sets `containerRunning` on two worlds
+ * gets a truthful `running` without having to restate it.
+ */
+describe("the co-residency notice", () => {
+  const TWO = worlds({
+    minecraft: { status: "online", containerRunning: true },
+    [GAME]: { status: "online", containerRunning: true },
+  });
+
+  for (const surface of SURFACES) {
+    describe(`${surface.route} (${surface.file})`, () => {
+      it("names both running worlds and says to stop all but one", () => {
+        setup({ games: TWO });
+        surface.render();
+        expect(text()).toContain("Minecraft");
+        expect(text()).toContain(GAMES[GAME].name);
+        expect(text()).toMatch(/running at the same time/);
+        expect(text()).toMatch(/stop all but one/);
+      });
+
+      /**
+       * The complement, so silence cannot pass the test above. A single running world must
+       * produce no notice at all — `coResidency` returns `message: null` rather than "" for
+       * exactly this reason, and a surface that rendered an empty warning row would satisfy
+       * "contains the world's name" trivially.
+       */
+      it("says nothing when only one world is running", () => {
+        setup({ games: worlds({ [GAME]: { status: "online", containerRunning: true } }) });
+        surface.render();
+        expect(text()).not.toMatch(/running at the same time/);
+      });
+
+      /**
+       * Keyed on `containerRunning`, not on `status`. A container that is up but not
+       * answering RCON reports `status: "offline"` while still holding its memory and its
+       * ports — the `a7d76b8` split — and that is the co-residency you most want named,
+       * because it is the one nobody noticed for two days.
+       */
+      it("counts a container that is up but not answering", () => {
+        setup({
+          games: worlds({
+            minecraft: { status: "offline", containerRunning: true },
+            [GAME]: { status: "online", containerRunning: true },
+          }),
+        });
+        surface.render();
+        expect(text()).toMatch(/running at the same time/);
+      });
+
+      /**
+       * The notice must not claim an effect it cannot measure. The first draft of the copy
+       * ended "so it is swapping", which is not knowable — `-Xmx` is a reservation, 7 Days
+       * to Die has no heap figure at all, and the 2026-09-26 swap is one observation rather
+       * than a rule. Pinned here as well as in the pure suite, because the sentence a user
+       * reads is the one that matters.
+       */
+      it("does not claim the box is swapping", () => {
+        setup({ games: TWO });
+        surface.render();
+        expect(text()).not.toMatch(/swap/i);
+      });
+    });
+  }
+});
+
 // ── the drift guard: a fourth surface must fail loudly ──────────────────────
 
 describe("every component that derives a power state is in the table above", () => {
@@ -424,15 +498,55 @@ describe("every component that derives a power state is in the table above", () 
      * or splitting one out of an existing file — reproduces the original bug with a green
      * suite, because nothing here would know it existed.
      *
-     * Deliberately keyed on `powerState(` rather than on the import: a file that imports
-     * the helper and does not call it renders no power state, and a file that calls it is
-     * a power surface whatever it chooses to import.
+     * Keyed on `powerState(` *outside of comments*. The first version matched the bare
+     * substring anywhere in the file, and a comment in `ui-bits.tsx` saying "callers pass
+     * `powerState().heading`" turned the guard red — a guard that fires on prose is a guard
+     * people delete. Comment lines are stripped rather than the match being narrowed
+     * further, because "a file that calls it is a power surface whatever it imports" is
+     * still the right rule; only prose had to stop counting as a call.
      */
     const dir = path.resolve(__dirname, "../src/components");
+    const stripComments = (src: string) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+        .join("\n");
     const callers = readdirSync(dir)
       .filter((f) => f.endsWith(".tsx"))
-      .filter((f) => readFileSync(path.join(dir, f), "utf8").includes("powerState("));
+      .filter((f) => stripComments(readFileSync(path.join(dir, f), "utf8")).includes("powerState("));
     expect(callers.sort()).toEqual(SURFACES.map((s) => s.file).sort());
+  });
+
+  /**
+   * The same guard for the co-residency notice, for the same reason and with the same
+   * history. `coResidency()` was added to four components in the round that introduced it
+   * (the three power surfaces plus `ram-budget.tsx`) and nothing rendered it in a test; the
+   * argument the `powerState` guard makes — "a shared helper existing is not evidence that
+   * the components call it, and the measured incident is precisely that they did not" —
+   * applies verbatim. Listed explicitly rather than derived from SURFACES because
+   * `ram-budget.tsx` consumes the arithmetic without being a power surface.
+   */
+  it("finds no unlisted consumer of coResidency()", () => {
+    const dir = path.resolve(__dirname, "../src/components");
+    const expected = [
+      "game-controls.tsx",
+      "game-overview.tsx",
+      "mission-control.tsx",
+      "ram-budget.tsx",
+    ];
+    const stripComments = (src: string) =>
+      src
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .split("\n")
+        .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+        .join("\n");
+    const callers = readdirSync(dir)
+      .filter((f) => f.endsWith(".tsx"))
+      .filter((f) =>
+        /\bcoResidency\(|\bramUse\(|\bramNote\(/.test(stripComments(readFileSync(path.join(dir, f), "utf8")))
+      );
+    expect(callers.sort()).toEqual(expected.sort());
   });
 });
 
