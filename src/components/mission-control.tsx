@@ -360,9 +360,9 @@ export function MissionControl({
       </div>
 
       {/* Two worlds at once, said plainly and above the fold.
-          This is the oldest open item in the project: it happened on 2026-09-26 (two
-          worlds for two days, 2 GB into swap) and was found by accident, because nothing
-          anywhere reported it. The cause was a hand-run `docker start`, which no amount of
+          This is the oldest open item in the project: it happened on 2026-09-26 (PZ
+          started on top of a 7DTD that had been up two days; 2.2 GB into swap when found)
+          and it was found by accident, because nothing anywhere reported it. The cause was a hand-run `docker start`, which no amount of
           app-side refusal can prevent — so saying so is the part that has to work. */}
       {/* No `role="status"`. `OperationLedger` records, at length, that a live region
           created at the same moment as its content is the documented unreliable case for

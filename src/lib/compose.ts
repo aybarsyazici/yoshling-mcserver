@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "fs/promises";
+import { chmod, readFile, rename, unlink, writeFile } from "fs/promises";
 import path from "path";
 
 /**
@@ -251,23 +251,69 @@ export async function writeCompose(text: string): Promise<void> {
 }
 
 /**
- * The `.env` text, or `""` when there is none.
+ * The `.env` text, or `""` when there is **no such file**.
  *
  * A missing `.env` is a legitimate state — compose carries every app-owned value as a
- * `${VAR:-default}` fallback precisely so it is — so this must not throw. Throwing
- * would make the memory card unreadable on a fresh box instead of showing the default
- * it would actually boot with.
+ * `${VAR:-default}` fallback precisely so it is — so this must not throw on ENOENT.
+ * Throwing would make the memory card unreadable on a fresh box instead of showing the
+ * default it would actually boot with.
+ *
+ * **Every other error rethrows**, and that distinction is load-bearing. This used to be
+ * a bare `catch { return "" }`, which made EACCES/EIO/EISDIR indistinguishable from "no
+ * file yet" — and the one caller is `writeServiceEnvToDotEnv`, which reads, patches and
+ * immediately writes back. So a single failed read would have returned `""`, been
+ * patched into a 4-line file, and overwritten the only copy of `AUTH_SECRET`,
+ * `DATABASE_URL`, `DISCORD_CLIENT_SECRET`, `RCON_PASSWORD`, `SDTD_TELNET_PASSWORD`,
+ * `PZ_RCON_PASSWORD`, `PZ_ADMIN_PASSWORD` and `STEAM_API_KEY` — a box that can no longer
+ * authenticate anyone or control any of the three games. `.env` is gitignored, so unlike
+ * the `docker-compose.yml` this write replaced, there is nothing to `git checkout`.
  */
 export async function readEnvFile(): Promise<string> {
   try {
     return await readFile(ENV_FILE, "utf-8");
-  } catch {
-    return "";
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw e;
   }
 }
 
+/**
+ * Replace `.env` atomically, keeping one previous version.
+ *
+ * Three deliberate choices, all because this file is the only copy of every production
+ * secret and is written by a dashboard button:
+ *
+ * - **temp-then-`rename`**, not `writeFile` in place. A plain `writeFile` truncates
+ *   before it writes, so the web container being OOM-killed (it has a `mem_limit`) or
+ *   recreated by a concurrent deploy inside that window leaves `.env` empty or short.
+ *   `rename` within one filesystem is atomic, and the bind mount is one filesystem, so
+ *   there is never a moment at which `.env` is not a complete file.
+ * - **`.env.bak` first**, because the read-back guard in `writeServiceEnvToDotEnv` runs
+ *   *after* the write: it can catch a wrong value but cannot undo one, and there is no
+ *   systematic backup of this file on the box.
+ * - **mode 0600 explicitly.** `writeFile` creating a new file gives 0644 minus umask;
+ *   production's `.env` is 0600 and must stay that way, and a temp file that is
+ *   world-readable for even a moment is a copy of every secret at 0644.
+ */
 export async function writeEnvFile(text: string): Promise<void> {
-  await writeFile(ENV_FILE, text, "utf-8");
+  const tmp = `${ENV_FILE}.tmp`;
+  const prev = await readEnvFile();
+  if (prev !== "") {
+    // Best-effort: a missing backup must not stop the write it protects.
+    await writeFile(`${ENV_FILE}.bak`, prev, { encoding: "utf-8", mode: 0o600 }).catch(
+      () => {}
+    );
+  }
+  await writeFile(tmp, text, { encoding: "utf-8", mode: 0o600 });
+  try {
+    await rename(tmp, ENV_FILE);
+  } catch (e) {
+    await unlink(tmp).catch(() => {});
+    throw e;
+  }
+  // The rename carries the temp file's mode, but only when it created the temp file;
+  // an existing `.env.tmp` left by an earlier crash would keep whatever mode it had.
+  await chmod(ENV_FILE, 0o600).catch(() => {});
 }
 
 /** The live `.env` as a map, for resolving compose's `${...}` references. */

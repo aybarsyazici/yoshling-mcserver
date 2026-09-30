@@ -17,8 +17,8 @@ import type { GameId } from "../games";
  * ------------------------
  * Only one world fits on this box (16 GB). `powerOn` evicts; nothing else did, and
  * **nothing anywhere reported** the two-worlds-at-once state. It happened: on
- * 2026-09-26 two worlds ran for two days at 2 GB into swap and it was found by
- * accident. Forensics showed the cause was a hand-run `docker start`, not app code —
+ * 2026-09-26 Project Zomboid was started on top of a 7 Days to Die that had been up two
+ * days, and the box was 2.2 GB into swap when the state was found by accident. Forensics showed the cause was a hand-run `docker start`, not app code —
  * which is exactly why detection is the thing worth having. The app cannot prevent
  * every cause; it can refuse to be silent about the state.
  *

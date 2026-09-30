@@ -9,13 +9,25 @@ import type { ReadableStream as NodeWebReadableStream } from "stream/web";
  * ## Why this exists
  *
  * `/api/7dtd/world` used to do `await request.formData()` and then
- * `Buffer.from(await file.arrayBuffer())`, which holds the payload **twice** —
- * measured on a 50 MB file, `arrayBuffer()` raised `process.memoryUsage().arrayBuffers`
- * by 104.9 MB (the Blob plus a fresh copy; the `Buffer` is a view over that copy, so
- * there is no third). With a 2 GB cap that needs ~5 GB, which is the whole reason the
- * web container's `mem_limit` is 6g — see the comment on the `web` service in
- * `docker-compose.yml`, which says in as many words "do not lower this without
- * streaming that upload first".
+ * `Buffer.from(await file.arrayBuffer())`, which holds the payload about **three
+ * times** over.
+ *
+ * The first draft of this comment said "twice", and attributed both copies to
+ * `arrayBuffer()`. Re-measured on Node 20.12 with a real `Request` and the built-in
+ * undici parser, 100 MB multipart body, `process.memoryUsage().arrayBuffers`:
+ *
+ *     start                 rss=236.1  arrayBuffers=200.0
+ *     new Request(body)     rss=343.5  arrayBuffers=300.1   <- +1x, the body is copied in
+ *     await formData()      rss=345.6  arrayBuffers=300.0   <- free; it reuses that copy
+ *     await arrayBuffer()   rss=545.7  arrayBuffers=500.0   <- +2x more
+ *     Buffer.from(ab)       rss=545.7  arrayBuffers=500.0   <- a view, so no third here
+ *
+ * So the `Buffer` really is a view — that part was right — but the request path costs
+ * ~3x the file before the write even starts, and RSS grew 4.3x in the end-to-end run
+ * against a real standalone server (115.2 -> 1285.1 MB for a 300 MB upload). With a 2 GB
+ * cap that is ~6-8 GB, not ~5 GB, which is why the web container's `mem_limit` was 6g —
+ * see the comment on the `web` service in `docker-compose.yml`, whose own "DOUBLE the
+ * cap" arithmetic had the same understatement.
  *
  * It also **blocked the event loop**: `arrayBuffer()` resolves with one large
  * allocation and `writeFile` of a 2 GB Buffer is a single synchronous-ish burst, during

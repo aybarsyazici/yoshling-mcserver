@@ -49,8 +49,9 @@ export interface GamesState {
    * Every world whose container is up — plural, and that is the point.
    *
    * `activeGame` is a singular and cannot express the one state this box must not be in.
-   * Only one world fits in 16 GB; `powerOn` evicts, but on 2026-09-26 two worlds ran for
-   * two days at 2 GB into swap after a hand-run `docker start`, and nothing in the app
+   * Only one world fits in 16 GB; `powerOn` evicts, but on 2026-09-26 a hand-run
+   * `docker start` put Project Zomboid on top of a 7 Days to Die that had been up two
+   * days, and the box was 2.2 GB into swap when it was found — and nothing in the app
    * said so — the dashboard whose whole subject is which world holds the box had no way
    * to report that two did.
    *

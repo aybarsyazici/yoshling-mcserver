@@ -7,9 +7,12 @@ import { GAMES, GAME_LIST, otherGames, type GameId } from "./games";
  *
  * Only one world fits on this box (16 GB), and `powerOn` is the only path that evicts.
  * Nothing anywhere *detected* co-residency or reported it. It has happened: on
- * 2026-09-26 two worlds ran for two days at 2 GB into swap, and it was found by
- * accident rather than by the dashboard whose whole subject is which world holds the
- * box. Forensics proved the cause was a hand-run `docker start`, not app code — which is
+ * 2026-09-26 7 Days to Die had been up two days when Project Zomboid was started on top
+ * of it, and the box was 2.2 GB into swap when the state was found — by accident, rather
+ * than by the dashboard whose whole subject is which world holds the box. (The first
+ * draft of this said "two worlds ran for two days"; `docs/AUDIT-2026-09-28.md` records
+ * "7DTD 2d, PZ 3h", so two days is one world's uptime and the overlap itself was ~3 h.
+ * The argument for detection does not need the bigger number.) Forensics proved the cause was a hand-run `docker start`, not app code — which is
  * precisely the argument for detection over prevention alone. The app cannot stop every
  * cause; it can refuse to be silent about the state.
  *

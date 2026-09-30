@@ -315,27 +315,43 @@ services:
     # made it the one process on the box able to take the whole host down, and it is
     # also the one that buffers uploads and forks `docker`/`tar`.
     #
-    # Sized against the 2 GB world-upload cap, and the arithmetic is DOUBLE the cap
-    # because `/api/7dtd/world` holds the payload twice: `await request.formData()` keeps
-    # the 2 GB Blob alive while `Buffer.from(await file.arrayBuffer())` allocates a second
-    # copy (the Buffer itself is a view, so there is no third). Measured on a 50 MB file:
-    # `arrayBuffer()` raised `process.memoryUsage().arrayBuffers` by 104.9 MB, i.e. 2x.
-    # Add the measured 954 MB `memory.peak` baseline (steady state is only 195 MB) and a
-    # 2 GB upload needs ~5 GB, so 6g.
+    # This was 6g, sized against the 2 GB world-upload cap, and the comment justified it
+    # with "the arithmetic is DOUBLE the cap because /api/7dtd/world holds the payload
+    # twice" and ended "**do not lower this without streaming that upload first**; once it
+    # streams, ~1g."
     #
-    # The first version of this limit was 3g with a comment claiming it was "headroom for
-    # one upload". It was not -- it would have OOM-killed the dashboard mid-upload, and
-    # before the limit existed that upload merely swapped and completed. Sizing a ceiling
-    # from the payload rather than from the peak is the mistake; measure, do not reason.
+    # That upload now streams (`src/lib/upload-stream.ts`: a multipart reader piped into
+    # `createWriteStream` through `pipeline()`, so back-pressure is real), so the stated
+    # condition is met. Two corrections came out of doing it, both measured rather than
+    # reasoned:
     #
-    # **Do not lower this without streaming that upload first**; once it streams, ~1g.
-    # Ceilings may over-commit (PZ's 14g + this 6g exceeds the 16 GB box) because they are
+    #   - The old path cost about THREE copies, not two. Node 20.12, 100 MB multipart
+    #     body, `process.memoryUsage().arrayBuffers`: 200.0 -> 300.1 MB when the Request is
+    #     constructed (the body is copied in), unchanged by `formData()`, then -> 500.0 MB
+    #     on `arrayBuffer()`. `Buffer.from(ab)` is a view and adds nothing, which is the
+    #     one thing the old comment had right. End to end against a real standalone
+    #     server, a 300 MB upload took RSS 115.2 -> 1285.1 MB, i.e. 4.3x.
+    #   - The streamed path is FLAT in payload size: RSS peaked at 213.3 MB for 300 MB and
+    #     227.1 MB for 1 GiB, and the written files matched their sources by md5.
+    #
+    # So 2g: ~2.1x the 954 MB `memory.peak` this container has actually recorded (steady
+    # state 195 MB), and ~9x the measured streaming peak. Sized from the measured peak,
+    # not from the payload -- which is the mistake the FIRST version of this limit made:
+    # it was 3g "headroom for one upload", which would have OOM-killed the dashboard
+    # mid-upload while the unlimited container merely swapped and completed.
+    #
+    # Ceilings may over-commit (PZ's 14g plus this exceeds the 16 GB box) because they are
     # limits, not reservations, and only one world runs at a time.
     #
     # An unbounded web container is still worse than an over-committed ceiling: with a
     # limit the kernel kills the dashboard, which restarts and loses nothing, instead of
-    # letting it push a live world into OOM.
-    mem_limit: 6g
+    # letting it push a live world into OOM. "Loses nothing" is only true because
+    # `writeEnvFile` writes `.env` through a temp file and `rename()` -- a truncating
+    # write would make an OOM kill mid-Apply destroy every secret on the box.
+    #
+    # mem_limit is CREATE-TIME: this takes effect on the next `docker compose up -d
+    # --no-deps web`, which every deploy already does.
+    mem_limit: 2g
     logging:
       driver: "json-file"
       options: { max-size: "20m", max-file: "3" }

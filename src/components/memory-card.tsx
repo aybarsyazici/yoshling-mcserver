@@ -204,10 +204,16 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
               </>
             ) : state.running ? (
               // The downtime, from `GameMeta.stopSeconds` rather than the flat "about a
-              // minute" this used to promise for all three worlds. Project Zomboid's stop
-              // alone is a measured 5m 03s — it never exits on SIGTERM — so the one world
-              // whose heap you are most likely to change understated its own downtime by
-              // 5×, and the operation that followed looked hung.
+              // minute" this used to promise for all three worlds.
+              //
+              // Deriving it is the point. This comment used to justify itself with "PZ's
+              // stop alone is a measured 5m 03s — it never exits on SIGTERM", which was
+              // true when written and was corrected on 2026-09-29: the driver now asks the
+              // game to `quit` over RCON and it exits in ~12s with code 0, so
+              // `GAMES.zomboid.stopSeconds` is 12 and the branch below correctly says
+              // "about a minute". A number written into the copy would have gone on
+              // promising five minutes of downtime that no longer happens; a number read
+              // from the table followed the fix without anyone editing this file.
               meta.stopSeconds >= 120
                 ? `Saving saves the world, recreates the container and starts it again. ` +
                   `${meta.name} takes up to ${spellMinutes(meta.stopSeconds)} to stop, so expect ` +

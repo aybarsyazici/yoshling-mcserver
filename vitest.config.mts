@@ -47,11 +47,16 @@ export default defineConfig({
      *
      * Not a global switch: the pure-logic tests have no DOM in them, and making every
      * one of them construct a jsdom window is a cost paid by the suite whose entire
-     * selling point is that it runs in well under a second on a laptop. Measured here on
-     * Node 20.12 over three consecutive runs, 281 tests: `environment` 381/461/435 ms
-     * and a total of 1.34/1.38/1.31 s, against `environment 2 ms` / 654 ms total for the
-     * 199 node-only tests before the two `.tsx` files existed. So the whole DOM cost is
-     * ~0.4 s and it is confined to the two files that need it.
+     * selling point is that it runs in well under a second on a laptop. Measured on Node
+     * 20.12: `environment` 381-462 ms and a total of 1.3-1.5 s with the two `.tsx` files,
+     * against `environment 2 ms` / 654 ms total for the node-only tests before they
+     * existed. So the whole DOM cost is ~0.4 s and it is confined to the two files that
+     * need it.
+     *
+     * Deliberately no test COUNT in that sentence. The first version said "281 tests",
+     * which was already wrong by one when it was written and goes stale on every test
+     * anyone adds -- a measurement that decays is the thing this project keeps getting
+     * bitten by. The environment cost is the figure this comment exists to record.
      */
     environment: "node",
     // Fixtures are read with `readFile`, so no setup file and no globals.

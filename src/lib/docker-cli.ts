@@ -2,8 +2,17 @@ import { exec } from "child_process";
 import { promisify } from "util";
 
 /**
- * The one place this app shells out to the Docker CLI — and the seam that makes
- * `game-manager` testable.
+ * The runner every `docker` fork in `game-manager` goes through — and the seam that
+ * makes that module testable.
+ *
+ * **Not the only place this app shells out.** The first draft of this comment said "the
+ * one place this app shells out to the Docker CLI", which was false when it was written
+ * and is falsified by 14 other files today (`grep -rl child_process src` — the backup
+ * routes, `backup-create.ts`, `backup-store.ts`, `games/stats`, `7dtd/{reset,update,world}`,
+ * `install-modpack`, `instrumentation.ts`, `operations.ts`, `zomboid-updates.ts`).
+ * `/api/7dtd/update` still has its own `promisify(exec)`. The accurate scope is the
+ * load-bearing part: a reader who believes the overclaim will not go looking for the
+ * other fourteen.
  *
  * ## Why a seam and not `promisify(exec)` inline
  *
@@ -66,7 +75,7 @@ const shellRunner: CommandRunner = promisify(exec) as unknown as CommandRunner;
 
 let runner: CommandRunner = shellRunner;
 
-/** Run a shell command. Every `docker` invocation in this app goes through here. */
+/** Run a shell command. Every `docker` invocation in `game-manager` goes through here. */
 export function runCommand(cmd: string, opts?: CommandOptions): Promise<CommandResult> {
   return runner(cmd, opts);
 }

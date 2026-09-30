@@ -18,8 +18,8 @@ import { coResidency, perWorldCeiling, ramNote, ramUse } from "@/lib/coresidency
  *
  *  1. **It could not show two worlds.** The one element on this page whose job is making
  *     the box's RAM limit legible was structurally unable to show the over-commit that
- *     limit exists to prevent — and that over-commit is a thing that happened, for two
- *     days, 2 GB into swap.
+ *     limit exists to prevent — and that over-commit is a thing that happened, on
+ *     2026-09-26, with the box 2.2 GB into swap when it was found.
  *  2. **It read 0 GB whenever 7 Days to Die was the live world.** `memoryGb["7dtd"]` is
  *     `null` *by design* — a Unity native server with no JVM and no heap setting — and
  *     `?? 0` turned that unknown into a zero, so the bar said the box was idle while a

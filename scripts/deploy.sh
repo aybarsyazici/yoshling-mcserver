@@ -128,14 +128,20 @@ cd /opt/yoshling
 git fetch -q /root/y.bundle main
 
 # docker-compose.yml is GIT-OWNED, and the `checkout -f` below proves it by
-# discarding anything the app wrote. The app *does* write it: /api/games/memory
-# (heap) and /api/settings (Minecraft version/loader) both patch a service block,
-# so a setting applied through the dashboard silently reverts on the next deploy.
-# That has already cost one commit working around it by hand (f0cf692, "Commit the
-# 12 GB PZ heap so a deploy stops reverting it").
+# discarding anything on the box that disagrees.
 #
-# Until those features write to git instead, the least this can do is refuse to
-# revert silently. Say exactly what is about to be lost and let the operator decide.
+# This comment used to say the app writes it — "/api/games/memory (heap) and
+# /api/settings (Minecraft version/loader) both patch a service block". That was true
+# and cost one commit working around it by hand (f0cf692, "Commit the 12 GB PZ heap so
+# a deploy stops reverting it"), and it is no longer true: both now write
+# /opt/yoshling/.env, which is gitignored and excluded from the `git clean` below, and
+# compose reads them as ${MC_MEMORY:-4G} and friends.
+#
+# So a dirty compose file today means one of exactly two things, neither of which this
+# script should silently revert: a hand-edit on the box, or an /api/7dtd/update that
+# died between its two START_MODE patches (it flips 3 then straight back to 1 inside one
+# operation — the only remaining compose writer, deliberately, because moving it to .env
+# would rewrite the ${...} reference into a literal and detach the line for good).
 #
 # Compare the working tree against the box's CURRENT HEAD, not against FETCH_HEAD.
 # Only the former isolates "something on this box edited the file"; diffing against
@@ -143,8 +149,8 @@ git fetch -q /root/y.bundle main
 # would block every deploy that touches it.
 if ! git diff --quiet HEAD -- docker-compose.yml; then
   echo "deploy: docker-compose.yml on the box has local edits." >&2
-  echo "        Most likely the memory or Minecraft version control in the" >&2
-  echo "        dashboard wrote it. Deploying DISCARDS these:" >&2
+  echo "        Either someone edited it on the box, or a 7DTD build update died" >&2
+  echo "        between its two START_MODE patches. Deploying DISCARDS these:" >&2
   git --no-pager diff HEAD -- docker-compose.yml | sed 's/^/        /' >&2
   if [ "${FORCE_COMPOSE:-0}" != "1" ]; then
     echo "        Commit them, or re-run with FORCE_COMPOSE=1 to discard them." >&2
