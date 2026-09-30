@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { tailContainerLog } from "@/lib/game-manager";
 
 export async function GET(request: NextRequest) {
@@ -30,7 +31,8 @@ export async function POST(request: NextRequest) {
   }
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
-  if (session.user.role !== "ADMIN" && session.user.role !== "MOD") {
+  // See `/api/server/console` — one capability for all three game consoles.
+  if (!hasPermission(session.user.role, "console.execute")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

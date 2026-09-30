@@ -19,6 +19,21 @@ export async function GET() {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
 
+  // `LOCKED` (via INFRA_KEYS) hides `RCONPassword`, but not `Password` (the join
+  // password) or `DiscordToken`. Both are empty on production today (checked
+  // 2026-09-30) — so this is the leak *waiting* rather than the leak happening, and
+  // it is the same one 7DTD's `ServerPassword` already had: world access was the
+  // whole gate on a route that reads a secrets-bearing file, while
+  // `/api/zomboid/files` refused the same file to the same user.
+  if (!hasPermission(gate.session.user.role, "settings.read")) {
+    // `config-panel.tsx` toasts `data.error` verbatim, so say why rather than
+    // "Forbidden" — an unexplained 403 is how the power-button gate got reported.
+    return NextResponse.json(
+      { error: "These settings include the server password, so reading them needs the admin or moderator role." },
+      { status: 403 }
+    );
+  }
+
   try {
     const properties = (await readIniProperties()).filter((p) => !LOCKED.has(p.name));
     return NextResponse.json({ properties });
