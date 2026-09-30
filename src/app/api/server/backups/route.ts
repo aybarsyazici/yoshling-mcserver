@@ -4,27 +4,29 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { readdir, stat, rm, mkdir, rename } from "fs/promises";
+import { stat, rm, mkdir, rename } from "fs/promises";
 import path from "path";
-import { db } from "@/lib/db";
-import { containerIsRunning, withGameStopped } from "@/lib/game-manager";
-import { sendCommand } from "@/lib/rcon";
-import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
-import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
-import { formatBytes } from "@/lib/format";
+import { withGameStopped } from "@/lib/game-manager";
+import { isConflict, conflictResponse, fileLaneBusy } from "@/lib/operation-response";
 import {
   BadArchiveError,
-  refuseIfPreemptedEarly,
+  readManifestSidecar,
+  removeManifestSidecar,
   safeBackupName,
 } from "@/lib/backup-archive";
+import { archiveResponse, BACKUP_DIRS, listArchives } from "@/lib/backup-store";
+import { createBackup, MC_DIR, type McManifest } from "@/lib/backup-create";
+import { integrityFact, verifyArchive } from "@/lib/backup-integrity";
+import { describePolicy, policyFor } from "@/lib/backup-retention";
+import { readJournal, recordBackupEvent } from "@/lib/backup-log";
+import { intervalMsFor, scheduleEnabled } from "@/lib/backup-schedule";
 
 // A restore now saves + stops the world, swaps the files and starts it again, so
 // the request lives as long as a graceful stop plus an extract.
 export const maxDuration = 300;
 
 const execFileAsync = promisify(execFile);
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-const BACKUP_DIR = "/app/data/backups";
+const BACKUP_DIR = BACKUP_DIRS.minecraft;
 
 /**
  * Long enough for a big world. Was 60s, which is a coin-toss for a 170 MB world
@@ -33,7 +35,17 @@ const BACKUP_DIR = "/app/data/backups";
  */
 const TAR_TIMEOUT_MS = 300_000;
 
-export async function GET() {
+/**
+ * Minecraft archives carry no `manifest.json` member — the tar is `-C MC_DIR world` and
+ * the restore asserts exactly that one member — so the sidecar is read directly rather
+ * than through `readBackupManifest`. Going through that helper would spawn a
+ * `tar -xzOf` per archive looking for a member that has never been there.
+ */
+async function mcManifest(name: string): Promise<McManifest | null> {
+  return readManifestSidecar<McManifest>(path.join(BACKUP_DIR, name));
+}
+
+export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -41,25 +53,79 @@ export async function GET() {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
+  const { searchParams } = new URL(request.url);
+
+  // ?download=<archive> — hand one archive out so a backup can live somewhere other
+  // than the box that might lose it.
+  //
+  // Gated like the mutations (`settings.edit`), not like the listing: an archive is the
+  // world's full save data plus, for the other two games, the player database and the
+  // server config — i.e. the most sensitive single file this app can produce. A MEMBER may
+  // see that backups exist; taking one off the box is a different act.
+  const download = searchParams.get("download");
+  if (download) {
+    if (!hasPermission(session.user.role, "settings.edit")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const name = safeBackupName(download);
+    if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
+    try {
+      const response = await archiveResponse(BACKUP_DIR, name);
+      // Recorded before the stream is returned, because once the body is streaming this
+      // handler is done and there is no later point to log from. A download is the one
+      // backup action with no visible trace at all otherwise.
+      await recordBackupEvent(
+        "minecraft",
+        "download",
+        { userId: session.user.id, name: session.user.name ?? "" },
+        { outcome: "ok", name },
+        { action: "backup_download", details: { name } }
+      );
+      return response;
+    } catch {
+      return NextResponse.json({ error: "No such backup" }, { status: 404 });
+    }
+  }
+
+  // ?meta=1 — the retention policy, the schedule and the durable journal, for the page's
+  // header. A separate parameter rather than a changed response shape, so the listing
+  // stays the plain array every existing caller expects.
+  if (searchParams.get("meta")) {
+    const policy = policyFor("minecraft");
+    return NextResponse.json({
+      policy,
+      policyText: describePolicy(policy),
+      schedule: {
+        enabled: scheduleEnabled(),
+        everyHours: Math.round(intervalMsFor("minecraft") / 3_600_000),
+      },
+      // The journal only for someone who could also take or restore a backup: its `error`
+      // strings are raw thrown messages and can carry container paths
+      // (`ENOENT … /app/data/backups/…`), which is the class of leak the file-browser GETs
+      // were fixed for. The policy and the schedule stay visible to anyone who can see the
+      // world, because "why did an archive disappear" is a fair question for a reader.
+      journal: hasPermission(session.user.role, "settings.edit")
+        ? await readJournal("minecraft", 8)
+        : [],
+    });
+  }
+
   try {
     await mkdir(BACKUP_DIR, { recursive: true });
-    const entries = await readdir(BACKUP_DIR);
     const backups = await Promise.all(
-      entries
-        .filter((e) => e.endsWith(".tar.gz"))
-        .map(async (name) => {
-          const filePath = path.join(BACKUP_DIR, name);
-          const s = await stat(filePath);
-          return {
-            name,
-            size: s.size,
-            createdAt: s.mtime.toISOString(),
-          };
-        })
+      (await listArchives(BACKUP_DIR)).map(async (a) => {
+        // A sidecar read, not a `tar -xzO`: it is a ~150-byte file, so unlike 7DTD's and
+        // PZ's in-tar fallback this costs nothing per archive.
+        const m = await mcManifest(a.name);
+        return {
+          name: a.name,
+          size: a.size,
+          createdAt: new Date(a.createdAtMs).toISOString(),
+          verifiable: Boolean(m?.sha256),
+          automatic: m?.automatic ?? false,
+        };
+      })
     );
-
-    backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
     return NextResponse.json(backups);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
@@ -79,106 +145,18 @@ export async function POST(request: NextRequest) {
   }
 
   const { action, backupName } = await request.json();
+  const actor = { userId: session.user.id, name: session.user.name ?? "" };
 
   if (action === "create") {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const filename = `world-${timestamp}.tar.gz`;
-    const target = path.join(BACKUP_DIR, filename);
     try {
-      // Tracked as an operation even though a 217 MB Minecraft world tars in ~5s:
-      // the classification is made here, at the moment the work is entered, not by
-      // the caller — and the same code path takes 4m 20s for Project Zomboid's 1.9 GB.
-      // A duration cutoff applied at the call site structurally cannot get that right.
-      // It holds `files:minecraft`, so two creates serialise and a restore cannot run
-      // through the middle of a `tar` and tear the archive.
-      const backup = await runOperation(
-        {
-          kind: "backup.create",
-          game: "minecraft",
-          title: "Creating a backup",
-          startedBy: session.user.name ? { name: session.user.name } : null,
-        },
-        async (op) => {
-          await mkdir(BACKUP_DIR, { recursive: true });
-
-          // Quiesce the world before reading it off disk. No `create` path used to do
-          // this, though every driver exposes a save and the *restore* paths all use one,
-          // so a backup taken while people played copied chunk files the server was
-          // still midway through writing. `flushed` is recorded either way, so a restore
-          // can say whether the archive came from a quiesced world rather than leaving
-          // that to be assumed.
-          const { flushed, mustResume } = await flushMinecraft(op);
-
-          try {
-            // Refuse a doomed backup BEFORE the tar, not only after it. Deliberately
-            // *inside* this `try`: throwing above it would skip the `finally` that
-            // re-enables autosave, and leaving autosave off loses every minute of play
-            // since the backup — strictly worse than the torn archive this whole step
-            // exists to prevent. (MC's world tars in ~5s, so the saving here is small;
-            // the correctness of where the check sits is not.)
-            refuseIfPreemptedEarly(op, "this backup");
-
-            op.step("Compressing the archive");
-            await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
-              timeout: TAR_TIMEOUT_MS,
-            });
-          } finally {
-            // In a `finally`, and that is the load-bearing part: a failed `tar` that left
-            // autosave switched off would lose every minute of play since the backup —
-            // strictly worse than the torn archive this whole step exists to prevent.
-            // `mustResume`, not `flushed`: the case they differ in is exactly the one
-            // that matters — `save-off` landed and the flush then failed, so autosave is
-            // off and the archive is torn.
-            if (mustResume) await resumeMinecraftAutosave(op);
-          }
-
-          // Read the size back off disk. Without this the operation has no evidence
-          // and renders `unverified` — which is the correct, visible price for
-          // claiming a backup exists without looking.
-          let size: number | null = null;
-          let mtime = new Date();
-          try {
-            const s = await stat(target);
-            size = s.size;
-            mtime = s.mtime;
-          } catch {}
-          op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
-
-          // A power operation admitted over this one means the world was saved and
-          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
-          // as a restore point would be exactly the "reports success after doing the
-          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
-          // below does the `rm`.
-          refuseIfPreempted(op, "this backup");
-
-          const facts: OperationFact[] = [];
-          if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
-          facts.push({ label: "World map", value: "included" });
-          facts.push({
-            label: "World flushed first",
-            value: flushed
-              ? mustResume
-                ? "yes — autosave was paused for the copy"
-                : "not needed — the server was stopped, so its files were already at rest"
-              : "no — the server did not answer, so the archive may be torn",
-          });
-          return {
-            facts,
-            value: { name: filename, size: size ?? 0, createdAt: mtime.toISOString() },
-          };
-        }
-      );
-
-      await logBackup(session.user.id, "backup_create", {
-        name: backup.name,
-        sizeBytes: backup.size,
-      });
-      return NextResponse.json({ success: true, backup });
+      // The work itself lives in `lib/backup-create.ts`, because the scheduler in
+      // `instrumentation.ts` has to take the *same* backup — same flush, same pre-emption
+      // boundaries, same checksum, same retention pass. A second, simpler create for the
+      // timer is the drift this codebase has already paid for with the power control.
+      const { backup, pruned } = await createBackup("minecraft", actor);
+      return NextResponse.json({ success: true, backup, pruned });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
-      // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
-      // behind, and the listing would offer it as something you can restore.
-      await rm(target, { force: true }).catch(() => {});
       return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: 500 });
     }
   }
@@ -197,6 +175,15 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+      // Checksum first, and **before** `withGameStopped`. A corrupt archive then costs
+      // nothing at all — no downtime, no staging dir, no `rm` — which is the whole point of
+      // checking cheaply. Getting this the other way round is the shape the old
+      // `rm -rf world`-then-extract had, and the one worth never repeating.
+      //
+      // An archive with no recorded checksum is *unknown*, not *bad*: every archive on the
+      // box today predates them. It is reported as a fact rather than refused.
+      const integrity = await verifyArchive(BACKUP_DIR, name, await mcManifest(name));
+
       // A running server holds the world in memory and writes it back on its next
       // autosave, so restoring underneath it changed nothing that survived — and
       // still reported success. `withGameStopped` saves + stops first, restores,
@@ -212,6 +199,7 @@ export async function POST(request: NextRequest) {
           await restoreWorld(backupPath);
           op.settle("Replaced the world folder");
           op.fact({ label: "Archive", value: name });
+          op.fact(integrityFact(integrity));
         },
         {
           kind: "backup.restore",
@@ -222,10 +210,29 @@ export async function POST(request: NextRequest) {
           restartOnFailure: false,
         }
       );
-      await logBackup(session.user.id, "backup_restore", { name, restartedAfter: restarted });
-      return NextResponse.json({ success: true, restarted });
+      await recordBackupEvent(
+        "minecraft",
+        "restore",
+        actor,
+        { outcome: "ok", name, detail: integrity.state },
+        { action: "backup_restore", details: { name, restartedAfter: restarted } }
+      );
+      return NextResponse.json({ success: true, restarted, checksum: integrity.state });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
+      // A restore that started and did not finish is the single most important thing in
+      // this feature to be able to find later, and until now nothing recorded one: the
+      // registry drops the record after six hours and `/activity` only ever saw successes.
+      // A conflict is excluded above — it never started, and a log of things that did not
+      // happen is worse than no log.
+      const error = (e as Error).message || "Restore failed";
+      await recordBackupEvent(
+        "minecraft",
+        "restore",
+        actor,
+        { outcome: "failed", name, error },
+        { action: "backup_failed", details: { what: "restore", name, error } }
+      );
       // A valid gzip archive that turns out not to contain a `world/` folder is the
       // user being wrong about their own file, and it answered **500** — "the server
       // broke" — for a sentence that reads like advice. The message is unchanged; only
@@ -233,7 +240,7 @@ export async function POST(request: NextRequest) {
       if (e instanceof BadArchiveError) {
         return NextResponse.json({ error: e.message }, { status: 400 });
       }
-      return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
+      return NextResponse.json({ error }, { status: 500 });
     }
   }
 
@@ -251,7 +258,9 @@ export async function POST(request: NextRequest) {
     // strip row and a completion toast for it would be noise, and that is exactly the
     // case `fileLaneBusy` exists for (the seven config endpoints use it for the same
     // reason). What the lane buys is the case that matters — deleting an archive while a
-    // restore is reading it, or while a create is writing into the same directory.
+    // restore is reading it, or while a create is writing into the same directory. A
+    // `backup.restore` declares every `files:` lane, so "never delete the archive an
+    // operation is mid-restore from" is this check and not a hope.
     const laneBusy = fileLaneBusy("minecraft");
     if (laneBusy) return laneBusy;
 
@@ -264,7 +273,14 @@ export async function POST(request: NextRequest) {
 
     try {
       await rm(target);
-      await logBackup(session.user.id, "backup_delete", { name });
+      await removeManifestSidecar(target);
+      await recordBackupEvent(
+        "minecraft",
+        "delete",
+        actor,
+        { outcome: "ok", name },
+        { action: "backup_delete", details: { name } }
+      );
       return NextResponse.json({ success: true });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message }, { status: 500 });
@@ -272,134 +288,6 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-}
-
-/**
- * The durable half of this feature.
- *
- * The operation registry forgets a clean record in 10 minutes; `/activity` does not.
- * Until 2026-09-29 **no backup action of any kind had ever written a row** — verified
- * against the production DB, which held 182 rows across ten action types and not one
- * `backup_*`. A restore replaces the world people play, and it does not go through
- * `/api/games/control`, so it left no `server_stop`/`server_start` either: ten minutes
- * later, nothing anywhere recorded that it happened or who did it. Every neighbouring
- * feature in this route's own directory (`server.properties`, `ops.json`,
- * `whitelist.json`, file edits) already wrote one.
- *
- * `game` has to be in `details`: `/api/activity` selects each world's panel with
- * `contains "<game>"`, and an untagged row is shown to everyone.
- *
- * Logged rather than swallowed, following `mc-whitelist`'s precedent. Only ever called
- * after the work succeeded — a refused backup writes nothing, because a log of things
- * that did not happen is worse than no log.
- */
-async function logBackup(
-  userId: string,
-  action: "backup_create" | "backup_restore" | "backup_delete",
-  details: Record<string, unknown>
-): Promise<void> {
-  try {
-    await db.activity.create({
-      data: { userId, action, details: JSON.stringify({ game: "minecraft", ...details }) },
-    });
-  } catch (e) {
-    console.error(`[server/backups] could not write the ${action} activity row:`, e);
-  }
-}
-
-/**
- * Ask Minecraft to write the world out and stop writing to it, so `tar` reads a
- * consistent tree. Returns whether autosave was actually paused — the caller must
- * resume it in a `finally` if so.
- *
- * Minecraft is the only one of the three that can do the full dance, because
- * `save-off` genuinely exists in its command set. **Do not add a `save-off`
- * equivalent to 7DTD or Project Zomboid** — neither has one, and inventing a command
- * that silently fails is the defect class this pass is cleaning up. Those two get the
- * flush alone.
- *
- * Failure here is deliberately non-fatal and recorded as a warn rather than thrown: a
- * torn archive is much better than no archive, and the world being unreachable over RCON
- * is precisely a moment when someone wants a backup.
- */
-/**
- * Two separate facts, so they stop being carried by one boolean.
- *
- * `flushed` answers "is this archive consistent"; `mustResume` answers "did we disable
- * something that has to be put back". They diverge in exactly the case that matters: if
- * `save-off` lands and `save-all flush` then times out, the archive is NOT clean and
- * autosave IS off. One boolean had to pick, it returned `true`, and the record then said
- * "World flushed first: yes" directly above its own warn fact saying it could not flush.
- */
-interface FlushResult {
-  flushed: boolean;
-  mustResume: boolean;
-}
-
-/**
- * Long enough for a real flush.
- *
- * `sendCommand` defaults to 3s, which is the right budget for `list` and far too short
- * for writing a 217 MB world — and the `tar` over the same directory was already raised
- * from 60s to 300s for being too tight. A 3s flush would put the everyday path down the
- * failure branch and stamp a warn fact on every backup.
- */
-const FLUSH_RCON_TIMEOUT_MS = 120_000;
-
-async function flushMinecraft(op: OpHandle): Promise<FlushResult> {
-  op.step("Flushing the world to disk");
-  if (!(await containerIsRunning("minecraft").catch(() => false))) {
-    // `done`, NOT `noop`. A stopped server has nothing to flush, and its files on disk
-    // are already consistent — which is the best case for a backup, not a shortfall.
-    // As `noop` this settled to outcome `partial`, and with no warn fact to name the
-    // summary read "Backup created — 217 MB, but part of it is missing. This is not a
-    // restore point." in amber, for a flawless archive. Minecraft and 7 Days to Die are
-    // both normally stopped, so that was the common path, not an edge case.
-    op.settle("The server is stopped — its files are already at rest");
-    return { flushed: true, mustResume: false };
-  }
-  const t0 = Date.now();
-  let offLanded = false;
-  try {
-    // `save-off` first: it stops the autosave thread, so the `save-all flush` that
-    // follows is the last write before the copy.
-    await sendCommand("save-off", FLUSH_RCON_TIMEOUT_MS);
-    offLanded = true;
-    await sendCommand("save-all flush", FLUSH_RCON_TIMEOUT_MS);
-    op.settle(`Flushed the world and paused autosave — ${Date.now() - t0} ms`);
-    return { flushed: true, mustResume: true };
-  } catch (e) {
-    op.settle("Could not flush the world — the server did not answer over RCON");
-    op.fact({
-      label: "World flush",
-      value: `failed (${(e as Error).message}) — the archive may be torn`,
-      verdict: "warn",
-    });
-    // `mustResume` tracks whether `save-off` actually landed, rather than assuming it
-    // did: re-enabling something never disabled is harmless, but claiming autosave was
-    // paused when it was not is the lie this function already told once.
-    return { flushed: false, mustResume: offLanded };
-  }
-}
-
-async function resumeMinecraftAutosave(op: OpHandle): Promise<void> {
-  try {
-    await sendCommand("save-on", FLUSH_RCON_TIMEOUT_MS);
-  } catch (e) {
-    // `warn`, not `bad`. This is only reached when `save-off` landed, so autosave really
-    // is off and it really does need attention — but a `bad` fact makes
-    // `concludeOperation` return `failed`, and the archive itself is complete and
-    // verified. Reporting a good backup as failed is the defect class this whole feature
-    // exists to prevent; the sentence carries the urgency instead of the colour.
-    op.fact({
-      label: "Autosave",
-      value:
-        `still paused (${(e as Error).message}) — the backup is fine, but run ` +
-        `\`save-on\` in the console or restart Minecraft, or progress since this ` +
-        `backup will be lost`,
-      verdict: "warn",
-    });
-  }
 }
 
 /**

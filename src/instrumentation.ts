@@ -124,5 +124,51 @@ export async function register() {
       // Delay the first run so it doesn't race the app's own startup.
       setTimeout(tick, 60_000);
     }
+
+    // ── automatic backups ───────────────────────────────────────────────────
+    //
+    // Backups were manual-only: the only archive that ever existed was one somebody
+    // remembered to click. The decision — and every constraint on it, the important one
+    // being "never while a world is being played, judged on player count and not on
+    // container state" — lives in `lib/backup-schedule.ts`. This is only the clock.
+    //
+    // Five minutes is the *check* interval, not the backup interval: the check is a
+    // `readdir` of the backups directory, and it only probes the game over telnet/RCON
+    // once the clock says a backup is actually due (default: one per world per day).
+    //
+    // Two shapes copied deliberately from the Workshop watcher above, both of which it
+    // paid for:
+    //
+    //   - a plain `setInterval` with a re-entry guard, NOT a tick that re-arms itself from
+    //     a `finally`. That version died permanently on one hung call — on 2026-09-15 a
+    //     poll hung five seconds before the last player logged off and nothing ran for six
+    //     minutes. A Project Zomboid backup takes ~11 minutes, so overlapping ticks are
+    //     the normal case here, not an edge one, and `running` just declines to overlap.
+    //   - the import is lazy, inside the tick: `register()` runs before the app is fully
+    //     booted and the scheduler pulls in the game manager.
+    //
+    // There is no state file. "When did we last back up" is read off the newest archive's
+    // mtime, which cannot get stuck the way `pz-updates.json`'s `applyingSince` did.
+    const BACKUP_TICK_MS = Number(process.env.BACKUP_CHECK_MS || 5 * 60 * 1000);
+    if ((process.env.BACKUP_SCHEDULE ?? "on").toLowerCase() !== "off") {
+      let backing = false;
+      const backupTick = async () => {
+        if (backing) return;
+        backing = true;
+        try {
+          const { runScheduledBackups } = await import("@/lib/backup-schedule");
+          await runScheduledBackups();
+        } catch (e) {
+          console.error("[backups] scheduler failed:", e);
+        } finally {
+          backing = false;
+        }
+      };
+
+      setInterval(backupTick, BACKUP_TICK_MS);
+      // Five minutes after boot, not immediately: a container that has just come up is
+      // usually mid-deploy, and a backup is never the urgent thing in that window.
+      setTimeout(backupTick, 5 * 60 * 1000);
+    }
   }
 }
