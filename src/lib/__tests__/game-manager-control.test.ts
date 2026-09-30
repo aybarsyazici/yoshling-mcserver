@@ -320,6 +320,51 @@ describe("powerOn is the only path that evicts, and it evicts every other world"
     expect(box["yoshling-mc"].state).toBe("running");
   });
 
+  /**
+   * `powerOn` keeps its own inline eviction loop rather than calling
+   * `coresidency.admitStart`, which is a second copy of one decision — the shape that
+   * produced the three-copy power-control drift in the first place. Rewriting a path pinned
+   * by 34 tests and 15 mutants to save a two-line loop is the churn that has broken this
+   * code before, so the copies stay and this asserts they **agree**, for every combination
+   * of running worlds rather than for one example.
+   *
+   * If they ever diverge, the report on `/home` and the eviction on the box will be telling
+   * two different stories about the same press, which is exactly the class of bug the
+   * shared module was written to end.
+   */
+  it("evicts exactly the set `admitStart` says it will, for every combination", async () => {
+    const { admitStart } = await import("@/lib/coresidency");
+    type GameId = import("@/lib/games").GameId;
+    const CONTAINER: Record<GameId, string> = {
+      minecraft: "yoshling-mc",
+      "7dtd": "yoshling-7dtd",
+      zomboid: "yoshling-pz",
+    };
+    const ALL: GameId[] = ["minecraft", "7dtd", "zomboid"];
+
+    for (const target of ALL) {
+      for (let mask = 0; mask < 8; mask++) {
+        const up = ALL.filter((_, i) => mask & (1 << i));
+        // The already-running case is a no-op answered before admission, and is covered
+        // separately; `admitStart` says so too ("not co-residency: the requested world
+        // being up already").
+        if (up.includes(target)) continue;
+
+        makeBox(Object.fromEntries(up.map((g) => [g, "running"])) as Record<string, string>);
+        const steps = await settle(powerOn(target));
+
+        const expected = admitStart({ game: target, running: up, mayEvict: true });
+        const evictedByPowerOn = steps
+          .filter((st) => st.step === "stop")
+          .map((st) => st.game as GameId);
+        expect(evictedByPowerOn.sort()).toEqual([...expected.evict].sort());
+        // And it really happened, not just in the returned steps.
+        for (const g of expected.evict) expect(box[CONTAINER[g]].state).toBe("exited");
+        expect(box[CONTAINER[target]].state).toBe("running");
+      }
+    }
+  });
+
   it("stops EVERY other running world, not just the first one it finds", async () => {
     // `otherGames(id)` returns every other world specifically so nothing assumes there
     // are two. With three games, a loop that stopped one and started the requested world

@@ -60,6 +60,12 @@ function bumpName(name: string): string {
   return `${name || "Game"}2`;
 }
 
+/**
+ * How many pre-reset safety snapshots to keep. Names sort chronologically (ISO stamp), so
+ * "newest" is a reverse lexical sort and needs no `stat`.
+ */
+const PRESET_SNAPSHOTS_KEPT = 2;
+
 export async function POST() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -169,6 +175,36 @@ async function resetWorld(
         );
         op.settle(`Backed the old save up — presreset-${world}-${stamp}.tar.gz`);
         op.fact({ label: "Safety copy", value: `presreset-${world}-${stamp}.tar.gz` });
+
+        // Bound this directory. Retention does not reach it and never will: `listArchives`
+        // deliberately does not recurse, precisely so these recovery artefacts can never be
+        // a prune candidate or reset the automatic-backup clock. That is right, and it left
+        // the one place on the box that grows without limit — a 300 MB tar per reset,
+        // forever.
+        //
+        // Kept here rather than in `backup-retention.ts` because the policy is different:
+        // these are the "undo" for a destructive action, so the newest ones matter and the
+        // count is small. Two, not five: the reason to keep a second is that a reset that
+        // went wrong is usually noticed after the next one.
+        try {
+          const kept = (await readdir(backupDir))
+            .filter((f) => f.startsWith("presreset-") && f.endsWith(".tar.gz"))
+            .sort()
+            .reverse();
+          for (const old of kept.slice(PRESET_SNAPSHOTS_KEPT)) {
+            await rm(path.join(backupDir, old), { force: true });
+          }
+          if (kept.length > PRESET_SNAPSHOTS_KEPT) {
+            op.fact({
+              label: "Older safety copies",
+              value: `deleted ${kept.length - PRESET_SNAPSHOTS_KEPT}, kept ${PRESET_SNAPSHOTS_KEPT}`,
+            });
+          }
+        } catch (e) {
+          // Never fatal to the reset: failing to delete an old snapshot is not a reason to
+          // abandon one that has just been written successfully.
+          console.error("[7dtd/reset] could not prune old pre-reset snapshots:", e);
+        }
       } catch (e) {
         // Drop the partial archive so nothing later mistakes it for a backup.
         await rm(archive, { force: true }).catch(() => {});
