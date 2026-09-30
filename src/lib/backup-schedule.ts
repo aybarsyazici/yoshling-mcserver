@@ -28,10 +28,17 @@
 // ## Where "when did we last back up" comes from
 //
 // The newest archive's mtime on disk. That is evidence rather than bookkeeping: it cannot
-// drift from reality, it cannot be left set by a crash, it survives a redeploy (which an
-// in-memory timestamp would not — every deploy would reset the clock), and it counts an
-// archive made by any route, including `/api/7dtd/reset`'s pre-reset snapshot, which
-// really is a backup of that world.
+// drift from reality, it cannot be left set by a crash, and it survives a redeploy — which
+// an in-memory timestamp would not, so every deploy would reset the clock.
+//
+// It counts exactly what `listArchives` lists, which is the top level of the backups
+// directory and nothing below it. **This paragraph first claimed it also counted
+// `/api/7dtd/reset`'s pre-reset snapshot "which really is a backup of that world", and
+// that was wrong on both halves.** That route writes to a *subdirectory*,
+// `/app/data/backups-7dtd/presreset/`, and its own comment says why: the tar has no
+// manifest and its members are rooted at `<world>/`, so restoring it would wipe `Saves/`
+// and then find no `Saves/` in the archive to put back. It is a recovery artefact, not a
+// restore point, and it is correct that it neither resets this clock nor is ever pruned.
 //
 // The one piece of memory kept is a failure cooldown, and it is **in memory on purpose**:
 // a stuck cooldown clears itself on the next restart, where a stuck file would not.

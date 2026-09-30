@@ -49,6 +49,20 @@ describe("listArchives", () => {
     expect((await listArchives(dir)).map((a) => a.name)).toEqual(["a.tar.gz"]);
   });
 
+  /**
+   * `/api/7dtd/reset` writes its safety snapshot to `backups-7dtd/presreset/`, deliberately
+   * out of the listing: that tar has no manifest and its members are rooted at `<world>/`,
+   * so restoring it would wipe `Saves/` and then find no `Saves/` in the archive to put
+   * back. Not recursing is therefore load-bearing twice over — those files must never be a
+   * prune candidate, and they must never be what resets the schedule's clock.
+   */
+  it("does not recurse, so the reset route's presreset snapshots stay out", async () => {
+    await archive("a.tar.gz", 1_000_000);
+    await mkdir(path.join(dir, "presreset"), { recursive: true });
+    await archive(path.join("presreset", "presreset-Reveo_Valley-x.tar.gz"), 9_000_000);
+    expect((await listArchives(dir)).map((a) => a.name)).toEqual(["a.tar.gz"]);
+  });
+
   it("reports size and mtime, which is the clock retention orders by", async () => {
     await writeFile(path.join(dir, "a.tar.gz"), "12345", "utf-8");
     await utimes(path.join(dir, "a.tar.gz"), 1_700_000, 1_700_000);
