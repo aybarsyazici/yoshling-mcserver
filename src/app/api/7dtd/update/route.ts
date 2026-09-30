@@ -83,7 +83,13 @@ export async function POST() {
   // the #1 "stuck at Starting game" cause (client/server build mismatch) from the
   // MOD looking after this world — see docs/7-DAYS-TO-DIE.md.
   if (!hasPermission(session.user.role, "server.update")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    // Says why. `sdtd-maintenance.tsx` toasts `data.error` verbatim, and the config routes
+    // one directory over already carry this note: a bare "Forbidden" is how the power-button
+    // gate got reported as a bug before it explained itself.
+    return NextResponse.json(
+      { error: "Re-downloading the game build needs the admin or moderator role." },
+      { status: 403 }
+    );
   }
 
   try {

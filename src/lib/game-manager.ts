@@ -1566,6 +1566,16 @@ export interface MemoryState {
   applied: boolean;
   running: boolean;
   maxGb: number;
+  /**
+   * The lowest heap this service will accept, from the compose block's `MIN_MEMORY`
+   * (`-Xms`). `1` when there is no floor.
+   *
+   * Reported so the card can stop offering a value `setMemory` will refuse. Project
+   * Zomboid's floor is 2 GB — measured on production 2026-09-30, `-Xms2048m -Xmx12288m` in
+   * the live JVM — and the card offered 1G, which wrote `-Xmx` under `-Xms` and produced a
+   * JVM that will not start. The refusal is the safety net; not offering it is the fix.
+   */
+  minGb: number;
 }
 
 /** "4G" / "4096m" → GB. */
@@ -1598,6 +1608,10 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
     game,
     running,
     maxGb: await maxGameGb(),
+    // `?? 1`: no MIN_MEMORY in the block means no floor (Minecraft's single `MEMORY` sets
+    // both bounds), and an unreadable compose is reported by the branches below rather
+    // than by pretending there is a floor.
+    minGb: (await heapFloorGb(game)) ?? 1,
     hostGb: Math.round((await hostTotalGb()) * 10) / 10,
   };
 
@@ -1815,12 +1829,28 @@ async function heapFloorGb(game: GameId): Promise<number | null> {
   }
 }
 
+/**
+ * A heap value that cannot be applied — out of range, or under the service's `-Xms`.
+ *
+ * A distinct class so `/api/games/memory` can answer **400** rather than 500. The message
+ * reached the user either way (the card toasts `data.error`), but a 500 says "the server
+ * broke", and this is the server working correctly and declining. The status code is what a
+ * log, a monitor or a future retry reads.
+ */
+export class MemoryRangeError extends Error {
+  readonly isMemoryRange = true;
+}
+
+export function isMemoryRangeError(e: unknown): e is MemoryRangeError {
+  return e instanceof Error && (e as MemoryRangeError).isMemoryRange === true;
+}
+
 export async function setMemory(game: GameId, gb: number, startedBy?: string | null): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");
   const cap = await maxGameGb();
   if (!Number.isFinite(gb) || gb < 1 || gb > cap) {
-    throw new Error(
+    throw new MemoryRangeError(
       `Memory must be between 1 and ${cap} GB. This host has ` +
         `${Math.round(await hostTotalGb())} GB, and the server needs roughly a gigabyte ` +
         `above its heap plus room for the OS and the dashboard.`
@@ -1832,7 +1862,7 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
   // backup pre-empted on the way to failing.
   const floorGb = await heapFloorGb(game);
   if (floorGb !== null && gb < floorGb) {
-    throw new Error(
+    throw new MemoryRangeError(
       `${GAMES[game].name}'s heap can't be set below ${floorGb} GB: docker-compose.yml also ` +
         `sets MIN_MEMORY (-Xms) to ${floorGb} GB, and a JVM with -Xmx under -Xms refuses to ` +
         `start. Nothing was changed. Lower MIN_MEMORY on the server first if you really need ` +

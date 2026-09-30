@@ -182,6 +182,87 @@ describe("every capability is actually checked somewhere", () => {
     const hits = [...text.matchAll(/hasPermission\(\s*[^()]*?,\s*["']([^"']+)["']\s*\)/g)];
     expect(hits).toEqual([]);
   });
+
+  /**
+   * The stronger property, and the reason the guard above is not enough on its own.
+   *
+   * "The key appears in a `hasPermission()` call" is satisfied by a call whose RESULT is
+   * discarded. Demonstrated: keeping `hasPermission(session.user.role, "settings.read")` in
+   * `/api/7dtd/config` and replacing the `if` that consumed it with `if (false)` handed the
+   * live `ServerPassword` back to any MEMBER with 7DTD access — and left all tests green,
+   * because the guard was satisfied by the call's presence. The report then read as though
+   * route-level enforcement were covered.
+   *
+   * So every key must additionally appear **negated** — `!hasPermission(…, "key")` — with a
+   * 403 within the next few lines. That is the only shape any of these keys is ever meant
+   * to be used in, so requiring it costs nothing and closes the discard. It is still a grep
+   * rather than an execution of the handler: route handlers need `auth()`, Prisma and a
+   * `NextRequest`, which is the Docker-and-network line this suite does not cross. What it
+   * buys is that a refusal cannot be deleted while its key looks checked.
+   */
+  it("finds each key used as a negated gate that returns 403", async () => {
+    const root = path.resolve(__dirname, "..", "..");
+    const files = (await sourceFiles(root)).filter(
+      (f) => path.resolve(f) !== path.resolve(root, "lib", "permissions.ts")
+    );
+
+    const gated = new Set<string>();
+    for (const file of files) {
+      const raw = await readFile(file, "utf-8");
+      const lines = raw.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        // The negation and the key, on one line or wrapped across two.
+        const window = lines.slice(i, i + 3).join(" ").replace(/\s+/g, " ");
+        const m = /!hasPermission\(\s*[^()]*?,\s*["']([^"']+)["']\s*\)/.exec(window);
+        if (!m) continue;
+        // The refusal itself, within the block that opens here.
+        const body = lines.slice(i, i + 10).join(" ");
+        if (/\b403\b/.test(body)) gated.add(m[1]);
+      }
+    }
+
+    expect(gated.size).toBeGreaterThan(0);
+    const ungated = PERMISSION_KEYS.filter((k) => !gated.has(k));
+    expect(ungated).toEqual([]);
+  });
+
+  /**
+   * Per-ROUTE, not per-key — because the guard above is satisfied by any one call site.
+   *
+   * `settings.read` is gated in three places, so deleting the refusal from one of them (the
+   * demonstrated mutant: keep `hasPermission(role, "settings.read")`, replace the `if` with
+   * `if (false)`, and `/api/7dtd/config` hands the live `ServerPassword` to any MEMBER with
+   * 7DTD access) leaves the key still "reachable" and the suite still green. The three
+   * routes are therefore named here individually.
+   *
+   * These are the handlers that serialise a file or a row containing a **secret**:
+   * `SevenDaysConfig.password` is `ServerPassword` from `sdtdserver.xml` (verified
+   * non-empty on production 2026-09-30), and PZ's `.ini` carries `Password` and
+   * `DiscordToken`. The pattern to remember is the one that produced this finding: fixing
+   * one reader of a secrets-bearing file does not fix the others — `/api/{server,7dtd,zomboid}/files`
+   * had already been fixed for the same leak while these three still had it.
+   *
+   * A fourth such route is not covered, which is the same limitation every drift guard in
+   * this repo has; the list is the place to add it.
+   */
+  it("keeps the negated settings.read gate in every route that serialises a secret", async () => {
+    const root = path.resolve(__dirname, "..", "..");
+    const routes = [
+      "app/api/7dtd/config/route.ts",
+      "app/api/7dtd/config/all/route.ts",
+      "app/api/zomboid/config/route.ts",
+    ];
+    for (const rel of routes) {
+      const lines = (await readFile(path.join(root, rel), "utf-8")).split("\n");
+      let found = false;
+      for (let i = 0; i < lines.length; i++) {
+        const window = lines.slice(i, i + 3).join(" ").replace(/\s+/g, " ");
+        if (!/!hasPermission\(\s*[^()]*?,\s*["']settings\.read["']\s*\)/.test(window)) continue;
+        if (/\b403\b/.test(lines.slice(i, i + 10).join(" "))) found = true;
+      }
+      expect(found, `${rel} must refuse with 403 when settings.read is absent`).toBe(true);
+    }
+  });
 });
 
 describe("gameAccess", () => {

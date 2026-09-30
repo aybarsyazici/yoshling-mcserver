@@ -88,6 +88,11 @@ export async function GET() {
       start: hasPermission(session.user.role, "server.start"),
       stop: hasPermission(session.user.role, "server.stop"),
       restart: hasPermission(session.user.role, "server.restart"),
+      // `settings.read` gates the config GETs, which carry `ServerPassword` for 7DTD and
+      // `Password`/`DiscordToken` for PZ. Reported here so the sidebar can omit the
+      // Settings link rather than sending a MEMBER to a page whose every panel 403s on
+      // load — the same reason the three power booleans exist.
+      settings: hasPermission(session.user.role, "settings.read"),
     },
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { mkdir, rm, readdir, readFile, stat } from "fs/promises";
@@ -223,13 +224,18 @@ export async function POST(request: NextRequest) {
   const json = (body: object, status = 200) =>
     NextResponse.json(body, { status, headers: cors });
 
-  // Auth: either a logged-in ADMIN session, OR a valid short-lived upload token
-  // (used when POSTing cross-origin from the direct host, where cookies aren't
-  // sent). The token is minted by /api/7dtd/world/token for ADMINs only.
+  // Auth: either a logged-in session holding `world.upload`, OR a valid short-lived upload
+  // token (used when POSTing cross-origin from the direct host, where cookies aren't
+  // sent). The token is minted by /api/7dtd/world/token behind the same capability.
   let userId: string | null = null;
   const session = await auth();
   if (session?.user) {
-    if (session.user.role !== "ADMIN") return json({ error: "Admin only" }, 403);
+    if (!hasPermission(session.user.role, "world.upload")) {
+      return json(
+        { error: "Replacing a world or a save needs the admin or moderator role." },
+        403
+      );
+    }
     userId = session.user.id;
   } else {
     const token = request.headers.get("x-upload-token");
@@ -675,7 +681,12 @@ export async function DELETE(request: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
-  if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  if (!hasPermission(session.user.role, "world.upload")) {
+    return NextResponse.json(
+      { error: "Deleting an uploaded world needs the admin or moderator role." },
+      { status: 403 }
+    );
+  }
 
   const name = new URL(request.url).searchParams.get("name") || "";
   if (!name || name.includes("/") || name.includes("..")) {

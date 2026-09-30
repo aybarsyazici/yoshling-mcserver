@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { createUploadToken } from "@/lib/upload-token";
 
 // Mint a short-lived signed token so the browser can upload a large world
@@ -13,8 +14,13 @@ export async function GET() {
   }
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
-  if (session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  // The same capability the upload itself needs. A token that could be minted more widely
+  // than it can be spent is a gate that only looks like one.
+  if (!hasPermission(session.user.role, "world.upload")) {
+    return NextResponse.json(
+      { error: "Uploading a world needs the admin or moderator role." },
+      { status: 403 }
+    );
   }
   const token = createUploadToken(session.user.id);
   // The host to POST the big upload to (bypasses Cloudflare's 100MB cap).

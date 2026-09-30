@@ -85,7 +85,13 @@ export interface GamesState {
    * fixed — a trusted mod could not restart after a Workshop mod update locked players
    * out. The role table is not restated here; one copy is the only kind that stays true.
    */
-  can: { start: boolean; stop: boolean; restart: boolean };
+  can: {
+    start: boolean;
+    stop: boolean;
+    restart: boolean;
+    /** `settings.read` — whether the Settings page is worth offering at all. */
+    settings: boolean;
+  };
   /** Configured heap per world, from the compose file. null = no heap setting. */
   memoryGb: Partial<Record<GameId, number | null>>;
   /** Total host RAM in GB. */
@@ -115,7 +121,14 @@ export function useGames(interval = 5000): GamesState {
   const [running, setRunning] = useState<GameId[]>([]);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
-  const [can, setCan] = useState({ start: false, stop: false, restart: false });
+  // All false until the first poll answers: showing a control and then hiding it is worse
+  // than the reverse, and a 403 the user never asked for is the defect this exists to stop.
+  const [can, setCan] = useState({
+    start: false,
+    stop: false,
+    restart: false,
+    settings: false,
+  });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
   const [maxGb, setMaxGb] = useState<number | null>(null);
@@ -141,7 +154,12 @@ export function useGames(interval = 5000): GamesState {
       setRunning(Array.isArray(data.running) ? data.running : runningWorlds(data.games));
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
-      if (data.can) setCan(data.can);
+      // `settings` defaulted rather than assumed present: a tab held across a deploy from
+      // an older build receives a `can` with three keys, and `undefined` would render as
+      // "no Settings link" for an admin. `?? true` is the safe direction here — the route
+      // still refuses, so the worst case is a link that 403s, whereas the worst case of
+      // `?? false` is an admin who cannot find the settings page.
+      if (data.can) setCan({ ...data.can, settings: data.can.settings ?? true });
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
       setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);

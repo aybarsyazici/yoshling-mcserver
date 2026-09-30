@@ -199,6 +199,7 @@ import { setCommandRunner, resetCommandRunner } from "@/lib/docker-cli";
 import {
   applyServiceEnv,
   getMemoryState,
+  isMemoryRangeError,
   powerOff,
   powerOn,
   restartGame,
@@ -641,6 +642,10 @@ describe("setMemory recreates without starting, and writes .env rather than comp
     // equal, and rendered the setting as applied. Green, self-consistent, unbootable.
     makeBox({});
 
+    // `MemoryRangeError`, not a bare Error: `/api/games/memory` answers 400 for it rather
+    // than 500. The user saw the same message either way — the card toasts `data.error` —
+    // but a 500 tells every log and monitor the dashboard broke, when in fact it declined.
+    await expect(settle(setMemory("zomboid", 1))).rejects.toSatisfy(isMemoryRangeError);
     await expect(settle(setMemory("zomboid", 1))).rejects.toThrow(/can't be set below 2 GB/);
 
     expect(envText).toBe("");
@@ -660,6 +665,7 @@ describe("setMemory recreates without starting, and writes .env rather than comp
   it("refuses above the host cap, and changes nothing", async () => {
     // 16 GB host − 2.5 GB reserve → 13.
     makeBox({});
+    await expect(settle(setMemory("minecraft", 14))).rejects.toSatisfy(isMemoryRangeError);
     await expect(settle(setMemory("minecraft", 14))).rejects.toThrow(/between 1 and 13 GB/);
     expect(mutations()).toEqual([]);
     expect(envText).toBe("");
@@ -744,6 +750,26 @@ describe("the memory card's configured-vs-live report survives the move to .env"
     const state = await settle(getMemoryState("7dtd"));
     expect(state.supported).toBe(false);
     expect(state.reason).toMatch(/native server/);
+  });
+
+  /**
+   * The card builds its buttons from `minGb`…`maxGb`, so reporting the floor is what stops
+   * it offering a value `setMemory` will refuse. It used to start at 1 unconditionally, and
+   * pressing 1G for Project Zomboid wrote `-Xmx1024m` under `-Xms2048m`.
+   *
+   * A refusal and an un-offered option are not alternatives: the refusal is the safety net
+   * for an API caller, and this is the fix for the person looking at the page.
+   */
+  it("reports the MIN_MEMORY floor, so the card cannot offer a heap that will be refused", async () => {
+    makeBox({ zomboid: "running" });
+    const state = await settle(getMemoryState("zomboid"));
+    expect(state.minGb).toBe(2);
+  });
+
+  it("reports no floor for Minecraft, whose single MEMORY key sets both bounds", async () => {
+    makeBox({ minecraft: "running" });
+    const state = await settle(getMemoryState("minecraft"));
+    expect(state.minGb).toBe(1);
   });
 });
 

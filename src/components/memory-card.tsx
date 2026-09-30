@@ -17,6 +17,8 @@ interface MemoryState {
   applied: boolean;
   running: boolean;
   maxGb: number;
+  /** Lowest applicable heap (the service's MIN_MEMORY / -Xms). 1 when there is no floor. */
+  minGb?: number;
 }
 
 /**
@@ -109,7 +111,17 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   if (!state) return <div className="skeleton h-40 rounded-2xl" />;
 
   const dirty = state.configuredGb !== gb;
-  const options = Array.from({ length: state.maxGb }, (_, i) => i + 1);
+  /**
+   * The values that can actually be applied, `minGb`…`maxGb`.
+   *
+   * It used to start at 1 unconditionally, so Project Zomboid — whose compose block sets
+   * `MIN_MEMORY` (`-Xms`) to 2 GB — offered a 1G button that writes `-Xmx1024m` under
+   * `-Xms2048m`: a JVM that refuses to start. `setMemory` now refuses that before anything
+   * is stopped, but offering an option you will refuse is a worse control than not
+   * offering it. `minGb` is 1 for Minecraft, whose single `MEMORY` sets both bounds.
+   */
+  const minGb = Math.max(1, state.minGb ?? 1);
+  const options = Array.from({ length: Math.max(0, state.maxGb - minGb + 1) }, (_, i) => minGb + i);
 
   return (
     <div

@@ -80,8 +80,14 @@ export function worlds(
   return base;
 }
 
-export const ALL_POWERS = { start: true, stop: true, restart: true };
-export const NO_POWERS = { start: false, stop: false, restart: false };
+/**
+ * `settings` is `settings.read` (the Settings link and the config GETs), carried here
+ * because it lives on the same `can` object as the three power flags. It is deliberately
+ * NOT tied to them: a role can hold power and not settings, and a fixture that couples the
+ * two would hide that.
+ */
+export const ALL_POWERS = { start: true, stop: true, restart: true, settings: true };
+export const NO_POWERS = { start: false, stop: false, restart: false, settings: false };
 
 /**
  * A `useGames()` return value, complete enough that no surface reads `undefined`.

@@ -52,6 +52,15 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
     fetch("/api/zomboid/config")
       .then((r) => r.json())
       .then((data) => {
+        // `data.error` first. The GET requires `settings.read` now — the `.ini` carries
+        // `Password` and `DiscordToken` — and this read `data.properties ?? []`, so a
+        // refusal rendered as a panel of blank fields with no message at all, while
+        // `config-panel.tsx` next to it toasted the explanation. Blank fields are worse
+        // than an error: they look like a server with no settings.
+        if (data.error) {
+          setWarning(String(data.error));
+          return;
+        }
         const found: Record<string, string> = {};
         for (const p of data.properties ?? []) {
           if (FIELDS.some((f) => f.key === p.name)) found[p.name] = p.value;

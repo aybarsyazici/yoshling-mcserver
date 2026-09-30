@@ -31,7 +31,17 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-function navFor(game: GameId): NavItem[] {
+/**
+ * `canSettings` is `settings.read`, from `/api/games/status`'s `can`.
+ *
+ * The Settings link used to be shown to every role while none of the three settings pages
+ * checked one. That was merely pointless until the config GETs started requiring
+ * `settings.read` — they carry `ServerPassword` for 7DTD and `Password`/`DiscordToken` for
+ * PZ — at which point a MEMBER following the link met a page whose every panel 403s on
+ * load. Not offering it is the other half of that fix, the same way the power buttons are
+ * disabled rather than left to be refused.
+ */
+function navFor(game: GameId, canSettings: boolean): NavItem[] {
   const meta = GAMES[game];
   const base = meta.base;
   return [
@@ -39,7 +49,7 @@ function navFor(game: GameId): NavItem[] {
     ...(meta.hasMods ? [{ name: "Mods", href: `${base}/mods`, icon: Puzzle }] : []),
     { name: "Server", href: `${base}/server`, icon: Server },
     { name: "Backups", href: `${base}/backups`, icon: Archive },
-    { name: "Settings", href: `${base}/settings`, icon: Settings },
+    ...(canSettings ? [{ name: "Settings", href: `${base}/settings`, icon: Settings }] : []),
   ];
 }
 
@@ -54,7 +64,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { games } = useGames(8000);
+  const { games, can } = useGames(8000);
   // Which worlds have something running, so the switcher can point at it. The strip is
   // collapsed on another world's page and would otherwise say only that *something* is
   // happening, not where.
@@ -64,7 +74,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
   );
 
   const meta = GAMES[game];
-  const nav = navFor(game);
+  const nav = navFor(game, can.settings);
   // Only the worlds this user may open; comes from the session, so it's right on
   // the first paint rather than after the first status poll.
   const worlds = GAME_LIST.filter((g) => access.includes(g.id));

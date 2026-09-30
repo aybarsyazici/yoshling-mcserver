@@ -93,6 +93,19 @@ const PERMISSIONS = {
    * unrecoverable half can be fenced off on its own if that is ever wanted.
    */
   "files.delete": ["ADMIN", "MOD"],
+  /**
+   * Upload a 7 Days to Die world or save, and delete an uploaded world.
+   *
+   * ADMIN **and MOD**, like every other key here except `users.manage`, and named rather
+   * than left as the three hand-written `role !== "ADMIN"` comparisons it replaces
+   * (`/api/7dtd/world` POST and DELETE, `/api/7dtd/world/token` GET) — the last three of
+   * the twelve that sweep found. A MOD already holds `world.reset`, which deletes the
+   * whole world outright, so withholding "replace the save with a different one" from the
+   * same person protected nothing. The destination guards are what make this safe, not the
+   * role: the target must survive `safeName` and must resolve to a direct child of the
+   * worlds or saves root, and the active `GameWorld`/`GameName` pair is refused.
+   */
+  "world.upload": ["ADMIN", "MOD"],
   "users.manage": ["ADMIN"],
   "activity.view": ["ADMIN", "MOD", "MEMBER"],
 } as const;
