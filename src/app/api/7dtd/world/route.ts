@@ -3,13 +3,31 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdir, writeFile, rm, readdir, readFile, stat } from "fs/promises";
+import { mkdir, rm, readdir, readFile, stat } from "fs/promises";
+import { randomUUID } from "crypto";
 import path from "path";
 import { db } from "@/lib/db";
 import { verifyUploadToken } from "@/lib/upload-token";
 import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
-import { isPathInside, unsafeZipPaths, zipMemberNames } from "@/lib/file-guard";
+import { unsafeZipPaths, zipMemberNames } from "@/lib/file-guard";
+import { formatBytes } from "@/lib/format";
+import { MAX_WORLD_UPLOAD_BYTES, MAX_WORLD_UPLOAD_LABEL } from "@/lib/sdtd-upload-limits";
+import {
+  SAVE_MARKERS,
+  WORLD_MARKERS,
+  classifyZipListing,
+  saveTargetForUpload,
+  worldTargetForUpload,
+} from "@/lib/sdtd-upload-shape";
+import {
+  MalformedUploadError,
+  UploadTooLargeError,
+  openFirstFilePart,
+  parseMultipartBoundary,
+  webStreamChunks,
+  writeStreamToFile,
+} from "@/lib/upload-stream";
 
 // This route can be hit cross-origin from direct.yoshling.xyz (the non-Cloudflare
 // host used for large uploads). Allow that specific origin for CORS.
@@ -48,7 +66,17 @@ const WORLDS_DIR = path.join(SAVES_DIR, "GeneratedWorlds");
 const SAVES_ROOT = path.join(SAVES_DIR, "Saves");
 const SDTD_CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config";
 const TMP_DIR = "/app/data/tmp";
-const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB cap
+// Shared with the uploader card so the browser refuses what the server would refuse —
+// and set to what Caddy will actually carry. See `src/lib/sdtd-upload-limits.ts`.
+const MAX_BYTES = MAX_WORLD_UPLOAD_BYTES;
+
+/**
+ * `Content-Length` covers the multipart envelope as well as the file, so comparing it
+ * straight to `MAX_BYTES` would refuse a file a few hundred bytes under the cap. This
+ * slack only affects the *early* refusal; `writeStreamToFile` enforces `MAX_BYTES` on
+ * the file's own bytes as they land, which is the gate that cannot be lied to.
+ */
+const ENVELOPE_SLACK_BYTES = 64 * 1024;
 
 /**
  * The uid/gid the 7DTD server runs as.
@@ -62,14 +90,6 @@ const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB cap
  */
 const SDTD_UID = process.env.SDTD_PUID || process.env.PUID || "1000";
 const SDTD_GID = process.env.SDTD_PGID || process.env.PGID || "1000";
-
-// A custom WORLD (map) has these signature files; a SAVE has main.ttw / region data.
-const WORLD_MARKERS = ["dtm.raw", "biomes.png", "prefabs.xml", "splat3.png", "world.json"];
-const SAVE_MARKERS = ["main.ttw", "players.xml"];
-
-function safeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9 _.-]/g, "").replace(/\.+/g, ".").trim().slice(0, 60);
-}
 
 /**
  * Was the placement actually usable **by the game**?
@@ -218,23 +238,39 @@ export async function POST(request: NextRequest) {
     userId = verified.userId;
   }
 
-  const form = await request.formData().catch(() => null);
-  const file = form?.get("file");
-  if (!(file instanceof File)) {
-    return json({ error: "No file uploaded" }, 400);
-  }
-  if (!file.name.toLowerCase().endsWith(".zip")) {
-    return json({ error: "Please upload a .zip file" }, 400);
-  }
-  if (file.size > MAX_BYTES) {
-    return json({ error: "File too large (max 2 GB)" }, 400);
+  // Refuse an oversized body *before* reading a byte of it. This used to be
+  // `file.size > MAX_BYTES`, which could only be asked after `request.formData()` had
+  // already buffered the whole 2 GB — i.e. the guard against a huge upload only ran
+  // once the huge upload was in memory.
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BYTES + ENVELOPE_SLACK_BYTES) {
+    return json({ error: `File too large (max ${MAX_WORLD_UPLOAD_LABEL})` }, 413);
   }
 
+  const boundary = parseMultipartBoundary(request.headers.get("content-type"));
+  if (!boundary || !request.body) {
+    // The uploader posts a `FormData`, so this is either a non-browser client or a
+    // proxy that rewrote the body. Naming the expected shape beats "No file uploaded",
+    // which is what the old code said for every one of these.
+    return json({ error: "Expected a multipart/form-data upload with a single file field" }, 400);
+  }
+  const body = request.body;
+
   await mkdir(TMP_DIR, { recursive: true });
-  // Use a fixed-ish temp name (no Math.random available); the pid+size is enough
-  // since uploads are admin-only and serialized in practice.
-  const zipPath = path.join(TMP_DIR, `world-upload-${file.size}.zip`);
-  const workDir = path.join(TMP_DIR, `world-work-${file.size}`);
+  /**
+   * A temp name per request.
+   *
+   * What this replaces was `world-upload-${file.size}.zip` under a comment saying "no
+   * Math.random available; the pid+size is enough since uploads are admin-only and
+   * serialized in practice". Both halves were wrong: `crypto.randomUUID()` has always
+   * been available in Node, and *no* pid appeared in the name — two uploads of the same
+   * size shared one path and raced to overwrite it. What actually serialises uploads is
+   * the operation registry (`world.upload` holds `files:7dtd`, so a second one is
+   * refused with a 409), and that is admitted below, before anything is written.
+   */
+  const id = randomUUID();
+  const zipPath = path.join(TMP_DIR, `world-upload-${id}.zip`);
+  const workDir = path.join(TMP_DIR, `world-work-${id}`);
 
   try {
     return await runOperation(
@@ -244,7 +280,7 @@ export async function POST(request: NextRequest) {
         title: "Uploading a world",
         startedBy: session?.user?.name ? { name: session.user.name } : null,
       },
-      (op) => placeUpload(op, { file, zipPath, workDir, userId: userId!, json })
+      (op) => placeUpload(op, { body, boundary, zipPath, workDir, userId: userId!, json })
     );
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
@@ -255,25 +291,32 @@ export async function POST(request: NextRequest) {
 /**
  * The server half of the upload, as an operation holding `files:7dtd`.
  *
- * The browser-to-server transfer stays client-only: the real percentage there is
- * `xhr.upload.onprogress`, and the server has nothing at all to report until the body
- * has landed. So the record begins at "Writing the upload to disk", which is honest
- * about which half it can see.
+ * The percentage bar stays client-side, because `xhr.upload.onprogress` is the only
+ * thing that knows how much of the body has left the browser. But this used to say the
+ * server "has nothing at all to report until the body has landed", and that stopped
+ * being true when the body started streaming: bytes arriving on disk are a real,
+ * observed count, and the step's detail line now reports them.
  *
- * And "uploads are admin-only and serialized in practice" — the comment above
- * `zipPath` — is now serialized in fact: two uploads of the same size share
- * `world-upload-${size}.zip` and each one begins by overwriting it.
+ * Admission happens before this function is entered, so a second concurrent upload is
+ * refused with a 409 *before* either of them has read a byte of its body. That is what
+ * makes "uploads are serialized" true; the old note claimed the shared temp filename
+ * did it, and a shared filename is a race, not a lock.
+ *
+ * The body is consumed here rather than in `POST` for the same reason: the transfer is
+ * the long half, and it belongs inside the operation whose heartbeat it keeps alive.
  */
 async function placeUpload(
   op: OpHandle,
   {
-    file,
+    body,
+    boundary,
     zipPath,
     workDir,
     userId,
     json,
   }: {
-    file: File;
+    body: ReadableStream<Uint8Array>;
+    boundary: string;
     zipPath: string;
     workDir: string;
     userId: string;
@@ -281,12 +324,80 @@ async function placeUpload(
   }
 ): Promise<OpSuccess<NextResponse>> {
   try {
-    // Persist the upload to disk.
+    /**
+     * Stream the body to disk. Peak memory is one chunk, not the file.
+     *
+     * What this replaces was `Buffer.from(await file.arrayBuffer())` + `writeFile`,
+     * which held the payload twice (measured: +104.9 MB of `arrayBuffers` for a 50 MB
+     * file) and blocked the event loop while it did — so the heartbeat that drives the
+     * progress line went quiet during the one operation someone was watching. See
+     * `src/lib/upload-stream.ts`.
+     */
     op.step("Writing the upload to disk");
-    op.detail(`${(file.size / 1e9).toFixed(2)} GB`);
-    const buf = Buffer.from(await file.arrayBuffer());
-    await writeFile(zipPath, buf);
-    op.settle(`Wrote the upload to disk — ${(file.size / 1e9).toFixed(2)} GB`);
+    let opened;
+    try {
+      opened = await openFirstFilePart(webStreamChunks(body), boundary);
+    } catch (e) {
+      // A body we cannot parse is the client's problem, not a 500. Without this the
+      // route answered "Upload failed: <parser message>" with a 500, which reads as the
+      // server having broken.
+      if (e instanceof MalformedUploadError) {
+        op.reject(`Rejected the upload — ${e.message}`);
+        return { value: json({ error: `Upload failed: ${e.message}` }, 400) };
+      }
+      throw e;
+    }
+    if (!opened) {
+      op.reject("No file in the upload");
+      return { value: json({ error: "No file uploaded" }, 400) };
+    }
+    const uploadName = opened.part.filename ?? "";
+    if (!uploadName.toLowerCase().endsWith(".zip")) {
+      // Drain before answering: we are refusing partway through the peer's body, and a
+      // response sent while it is still writing can surface in the browser as a network
+      // error instead of as this 400.
+      await opened.drainRest();
+      op.reject("Rejected the upload — not a .zip");
+      return { value: json({ error: "Please upload a .zip file" }, 400) };
+    }
+
+    let lastDetailAt = 0;
+    let bytesWritten: number;
+    try {
+      ({ bytesWritten } = await writeStreamToFile({
+        source: opened.body,
+        destPath: zipPath,
+        maxBytes: MAX_BYTES,
+        onProgress: (bytes) => {
+          // Throttled: a 2 GB upload is ~32k chunks and the ledger only needs a line
+          // that visibly moves. `detail`, not `progress`, because the only total
+          // available is `Content-Length` — which includes the envelope and is the
+          // peer's claim, i.e. a predicted total, and those are not allowed here.
+          const now = Date.now();
+          if (now - lastDetailAt < 500) return;
+          lastDetailAt = now;
+          op.detail(`${formatBytes(bytes)} received`);
+        },
+      }));
+    } catch (e) {
+      if (e instanceof UploadTooLargeError) {
+        // Deliberately *not* drained: reading another 2 GB in order to say "that was too
+        // big" is the opposite of the point. `Content-Length` catches every honest client
+        // before the body starts, so reaching here means a chunked or mis-declared one.
+        op.reject(`Rejected the upload — larger than ${MAX_WORLD_UPLOAD_LABEL}`);
+        return { value: json({ error: `File too large (max ${MAX_WORLD_UPLOAD_LABEL})` }, 413) };
+      }
+      if (e instanceof MalformedUploadError) {
+        op.reject(`Rejected the upload — ${e.message}`);
+        return { value: json({ error: `Upload failed: ${e.message}` }, 400) };
+      }
+      throw e;
+    }
+    if (bytesWritten === 0) {
+      op.reject("Rejected the upload — it was empty");
+      return { value: json({ error: "The uploaded file was empty" }, 400) };
+    }
+    op.settle(`Wrote the upload to disk — ${formatBytes(bytesWritten)}`);
 
     // Validate + list contents (also rejects non-zips / zip bombs early).
     op.step("Checking the upload");
@@ -297,11 +408,10 @@ async function placeUpload(
       op.reject("Rejected the upload — it contains unsafe paths");
       return { value: json({ error: "Zip contains unsafe paths" }, 400) };
     }
-    const lower = listing.toLowerCase();
-    const looksWorld = WORLD_MARKERS.some((m) => lower.includes(m.toLowerCase()));
-    const looksSave = SAVE_MARKERS.some((m) => lower.includes(m.toLowerCase()));
+    const shape = classifyZipListing(listing);
+    const looksWorld = shape === "world";
 
-    if (!looksWorld && !looksSave) {
+    if (shape === null) {
       op.reject("Rejected the upload — not a 7 Days to Die world or save");
       return {
         value: json(
@@ -354,25 +464,25 @@ async function placeUpload(
     if (looksWorld) {
       kind = "world";
       // World name = the folder name that held the markers, or the zip name.
-      const worldName = safeName(path.basename(rootDir) === path.basename(workDir) ? file.name.replace(/\.zip$/i, "") : path.basename(rootDir));
-      const dest = path.join(WORLDS_DIR, worldName);
-      // safeName keeps only [A-Za-z0-9 _.-], so a name with no ASCII
-      // alphanumerics ("世界地図") collapses to "" and "..zip" collapses to "." —
-      // and path.join then makes `dest` GeneratedWorlds *itself*, which the next
-      // two lines rm -rf and overwrite. That is every custom map on the box,
-      // including the live one. Require a real name, and re-check the path we
-      // are about to delete really is a child of GeneratedWorlds.
-      if (!/[a-zA-Z0-9]/.test(worldName) || path.dirname(dest) !== WORLDS_DIR) {
+      // `worldTargetForUpload` holds the two locks on the destination — a name with at
+      // least one ASCII alphanumeric left after `safeName`, and a `dest` that is a *child*
+      // of GeneratedWorlds rather than GeneratedWorlds itself, which the next lines
+      // `rm -rf`. See `src/lib/sdtd-upload-shape.ts` for what each one prevents; they are
+      // there rather than here so they can be tested without Docker.
+      const target = worldTargetForUpload({ rootDir, workDir, uploadFilename: uploadName, worldsDir: WORLDS_DIR });
+      if (!target.ok) {
         op.reject("Couldn't work out a world name from the zip");
         return {
           value: json(
             {
-              error: `Couldn't work out a world name from "${file.name}". Rename the zip (or the folder inside it) using plain letters and numbers, then upload again.`,
+              error: `Couldn't work out a world name from "${uploadName}". Rename the zip (or the folder inside it) using plain letters and numbers, then upload again.`,
             },
             400
           ),
         };
       }
+      const worldName = target.name;
+      const dest = target.dest;
       // Installing over an existing world deletes it, so refuse the same worlds
       // DELETE refuses rather than silently taking out a map in use.
       // "replace", not "delete": an upload of the same name may replace terrain a
@@ -417,15 +527,20 @@ async function placeUpload(
        * reset would have failed. The route's own comment already said "Place the save under
        * `Saves/<parent>/<name>` preserving its structure"; it did not, and nothing checked.
        */
-      const gameName = safeName(path.basename(rootDir));
-      const parentDir = path.dirname(rootDir);
-      const worldName = safeName(path.basename(parentDir));
-      // `rootDir === workDir` means the markers sat at the zip root (no names at all);
-      // `parentDir === workDir` means there was one folder, so we have a game name and no
-      // world. Either way we cannot form `Saves/<world>/<game>` and must not guess — a
-      // guessed world name is a save the server will never find.
-      const noWorldFolder = rootDir === workDir || parentDir === workDir;
-      if (noWorldFolder || !/[a-zA-Z0-9]/.test(gameName) || !/[a-zA-Z0-9]/.test(worldName)) {
+      const target = saveTargetForUpload({ rootDir, workDir, savesRoot: SAVES_ROOT });
+      if (!target.ok) {
+        // Two different refusals, kept distinct because they ask for different fixes:
+        // "I can't tell which world this is" (re-zip it) versus "the names you gave
+        // resolve to `Saves/` itself" (rename them).
+        if (target.reason === "unsafe-path") {
+          op.reject("Couldn't work out where to put this save");
+          return {
+            value: json(
+              { error: "Couldn't work out a safe location for this save. Rename the folders inside the zip using plain letters and numbers." },
+              400
+            ),
+          };
+        }
         op.reject("Couldn't work out which world this save belongs to");
         return {
           value: json(
@@ -437,23 +552,9 @@ async function placeUpload(
           ),
         };
       }
-
-      const dest = path.join(SAVES_ROOT, worldName, gameName);
-      // Re-check the path we are about to `rm -rf`, exactly as the world branch re-checks
-      // GeneratedWorlds. `safeName` collapses ".." to "." and a name with no ASCII
-      // alphanumerics to "", either of which would make `dest` `Saves/` itself — i.e. every
-      // save on the box, including the one being played. The alphanumeric test above
-      // already refuses those; this is the second lock on the same door, because the thing
-      // behind it is unrecoverable.
-      if (!isPathInside(SAVES_ROOT, dest) || path.dirname(dest) !== path.join(SAVES_ROOT, worldName)) {
-        op.reject("Couldn't work out where to put this save");
-        return {
-          value: json(
-            { error: "Couldn't work out a safe location for this save. Rename the folders inside the zip using plain letters and numbers." },
-            400
-          ),
-        };
-      }
+      const worldName = target.world;
+      const gameName = target.game;
+      const dest = target.dest;
 
       // Refuse to overwrite the save the server is configured to play. `protectedWorldReason`
       // guards `GameWorld` only, which is the right question for a map and the wrong one
