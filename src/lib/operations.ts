@@ -36,6 +36,7 @@
 // split is invisible to the UI and still honest about which half knows what.
 
 import { GAME_LIST, GAMES, type GameId } from "@/lib/games";
+import { pluralNoun } from "@/lib/format";
 import {
   OPERATION_STALE_MS,
   formatElapsed,
@@ -1009,7 +1010,7 @@ function summarize(entry: Entry, outcome: Outcome): string {
         return `${dlWarns.map((f) => f.value).join("; ")}. ${powerSentence(entry)}`;
       }
       return `Finished in ${took}. ${
-        count ? `${count.done} ${count.noun} updated` : "Mods updated"
+        count ? `${count.done} ${pluralNoun(count.done, count.noun)} updated` : "Mods updated"
       }, ${
         power === "running" ? "the server is back up" : "the server is powered off"
       }.${sideNote(entry, ["Power"])}`;

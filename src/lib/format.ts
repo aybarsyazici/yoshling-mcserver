@@ -21,3 +21,25 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
+
+/**
+ * "1 mod" / "6 mods" — a count with its noun, pluralised.
+ *
+ * Exists because a real production summary read **"1 mods updated"**: the noun came from
+ * `op.progress({noun: "mods"})`, which is right for the progress line ("3 of 6 mods") and
+ * wrong the moment the count lands on 1. Rendering a count without asking whether it is
+ * one is the kind of small wrongness that makes everything next to it read as sloppy.
+ *
+ * English-only and deliberately dumb: an `s` suffix, with an explicit override for the
+ * cases where that is wrong. The alternative — pluralisation rules — is a library, and
+ * this app has four nouns.
+ */
+export function pluralise(count: number, singular: string, plural?: string): string {
+  return `${count} ${count === 1 ? singular : (plural ?? `${singular}s`)}`;
+}
+
+/** The noun alone, pluralised for `count`. `progress` carries plurals ("mods"). */
+export function pluralNoun(count: number, noun: string): string {
+  if (count !== 1) return noun;
+  return noun.endsWith("ies") ? `${noun.slice(0, -3)}y` : noun.endsWith("s") ? noun.slice(0, -1) : noun;
+}

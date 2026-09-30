@@ -27,10 +27,24 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Get ALL versions of the modpack (no filter) and pick the latest
     const versions = await getProjectVersions(modrinthId);
 
-    const version = versions[0];
+    // Prefer a build for the version this server actually runs.
+    //
+    // This used to be `versions[0]` unconditionally — the newest build, whatever it was
+    // for. Measured 2026-09-30: re-importing Fabulously Optimized on a server configured
+    // for 26.1.2 produced a pack pinned to **26.3**, even though the project publishes a
+    // 26.1.2 build. The apply then (correctly) refuses on a version mismatch, so the
+    // repair silently produced another unusable pack — the "did something, reported
+    // success" shape, one layer along from the missing-download-source bug it was fixing.
+    //
+    // Falls back to the newest build when the server's version has no release, because a
+    // pack you cannot install yet is still worth having on the shelf — but the response
+    // says which happened rather than leaving the caller to infer it from a number.
+    const cfg = await db.serverConfig.findUnique({ where: { id: "main" } });
+    const want = cfg?.mcVersion ?? null;
+    const matching = want ? versions.find((v) => v.game_versions?.includes(want)) : undefined;
+    const version = matching ?? versions[0];
     if (!version) {
       return NextResponse.json(
         { error: "No versions found for this modpack" },
@@ -87,6 +101,10 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({
+      // Say which build was chosen and why, so "why is this pack 26.3?" is answerable
+      // from the response instead of from the Modrinth version list.
+      matchedServerVersion: Boolean(matching),
+      serverMcVersion: want,
       ...modpack,
       targetMcVersion,
       targetLoader,
