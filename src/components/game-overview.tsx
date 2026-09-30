@@ -8,6 +8,7 @@ import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
 import { fileOperationLabel, powerBlocker, powerState } from "@/lib/operation-ui";
+import { coResidency } from "@/lib/coresidency";
 import { StatusPill, SectionHeading } from "@/components/ui-bits";
 import { AnimatedNumber, Reveal, Stagger, StaggerItem, usePrefersReducedMotion } from "@/components/motion";
 import { PowerGlyph, GearGlyph, GameMark } from "@/components/glyphs";
@@ -48,7 +49,17 @@ export function GameOverview({
 }) {
   const meta = GAMES[game];
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, busy: serverBusy, can, clockSkewMs, refresh } = useGames(localBusy ? 1500 : 5000);
+  const { games, running, busy: serverBusy, can, clockSkewMs, refresh } = useGames(
+    localBusy ? 1500 : 5000
+  );
+  /**
+   * Two worlds up at once — a claim about the BOX, deliberately separate from
+   * `power.reason`, which is a claim about this world. This page is the one each world
+   * opens on, and it is the page that historically missed every shared power fix
+   * (`a7d76b8`, the `can:` projection, the registry) — so it gets the same sentence from
+   * the same derivation rather than a variant of its own.
+   */
+  const co = coResidency(running);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
@@ -210,6 +221,22 @@ export function GameOverview({
           />
         }
       />
+
+      {/* The box is running more than one world. Above the hero, because it changes how to
+          read everything in it: a world can be "Running" and still be the wrong number of
+          worlds. Same sentence as `/home` and `/{game}/server`, from `coResidency()`. */}
+      {/* No `role="status"` — see the note on the same element in `mission-control.tsx`. */}
+      {co.message && (
+        <p
+          className="op-warn rounded-xl px-4 py-2.5 text-xs ring-1"
+          style={{
+            background: "color-mix(in oklab, var(--op-warn) 10%, transparent)",
+            ["--tw-ring-color" as string]: "color-mix(in oklab, var(--op-warn) 35%, transparent)",
+          }}
+        >
+          {co.message}
+        </p>
+      )}
 
       {/* Hero control panel */}
       <Reveal>
@@ -494,6 +521,12 @@ function formatAction(action: string): string {
     backup_create: "made a backup",
     backup_restore: "restored the world from a backup",
     backup_delete: "deleted a backup",
+    // The three added by the backup lifecycle change. Without them the fallback rendered
+    // "backup failed" as if it described the user, and "backup prune" / "backup download"
+    // as bare underscored keys.
+    backup_failed: "had a backup fail",
+    backup_prune: "pruned old backups",
+    backup_download: "downloaded a backup",
     server_update: "updated the server",
     server_reset: "reset the world",
   };

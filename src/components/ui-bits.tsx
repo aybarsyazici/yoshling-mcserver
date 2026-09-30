@@ -10,10 +10,20 @@ export function StatusPill({
   status,
   className,
   tint,
+  label,
 }: {
   status: ServerStatus;
   className?: string;
   tint?: string; // override dot color (world accent) when online
+  /**
+   * Override the words, keeping `status`'s colour and animation.
+   *
+   * For the one state `ServerStatus` cannot express: a container that is up but not
+   * answering the game. Its `status` is `offline`, so without this the pill said "Stopped"
+   * next to a button reading "Power off". Callers pass `powerState().heading` rather than a
+   * literal, so the three power surfaces cannot word it differently.
+   */
+  label?: string;
 }) {
   const map: Record<ServerStatus, { dot: string; text: string; ring: string }> = {
     online: { dot: tint ?? "var(--mc)", text: "text-foreground", ring: "ring-[color-mix(in_oklab,var(--mc)_40%,transparent)]" },
@@ -44,7 +54,7 @@ export function StatusPill({
         )}
         <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: s.dot }} />
       </span>
-      {STATUS_LABEL[status]}
+      {label ?? STATUS_LABEL[status]}
     </span>
   );
 }

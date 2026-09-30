@@ -58,6 +58,20 @@ export async function GET() {
   }
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
+  // This row's `password` column IS `ServerPassword` — the live join password
+  // (5 characters, non-empty, read off the production DB and `sdtdserver.xml`
+  // 2026-09-30). World access alone used to be enough to GET it, so a read-only
+  // MEMBER granted 7DTD could read the server password out of the Settings page
+  // while `/api/7dtd/files` refused them the same value from the same file.
+  // Same leak, one route over.
+  if (!hasPermission(session.user.role, "settings.read")) {
+    // The Settings page shows `data.error` verbatim, so say why. A bare "Forbidden" is
+    // how the power-button gate got reported as a bug before it explained itself.
+    return NextResponse.json(
+      { error: "These settings include the server password, so reading them needs the admin or moderator role." },
+      { status: 403 }
+    );
+  }
   const config = await db.sevenDaysConfig.findUnique({ where: { id: "main" } });
   return NextResponse.json(config ?? { id: "main", ...DEFAULTS });
 }

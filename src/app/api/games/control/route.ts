@@ -27,8 +27,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
 
-  const permission = action === "restart" ? "server.restart" : `server.${action}`;
-  if (!hasPermission(session.user.role, permission as "server.start")) {
+  // Three literal gates rather than one computed key.
+  //
+  // This was `hasPermission(role, (action === "restart" ? "server.restart" :
+  // `server.${action}`) as "server.start")` — which works, but hides the key from any
+  // static reader: the only literal in it was `"server.start"`, in a cast that also
+  // claimed the wrong type for the other two actions. The permissions suite has a guard
+  // requiring every capability to appear as a negated `hasPermission(…, "key")` with a 403,
+  // added because keeping the call and deleting the `if` left a secret leak looking
+  // covered — and a computed key is invisible to it. Repetition is the cheaper half of
+  // that trade.
+  if (action === "start" && !hasPermission(session.user.role, "server.start")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (action === "stop" && !hasPermission(session.user.role, "server.stop")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (action === "restart" && !hasPermission(session.user.role, "server.restart")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

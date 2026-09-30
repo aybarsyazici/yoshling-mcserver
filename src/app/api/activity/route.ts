@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { ALL_GAMES } from "@/lib/permissions";
+import { ALL_GAMES, hasPermission } from "@/lib/permissions";
 import { isGameId } from "@/lib/games";
 import { db } from "@/lib/db";
 
@@ -8,6 +8,17 @@ export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // `activity.view` was the sixth capability in `permissions.ts` that no caller ever
+  // asked about — five others were deleted for that reason, and this one survived the
+  // sweep because the route gated on the session alone and happened to agree with the
+  // table (all three roles hold it). Wiring it up costs one line and turns "everyone
+  // signed in may read the log" from an accident of this handler into a decision
+  // visible in the table, revocable from there. It passes for every role today: this
+  // is not a behaviour change.
+  if (!hasPermission(session.user.role, "activity.view")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const { searchParams } = new URL(request.url);

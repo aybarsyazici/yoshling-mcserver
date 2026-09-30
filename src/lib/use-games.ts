@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameId, ServerStatus } from "@/lib/games";
+import { runningWorlds } from "@/lib/coresidency";
 
 export interface GameSnapshot {
   game: GameId;
@@ -44,6 +45,22 @@ export interface ControlLock {
 export interface GamesState {
   games: Record<GameId, GameSnapshot> | null;
   activeGame: GameId | null;
+  /**
+   * Every world whose container is up — plural, and that is the point.
+   *
+   * `activeGame` is a singular and cannot express the one state this box must not be in.
+   * Only one world fits in 16 GB; `powerOn` evicts, but on 2026-09-26 a hand-run
+   * `docker start` put Project Zomboid on top of a 7 Days to Die that had been up two
+   * days, and the box was 2.2 GB into swap when it was found — and nothing in the app
+   * said so — the dashboard whose whole subject is which world holds the box had no way
+   * to report that two did.
+   *
+   * Server-computed from `containerRunning` so that a world which is up but not answering
+   * still counts. `runningWorlds(games)` in `lib/coresidency.ts` re-derives the same list
+   * client-side and is the fallback used below, so a browser holding this page across a
+   * deploy to an older build does not silently stop reporting.
+   */
+  running: GameId[];
   /** A server power op is in flight (from any client); disables controls. */
   busy: ControlLock | null;
   /**
@@ -68,11 +85,24 @@ export interface GamesState {
    * fixed — a trusted mod could not restart after a Workshop mod update locked players
    * out. The role table is not restated here; one copy is the only kind that stays true.
    */
-  can: { start: boolean; stop: boolean; restart: boolean };
+  can: {
+    start: boolean;
+    stop: boolean;
+    restart: boolean;
+    /** `settings.read` — whether the Settings page is worth offering at all. */
+    settings: boolean;
+  };
   /** Configured heap per world, from the compose file. null = no heap setting. */
   memoryGb: Partial<Record<GameId, number | null>>;
   /** Total host RAM in GB. */
   hostGb: number | null;
+  /**
+   * The most heap one world may be given (`maxGameGb()`): host total minus a 2.5 GB
+   * reserve, ~13 GB on this box. **It assumes that world is the only one running** — it
+   * subtracts nothing for whatever else is up. `perWorldCeiling()` is what turns it into
+   * a figure a user can act on; do not render it bare.
+   */
+  maxGb: number | null;
   /**
    * The server's clock at the last poll, minus the browser's at the same moment.
    * Elapsed times add this: `Date.now() - busy.since` mixes a browser clock with a
@@ -88,11 +118,30 @@ export interface GamesState {
 export function useGames(interval = 5000): GamesState {
   const [games, setGames] = useState<Record<GameId, GameSnapshot> | null>(null);
   const [activeGame, setActiveGame] = useState<GameId | null>(null);
+  const [running, setRunning] = useState<GameId[]>([]);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
-  const [can, setCan] = useState({ start: false, stop: false, restart: false });
+  /**
+   * The three power flags start **false** and `settings` starts **true**, and the asymmetry
+   * is deliberate.
+   *
+   * For a power button, showing it enabled and then disabling it is the defect the flags
+   * exist to remove — someone presses it in the gap and gets an unexplained 403. For a
+   * navigation link the cost runs the other way: every account on this box is ADMIN, so a
+   * Settings link that vanishes on load and reappears a second later reads as broken for
+   * every real user, while the worst case of guessing `true` is one link that 403s with an
+   * explanation. The route is the enforcement either way; these flags only decide what is
+   * worth offering.
+   */
+  const [can, setCan] = useState({
+    start: false,
+    stop: false,
+    restart: false,
+    settings: true,
+  });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
+  const [maxGb, setMaxGb] = useState<number | null>(null);
   const [clockSkewMs, setClockSkewMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
@@ -107,11 +156,23 @@ export function useGames(interval = 5000): GamesState {
       if (typeof data.serverNow === "number") setClockSkewMs(data.serverNow - receivedAt);
       setGames(data.games);
       setActiveGame(data.activeGame ?? null);
+      // Prefer the server's list; fall back to deriving it from the snapshot it just
+      // sent. The fallback is not defensive padding — a browser can hold this page
+      // across a deploy, and an older build that has `games` but no `running` would
+      // otherwise report "one world up" while two were, which is the exact silence
+      // this field exists to end.
+      setRunning(Array.isArray(data.running) ? data.running : runningWorlds(data.games));
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
-      if (data.can) setCan(data.can);
+      // `settings` defaulted rather than assumed present: a tab held across a deploy from
+      // an older build receives a `can` with three keys, and `undefined` would render as
+      // "no Settings link" for an admin. `?? true` is the safe direction here — the route
+      // still refuses, so the worst case is a link that 403s, whereas the worst case of
+      // `?? false` is an admin who cannot find the settings page.
+      if (data.can) setCan({ ...data.can, settings: data.can.settings ?? true });
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
+      setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);
     } catch {
       /* keep last known */
     } finally {
@@ -135,5 +196,18 @@ export function useGames(interval = 5000): GamesState {
     };
   }, [refresh, interval]);
 
-  return { games, activeGame, busy, access, can, memoryGb, hostGb, clockSkewMs, loading, refresh };
+  return {
+    games,
+    activeGame,
+    running,
+    busy,
+    access,
+    can,
+    memoryGb,
+    hostGb,
+    maxGb,
+    clockSkewMs,
+    loading,
+    refresh,
+  };
 }

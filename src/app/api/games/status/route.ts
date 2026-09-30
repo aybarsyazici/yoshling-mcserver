@@ -5,6 +5,7 @@ import {
   currentControlLock,
   configuredMemoryGb,
   hostTotalGb,
+  maxGameGb,
 } from "@/lib/game-manager";
 import { GAME_LIST, type GameId } from "@/lib/games";
 import { hasPermission } from "@/lib/permissions";
@@ -50,19 +51,29 @@ export async function GET() {
 
   // Which worlds have a running container, plural on purpose.
   //
-  // Only one world fits on this box, and the oldest open item in CLAUDE.md is that
-  // nothing *detects* two running at once — `powerOn` evicts, but the other start paths
-  // do not, and no code path reports co-residency. These flags are computed on every
-  // poll anyway, so exposing them costs nothing. `activeGame` keeps its exact wire shape
-  // for existing readers.
+  // Only one world fits on this box, and nothing in the app *detected* two running at
+  // once — `powerOn` evicts, but no code path reported co-residency. These flags are
+  // computed on every poll anyway, so exposing them costs nothing. `activeGame` keeps its
+  // exact wire shape for existing readers.
   //
-  // Nothing consumes this yet: rendering a warning needs `use-games.ts` and
-  // `dash-shell.tsx`, and *refusing* co-residency needs `game-manager.ts`. Both are
-  // one-file changes away, with the data already on the wire.
+  // `containerRunning`, not `status`: a container that is up but not answering RCON
+  // reports `status: "offline"` (the `a7d76b8` split) and is still holding its memory, so
+  // deriving this from `status` would miss exactly the wedged case. The same choice is
+  // made, and explained at length, in `runningWorlds()` in `lib/coresidency.ts` — which
+  // is what consumes this, on every power surface.
   const running: GameId[] = GAME_LIST.filter((g) => games[g.id].containerRunning).map((g) => g.id);
 
   // Real values, so the UI never shows a stale hardcoded number.
-  const [memoryGb, hostGb] = await Promise.all([configuredMemoryGb(), hostTotalGb()]);
+  //
+  // `maxGb` is `maxGameGb()` — MemTotal minus a 2.5 GB host reserve. It is on the wire so
+  // the landing page can state the per-world ceiling *and* the assumption baked into it:
+  // the figure subtracts nothing for whatever else is running, which `CLAUDE.md` has
+  // recorded for weeks in a place no user reads. `perWorldCeiling()` is the consumer.
+  const [memoryGb, hostGb, maxGb] = await Promise.all([
+    configuredMemoryGb(),
+    hostTotalGb(),
+    maxGameGb(),
+  ]);
 
   return NextResponse.json({
     games,
@@ -77,9 +88,15 @@ export async function GET() {
       start: hasPermission(session.user.role, "server.start"),
       stop: hasPermission(session.user.role, "server.stop"),
       restart: hasPermission(session.user.role, "server.restart"),
+      // `settings.read` gates the config GETs, which carry `ServerPassword` for 7DTD and
+      // `Password`/`DiscordToken` for PZ. Reported here so the sidebar can omit the
+      // Settings link rather than sending a MEMBER to a page whose every panel 403s on
+      // load — the same reason the three power booleans exist.
+      settings: hasPermission(session.user.role, "settings.read"),
     },
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,
+    maxGb,
     // So elapsed times are measured against the server's clock rather than the
     // browser's. `Date.now() - busy.since` mixed the two.
     serverNow: Date.now(),

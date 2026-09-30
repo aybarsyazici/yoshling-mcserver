@@ -38,7 +38,11 @@ export async function GET(request: NextRequest) {
   // `rcon.password`, `TelnetPassword` and `RCONPassword` -- the exact keys the
   // settings editors have a locked-key set to hide. Gating only the *editor* and
   // leaving this open meant the password was still one click away under Files.
-  if (!hasPermission(session.user.role, "settings.edit")) {
+  //
+  // `settings.read` rather than `settings.edit` (same roles, clearer intent): a
+  // permission named `…edit` guarding a GET reads like a copy-paste slip and invites
+  // the next reader to "fix" it by deleting the check, which is precisely the leak.
+  if (!hasPermission(session.user.role, "settings.read")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -197,8 +201,11 @@ export async function DELETE(request: NextRequest) {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  if (session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  // Deleting a game file has no undo, so it gets its own capability rather than
+  // riding on `settings.edit`. Was a bare `role !== "ADMIN"`; naming it is what lets
+  // the three file browsers be narrowed together, from `permissions.ts`.
+  if (!hasPermission(session.user.role, "files.delete")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const laneBusy = fileLaneBusy("minecraft");

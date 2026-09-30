@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { GAMES, type GameId } from "@/lib/games";
 import { useOperations } from "@/components/operations-provider";
+import { useGames } from "@/lib/use-games";
+import { perWorldCeiling } from "@/lib/coresidency";
 import { blockedReason, powerBlocker, spellMinutes } from "@/lib/operation-ui";
 import { AlertTriangle, Check, MemoryStick } from "lucide-react";
 
@@ -17,6 +19,8 @@ interface MemoryState {
   applied: boolean;
   running: boolean;
   maxGb: number;
+  /** Lowest applicable heap (the service's MIN_MEMORY / -Xms). 1 when there is no floor. */
+  minGb?: number;
 }
 
 /**
@@ -52,6 +56,10 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
    */
   const { operations, elapsedMs } = useOperations();
   const blocker = powerBlocker(operations, game);
+  // For the ceiling note only: which worlds are up, their heaps, and the raw cap. The same
+  // three fields `/home` reads, from the same poll, so the two surfaces cannot disagree
+  // about how much of the box is already spoken for.
+  const { running, memoryGb, maxGb } = useGames(10000);
 
   async function load() {
     try {
@@ -109,7 +117,32 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   if (!state) return <div className="skeleton h-40 rounded-2xl" />;
 
   const dirty = state.configuredGb !== gb;
-  const options = Array.from({ length: state.maxGb }, (_, i) => i + 1);
+  /**
+   * The values that can actually be applied, `minGb`…`maxGb`.
+   *
+   * It used to start at 1 unconditionally, so Project Zomboid — whose compose block sets
+   * `MIN_MEMORY` (`-Xms`) to 2 GB — offered a 1G button that writes `-Xmx1024m` under
+   * `-Xms2048m`: a JVM that refuses to start. `setMemory` now refuses that before anything
+   * is stopped, but offering an option you will refuse is a worse control than not
+   * offering it. `minGb` is 1 for Minecraft, whose single `MEMORY` sets both bounds.
+   */
+  const minGb = Math.max(1, state.minGb ?? 1);
+  const options = Array.from({ length: Math.max(0, state.maxGb - minGb + 1) }, (_, i) => minGb + i);
+
+  /**
+   * The ceiling's assumption, said out loud — and deliberately **reported, not enforced**.
+   *
+   * `maxGameGb()` subtracts nothing for whatever else is up, so this card would offer
+   * Minecraft 13 GB while Project Zomboid held 12. `perWorldCeiling` is the sentence for
+   * that, and it is the same derivation `/home` uses, so the two cannot disagree.
+   *
+   * Not a refusal, on purpose. A heap is configuration for the next boot, not an
+   * allocation now: with Minecraft stopped and PZ up, setting Minecraft to 13 GB
+   * over-commits nothing, and `setMemory` starts a world only if it was already running.
+   * Refusing here would be a false "no" for the common case, which is the mirror of the
+   * defect this project keeps paying for. Saying it is what the reader needs.
+   */
+  const ceiling = perWorldCeiling({ maxGb, forGame: game, running, memoryGb });
 
   return (
     <div
@@ -186,6 +219,10 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
             </Button>
           </div>
 
+          {ceiling.note && (
+            <p className="mt-3 text-xs text-muted-foreground">{ceiling.note}</p>
+          )}
+
           {/* A newly disabled control without its reason is the defect being fixed, not
               the fix. Same three lines as `game-backups.tsx`. */}
           {blocker && (
@@ -204,10 +241,16 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
               </>
             ) : state.running ? (
               // The downtime, from `GameMeta.stopSeconds` rather than the flat "about a
-              // minute" this used to promise for all three worlds. Project Zomboid's stop
-              // alone is a measured 5m 03s — it never exits on SIGTERM — so the one world
-              // whose heap you are most likely to change understated its own downtime by
-              // 5×, and the operation that followed looked hung.
+              // minute" this used to promise for all three worlds.
+              //
+              // Deriving it is the point. This comment used to justify itself with "PZ's
+              // stop alone is a measured 5m 03s — it never exits on SIGTERM", which was
+              // true when written and was corrected on 2026-09-29: the driver now asks the
+              // game to `quit` over RCON and it exits in ~12s with code 0, so
+              // `GAMES.zomboid.stopSeconds` is 12 and the branch below correctly says
+              // "about a minute". A number written into the copy would have gone on
+              // promising five minutes of downtime that no longer happens; a number read
+              // from the table followed the fix without anyone editing this file.
               meta.stopSeconds >= 120
                 ? `Saving saves the world, recreates the container and starts it again. ` +
                   `${meta.name} takes up to ${spellMinutes(meta.stopSeconds)} to stop, so expect ` +

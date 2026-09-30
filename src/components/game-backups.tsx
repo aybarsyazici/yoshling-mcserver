@@ -18,7 +18,16 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Archive, RotateCcw, Trash2, Plus, AlertTriangle } from "lucide-react";
+import {
+  Archive,
+  RotateCcw,
+  Trash2,
+  Plus,
+  AlertTriangle,
+  Download,
+  Clock,
+  ShieldCheck,
+} from "lucide-react";
 
 interface Backup {
   name: string;
@@ -26,6 +35,45 @@ interface Backup {
   createdAt: string;
   world?: string | null;
   includesWorldMap?: boolean;
+  /** A checksum was recorded when it was written, so a restore can verify it. */
+  verifiable?: boolean;
+  /** Taken by the scheduler rather than by a person. */
+  automatic?: boolean;
+}
+
+/**
+ * One journal entry. The durable record of backup work on this box, including the two
+ * things `/activity` structurally cannot carry: a **scheduled** backup (no user to
+ * attribute — `Activity.userId` is a required foreign key) and, before this, any
+ * **failure** at all.
+ */
+interface JournalEntry {
+  at: string;
+  event: "create" | "restore" | "delete" | "download" | "prune";
+  outcome: "ok" | "failed";
+  actor: string | null;
+  name?: string;
+  names?: string[];
+  sizeBytes?: number;
+  error?: string;
+}
+
+interface BackupMeta {
+  policy: { keep: number; maxAgeDays: number };
+  policyText: string;
+  schedule: { enabled: boolean; everyHours: number };
+  journal: JournalEntry[];
+  /**
+   * Whether the viewer may use the download endpoint, which requires `settings.edit`
+   * because an archive contains `sdtdserver.xml` (telnet password) for 7DTD and the `.ini`
+   * plus the player database for PZ.
+   *
+   * Reported by the server rather than derived here, and defaulted to **false** below: a
+   * button that 403s is how the power controls got reported as a bug, and in this case the
+   * 403 was invisible — the anchor's `download` attribute made the browser save
+   * `{"error":"Forbidden"}` under the archive's own name and show a finished download.
+   */
+  canDownload?: boolean;
 }
 
 // What a backup captures, and what a restore replaces, spelled out per game.
@@ -50,6 +98,8 @@ export function GameBackups({ game }: { game: GameId }) {
   const describes = DESCRIBES[game];
 
   const [backups, setBackups] = useState<Backup[]>([]);
+  // Named `lifecycle`, not `meta`: `meta` is already `GAMES[game]` in this component.
+  const [lifecycle, setLifecycle] = useState<BackupMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -83,8 +133,34 @@ export function GameBackups({ game }: { game: GameId }) {
     }
   }
 
+  /**
+   * The retention policy, the schedule and the journal, on their own request.
+   *
+   * A separate `?meta=1` rather than a richer listing response, so the array shape the
+   * listing has always returned is untouched — and so a failure here (an old server, a
+   * parse error) costs the header and never the list of archives, which is the part
+   * someone came to this page for.
+   */
+  async function fetchMeta() {
+    // Errors swallowed on purpose, and this is the one place on this page where that is
+    // right: the archive list is what someone came for, and a header that failed to load
+    // must not take it down. Every *mutation* here reports its failure loudly.
+    const res = await fetch(`${endpoint}?meta=1`).catch(() => null);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => null);
+    if (data && typeof data === "object" && data.policy) setLifecycle(data as BackupMeta);
+  }
+
   useEffect(() => {
     fetchBackups();
+    // `react-hooks/set-state-in-effect` flags this line and not the one above it, which is
+    // a quirk of the analyzer rather than a difference in the code: both are async fetches
+    // on mount that settle state when they return. The same shape is already in
+    // `server-monitor.tsx`, `mod-detail-dialog.tsx`, `motion.tsx` and `theme-toggle.tsx`,
+    // all of which the rule also flags — so this is the house pattern, and contorting one
+    // call site would make this file the odd one out without changing what it does.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchMeta();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -117,6 +193,10 @@ export function GameBackups({ game }: { game: GameId }) {
     } finally {
       setCreating(false);
       void fetchBackups();
+      // A create also applies the retention policy, so the journal (and possibly the list)
+      // has changed. Refetching both is what makes a prune visible rather than something
+      // you notice later by counting rows.
+      void fetchMeta();
     }
   }
 
@@ -152,6 +232,9 @@ export function GameBackups({ game }: { game: GameId }) {
     } finally {
       setRestoring(null);
       refresh();
+      // The journal now carries this restore — including, for the first time, a restore
+      // that failed. That entry is the whole reason the failure path writes anything.
+      void fetchMeta();
     }
   }
 
@@ -183,6 +266,7 @@ export function GameBackups({ game }: { game: GameId }) {
     } finally {
       setDeleting(null);
       void fetchBackups();
+      void fetchMeta();
     }
   }
 
@@ -218,6 +302,24 @@ export function GameBackups({ game }: { game: GameId }) {
         <p className="text-xs text-muted-foreground">
           {blockedReason(blocker, elapsedMs(blocker))}
         </p>
+      )}
+
+      {/* What happens without anyone clicking anything. Both halves are stated out loud
+          because both of them delete or create files on their own: pruning is destructive,
+          and a schedule that nobody knows about is how you get surprised by disk use. */}
+      {lifecycle && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-xl bg-card/70 px-3 py-2 text-xs text-muted-foreground ring-1 ring-foreground/10">
+          <span className="flex items-center gap-1.5">
+            <Clock className="h-3.5 w-3.5" />
+            {lifecycle.schedule.enabled
+              ? `Automatic backup every ${lifecycle.schedule.everyHours}h — skipped while anyone is playing.`
+              : "Automatic backups are switched off."}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Trash2 className="h-3.5 w-3.5" />
+            Retention: {lifecycle.policyText}. The newest is never deleted.
+          </span>
+        </div>
       )}
 
       {loading ? (
@@ -257,10 +359,55 @@ export function GameBackups({ game }: { game: GameId }) {
                           {b.world}{b.includesWorldMap ? " · map incl." : ""}
                         </span>
                       )}
+                      {b.automatic && <span>· automatic</span>}
+                      {/* Said only when it is true. The absence of a checksum is not a
+                          defect in the archive — every archive written before checksums
+                          existed has none, and a restore reports that honestly rather
+                          than refusing — so an "unverified" badge on all of them would
+                          be noise that made the real signal invisible. */}
+                      {b.verifiable && (
+                        <span className="flex items-center gap-1" title="A checksum was recorded when this was written, and a restore verifies it first.">
+                          <ShieldCheck className="h-3 w-3" /> checksummed
+                        </span>
+                      )}
                     </p>
                   </div>
                 </div>
                 <div className="flex gap-2">
+                  {/* A plain link, not a fetch: the archive is 165–305 MB, so the browser
+                      has to own the transfer — streaming it through JS would buffer it in
+                      the tab, which is the same defect the server side avoids by piping
+                      `createReadStream` straight into the response.
+
+                      Deliberately NOT disabled while an operation runs. A download only
+                      reads, and the moment someone most wants a copy off the box is the
+                      moment something is going wrong on it. The lane exists to stop two
+                      *writers*; this is not one. */}
+                  {lifecycle?.canDownload && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      // `render`, not `<a><Button/></a>` as the mod dialog does: a <button>
+                      // inside an <a> is invalid HTML and only one of the two is keyboard
+                      // activatable. This renders a single anchor wearing the button's
+                      // styling.
+                      //
+                      // **No `download` attribute.** `archiveResponse` already sends
+                      // `Content-Disposition: attachment; filename="<name>"`, so a successful
+                      // download still saves under the right name — while a 403 or a 404
+                      // (reachable now that archives get pruned: a listing rendered before a
+                      // prune, clicked after it) renders its JSON in the tab instead of being
+                      // saved as a 27-byte `.tar.gz` under a finished-download indicator.
+                      render={
+                        <a
+                          href={`${endpoint}?download=${encodeURIComponent(b.name)}`}
+                          aria-label={`Download backup ${b.name}`}
+                        />
+                      }
+                    >
+                      <Download className="h-3.5 w-3.5" /> Download
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="outline"
@@ -291,6 +438,35 @@ export function GameBackups({ game }: { game: GameId }) {
               </motion.div>
             ))}
           </AnimatePresence>
+        </div>
+      )}
+
+      {/* The durable record.
+          Two things live here that cannot live in `/activity`: a **scheduled** backup, which
+          has no user to attribute (`Activity.userId` is a required foreign key, and putting
+          a person's name on work they did not do is this project's own defect class), and
+          any **failure** — the registry drops a failed record after six hours and the
+          activity log only ever saw successes, so a restore that half-happened left no
+          trace at all beyond the world being off. */}
+      {lifecycle && lifecycle.journal.length > 0 && (
+        <div className="space-y-2 rounded-2xl bg-card/70 p-4 ring-1 ring-foreground/10">
+          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Recent backup activity
+          </p>
+          <ul className="space-y-1.5">
+            {lifecycle.journal.map((e, i) => (
+              <li
+                key={`${e.at}-${i}`}
+                className={cn(
+                  "flex flex-wrap items-baseline gap-x-2 text-xs",
+                  e.outcome === "failed" ? "op-bad" : "text-muted-foreground"
+                )}
+              >
+                <span className="tabular-nums">{new Date(e.at).toLocaleString()}</span>
+                <span>{journalSentence(e)}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -360,3 +536,42 @@ export function GameBackups({ game }: { game: GameId }) {
  * MiB-arithmetic-labelled-MB bug, in the one view an admin compares the summary against.
  */
 const formatSize = formatBytes;
+
+/**
+ * One journal line, in words.
+ *
+ * Written from the recorded fields and nothing else — `outcome`, `event`, `actor` — so it
+ * cannot describe an event differently from the way it was recorded. `actor === null` is
+ * rendered as "the scheduler" because that is what it means: nobody asked, the timer did.
+ * It is not "unknown", and saying "unknown" would invite someone to go looking for a
+ * person who does not exist.
+ */
+function journalSentence(e: JournalEntry): string {
+  // `=== null`, not falsy: the distinction being drawn is between a recorded ABSENCE of an
+  // actor and a recorded-but-blank one. `actor: ""` reaching here used to print "the
+  // scheduler" and claim the timer did something a person did; `recordBackupEvent` now
+  // normalises "" to null, and this is the belt to that braces.
+  const who = e.actor === null || e.actor === undefined ? "the scheduler" : e.actor || "someone";
+  const what = e.name ? ` ${e.name}` : "";
+  if (e.outcome === "failed") {
+    return `${e.event === "restore" ? "Restore" : "Backup"}${what} failed — ${
+      e.error || "no reason recorded"
+    } (${who})`;
+  }
+  switch (e.event) {
+    case "create":
+      return `${who} made${what}${
+        typeof e.sizeBytes === "number" ? ` (${formatBytes(e.sizeBytes)})` : ""
+      }`;
+    case "restore":
+      return `${who} restored from${what}`;
+    case "delete":
+      return `${who} deleted${what}`;
+    case "download":
+      return `${who} downloaded${what}`;
+    case "prune":
+      return `Retention removed ${e.names?.length ?? 0} older ${
+        (e.names?.length ?? 0) === 1 ? "archive" : "archives"
+      }${e.names?.length ? `: ${e.names.join(", ")}` : ""}`;
+  }
+}

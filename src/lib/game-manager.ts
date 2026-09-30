@@ -1,12 +1,20 @@
-import { exec } from "child_process";
-import { promisify } from "util";
 import { readFile } from "fs/promises";
 import path from "path";
 import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
 import { getPzStatus, pzConsole, pzSave, readModState } from "@/lib/zomboid";
-import { COMPOSE_FILE, patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
+import {
+  COMPOSE_FILE,
+  ENV_FILE,
+  patchEnvFile,
+  readCompose,
+  readEnvFile,
+  readEnvMap,
+  readServiceEnv,
+  writeEnvFile,
+} from "@/lib/compose";
+import { runCommand } from "@/lib/docker-cli";
 import {
   runOperation,
   type ControlAction,
@@ -17,7 +25,21 @@ import {
   type OpSuccess,
 } from "@/lib/operations";
 
-const execAsync = promisify(exec);
+/**
+ * Every `docker` fork in this module goes through the runner in `docker-cli.ts`
+ * rather than a local `promisify(exec)`.
+ *
+ * That indirection is the only reason anything below is testable. The properties this
+ * module exists to hold — that `powerOn` stops every *other* running world before
+ * starting one, that `withGameStopped` never starts a world that was already stopped,
+ * that a settings change uses `compose create` and never `compose up` — are all
+ * statements about which commands run and in what order, and until the runner could be
+ * substituted, not one of them had a test. Several were asserted only by a comment, and
+ * three audits' worth of findings claimed the opposite.
+ *
+ * Kept under the old name so no call site below changed: this is a seam, not a rewrite.
+ */
+const execAsync = runCommand;
 
 /**
  * Wrap a live probe (7DTD telnet, PZ RCON) so N browser tabs / rapid polls
@@ -56,6 +78,25 @@ export interface GameRuntime {
   /** Directory (mounted in the web container) that holds this game's files */
   dir: string;
   /**
+   * Compose env key → the `.env` key that compose interpolates it from.
+   *
+   * This table is what stops the app writing `docker-compose.yml`. Compose is tracked
+   * in git and `deploy.sh` runs `git checkout -f`, so every value the UI patched into
+   * compose was thrown away by the next deploy — once undone by hand (`f0cf692`), then
+   * made loud by `deploy.sh` refusing, but never actually fixed. `.env` is gitignored,
+   * so a value written there survives.
+   *
+   * **Per-service names, deliberately.** `VERSION` is the Minecraft version in one
+   * compose block and the Steam branch in another, so a shared `VERSION` key would make
+   * editing Minecraft change which build 7 Days to Die downloads. That is the same trap
+   * `patchServiceEnv`'s scoping exists for, one layer down.
+   *
+   * A key absent from here cannot be applied at all: `applyServiceEnv` refuses rather
+   * than falling back to patching compose. Falling back is how this feature would
+   * silently reacquire the deploy collision it was written to remove.
+   */
+  envKeys: Record<string, string>;
+  /**
    * How this game's JVM heap is configured, or undefined when it has none.
    * 7 Days to Die is a Unity native server with no heap setting, so there is
    * genuinely nothing to change there.
@@ -69,6 +110,7 @@ export const RUNTIME: Record<GameId, GameRuntime> = {
     container: "yoshling-mc",
     service: "minecraft",
     dir: process.env.MC_SERVER_DIR || "/minecraft",
+    envKeys: { TYPE: "MC_TYPE", VERSION: "MC_VERSION", MEMORY: "MC_MEMORY" },
     // itzg/minecraft-server: MEMORY sets both -Xms and -Xmx.
     memory: { keys: ["MEMORY"], format: (gb) => `${gb}G` },
   },
@@ -76,12 +118,21 @@ export const RUNTIME: Record<GameId, GameRuntime> = {
     container: "yoshling-7dtd",
     service: "sevendtd",
     dir: process.env.SDTD_SERVER_DIR || "/sevendtd",
+    // Nothing. `START_MODE` and `VERSION` are read and written on the compose file
+    // itself by `/api/7dtd/update`, which flips START_MODE to 3 and back to 1 within
+    // one operation — moving either to `.env` would have the first update rewrite the
+    // `${...}` reference into a literal and detach the line permanently. See the
+    // comment on those lines in docker-compose.yml.
+    envKeys: {},
   },
   zomboid: {
     container: "yoshling-pz",
     service: "zomboid",
     dir: process.env.PZ_SERVER_DIR || "/zomboid",
-    // The PZ image passes MAX_MEMORY straight to -Xmx.
+    envKeys: { MAX_MEMORY: "PZ_MAX_MEMORY" },
+    // The PZ image passes MAX_MEMORY straight to -Xmx. Verified on production
+    // 2026-09-30: the container's own log shows `-Xms2048m -Xmx12288m` against
+    // MIN_MEMORY=2048m / MAX_MEMORY=12288m in compose.
     memory: { keys: ["MAX_MEMORY"], format: (gb) => `${gb * 1024}m` },
   },
 };
@@ -1475,15 +1526,23 @@ export async function recreateService(
  */
 const configuredMemory = cachedProbe(15_000, async (): Promise<Record<GameId, number | null>> => {
   let compose = "";
+  let env: Record<string, string> = {};
   try {
     compose = await readCompose();
+    // `.env` is where the UI-owned values now live, and compose only holds a
+    // `${MC_MEMORY:-4G}` reference to them. Reading compose alone would answer the
+    // literal `${...}` string, `parseGb` would return null, and the card would show
+    // "unknown" for a setting that is in fact applied.
+    env = await readEnvMap();
   } catch {
     return { minecraft: null, "7dtd": null, zomboid: null };
   }
   const out = {} as Record<GameId, number | null>;
   for (const g of GAME_LIST) {
     const rt = RUNTIME[g.id];
-    out[g.id] = rt.memory ? parseGb(readServiceEnv(compose, rt.service, rt.memory.keys[0])) : null;
+    out[g.id] = rt.memory
+      ? parseGb(readServiceEnv(compose, rt.service, rt.memory.keys[0], env))
+      : null;
   }
   return out;
 });
@@ -1507,6 +1566,16 @@ export interface MemoryState {
   applied: boolean;
   running: boolean;
   maxGb: number;
+  /**
+   * The lowest heap this service will accept, from the compose block's `MIN_MEMORY`
+   * (`-Xms`). `1` when there is no floor.
+   *
+   * Reported so the card can stop offering a value `setMemory` will refuse. Project
+   * Zomboid's floor is 2 GB — measured on production 2026-09-30, `-Xms2048m -Xmx12288m` in
+   * the live JVM — and the card offered 1G, which wrote `-Xmx` under `-Xms` and produced a
+   * JVM that will not start. The refusal is the safety net; not offering it is the fix.
+   */
+  minGb: number;
 }
 
 /** "4G" / "4096m" → GB. */
@@ -1539,6 +1608,10 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
     game,
     running,
     maxGb: await maxGameGb(),
+    // `?? 1`: no MIN_MEMORY in the block means no floor (Minecraft's single `MEMORY` sets
+    // both bounds), and an unreadable compose is reported by the branches below rather
+    // than by pretending there is a floor.
+    minGb: (await heapFloorGb(game)) ?? 1,
     hostGb: Math.round((await hostTotalGb()) * 10) / 10,
   };
 
@@ -1556,7 +1629,7 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
   const key = rt.memory.keys[0];
   let configuredGb: number | null = null;
   try {
-    configuredGb = parseGb(readServiceEnv(await readCompose(), rt.service, key));
+    configuredGb = parseGb(readServiceEnv(await readCompose(), rt.service, key, await readEnvMap()));
   } catch {
     return {
       ...base,
@@ -1581,6 +1654,73 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
 }
 
 /**
+ * Write UI-owned service settings into `.env`, and prove compose will read them back.
+ *
+ * ## Why `.env` and not `docker-compose.yml`
+ *
+ * Compose is tracked in git and the deploy is `git checkout -f -B main FETCH_HEAD`, so
+ * every value the dashboard patched into compose was discarded by the next deploy. That
+ * was papered over once by hand (`f0cf692`) and then made loud (`deploy.sh` refuses and
+ * prints the diff) but never closed. `.env` is gitignored, sits in the directory
+ * `composeCmd` `cd`s into — which is the project directory compose loads `.env` from —
+ * and compose already interpolated `RCON_PASSWORD` and `SDTD_TELNET_PASSWORD` from it,
+ * so the mechanism was proven before this used it.
+ *
+ * ## The proof, and why it is not optional
+ *
+ * Writing a key into `.env` establishes nothing on its own: the compose line has to
+ * actually reference *that* key. Get the name wrong, or edit compose back to a literal,
+ * and the write succeeds, the container is recreated, and the setting silently does not
+ * change — the exact "reports success after doing nothing" defect this codebase keeps
+ * producing. So after writing, this re-reads both files and resolves the compose line
+ * through `.env`; if the answer is not the value asked for, it throws instead of
+ * recreating a container for nothing.
+ *
+ * Refusing an unmapped key matters for the same reason. A key with no `envKeys` entry
+ * must not quietly fall back to patching compose, because that is how the deploy
+ * collision would come back without anyone changing a line of policy.
+ */
+async function writeServiceEnvToDotEnv(
+  game: GameId,
+  updates: Record<string, string>
+): Promise<{ applied: string[]; added: string[] }> {
+  const rt = RUNTIME[game];
+
+  const mapped: Record<string, string> = {};
+  for (const [composeKey, value] of Object.entries(updates)) {
+    const envKey = rt.envKeys[composeKey];
+    if (!envKey) {
+      throw new Error(
+        `${composeKey} is not a UI-owned setting for ${rt.service}: it has no .env key in ` +
+          `RUNTIME["${game}"].envKeys, so it can only be changed in docker-compose.yml on the server.`
+      );
+    }
+    mapped[envKey] = value;
+  }
+
+  const { text, applied, added } = patchEnvFile(await readEnvFile(), mapped);
+  await writeEnvFile(text);
+
+  // Read both files back and resolve the compose line through the `.env` we just wrote.
+  // This is the same configured-vs-live shape as the memory card, one level earlier: it
+  // catches a compose line that no longer interpolates the key we own.
+  const compose = await readCompose();
+  const env = await readEnvMap();
+  for (const [composeKey, value] of Object.entries(updates)) {
+    const effective = readServiceEnv(compose, rt.service, composeKey, env);
+    if (effective !== value) {
+      throw new Error(
+        `Wrote ${rt.envKeys[composeKey]}=${value} to ${ENV_FILE}, but the ${rt.service} service's ` +
+          `${composeKey} still resolves to ${effective === null ? "nothing" : `"${effective}"`}. ` +
+          `docker-compose.yml must read it as \${${rt.envKeys[composeKey]}:-…} — nothing was recreated.`
+      );
+    }
+  }
+
+  return { applied, added };
+}
+
+/**
  * Change the heap size and make it take effect. Serialized with the power
  * controls, because it stops and recreates a container.
  */
@@ -1601,6 +1741,9 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
  * `/api/settings` (Minecraft version/loader) open-coded a `docker compose up -d
  * --force-recreate` and got all three wrong; `setMemory` had them right. Both now
  * come through here.
+ *
+ * The values land in `.env`, not in compose — see `writeServiceEnvToDotEnv` for why,
+ * and for the read-back that proves compose will actually pick them up.
  */
 export async function applyServiceEnv(
   game: GameId,
@@ -1611,15 +1754,9 @@ export async function applyServiceEnv(
   return withPowerOperation(
     { kind: "settings", game, action: "restart", title: stage, startedBy },
     async (op) => {
-      op.step("Editing docker-compose.yml", { game });
-      const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
-      if (applied.length === 0) {
-        throw new Error(
-          `Couldn't find ${Object.keys(updates).join("/")} in the ${rt.service} service block of docker-compose.yml`
-        );
-      }
-      await writeCompose(text);
-      op.settle(`Patched ${applied.join(", ")} in docker-compose.yml`);
+      op.step(`Editing ${ENV_FILE}`, { game });
+      const { applied } = await writeServiceEnvToDotEnv(game, updates);
+      op.settle(`Set ${applied.join(", ")} in ${ENV_FILE}`);
 
       const wasRunning = (await containerState(rt.container)) === "running";
       if (wasRunning) await narratedStop(op, game);
@@ -1664,15 +1801,72 @@ async function recordEnvApplied(
   op.fact({ label: "Container", value: live.join(", "), verdict: agrees ? undefined : "warn" });
 }
 
+/**
+ * The floor a game's heap may not go under, because `-Xmx` below `-Xms` is a JVM that
+ * refuses to start at all.
+ *
+ * Project Zomboid's compose block sets both, and only `MAX_MEMORY` is UI-owned
+ * (`RUNTIME.zomboid.memory.keys`). Measured on production 2026-09-30, from the
+ * container's own log: `-Xms2048m -Xmx12288m` against `MIN_MEMORY: "2048m"` and
+ * `MAX_MEMORY: "12288m"` — the two lines reach the JVM verbatim. So picking 1 GB on the
+ * memory card wrote `-Xmx1024m` under `-Xms2048m`, and the JVM dies on
+ * "Initial heap size set to a larger value than the maximum heap size" before the game
+ * exists. The card then compared configured against live, found them equal, and rendered
+ * the setting as applied — green, correct by its own lights, and the world unbootable.
+ *
+ * Returns null when the service declares no minimum (Minecraft: `MEMORY` sets both).
+ */
+async function heapFloorGb(game: GameId): Promise<number | null> {
+  const rt = RUNTIME[game];
+  try {
+    const compose = await readCompose();
+    const env = await readEnvMap();
+    return parseGb(readServiceEnv(compose, rt.service, "MIN_MEMORY", env));
+  } catch {
+    // Unreadable compose is already handled by `getMemoryState`, which says so. Not
+    // being able to read the floor is not a reason to refuse a change outright.
+    return null;
+  }
+}
+
+/**
+ * A heap value that cannot be applied — out of range, or under the service's `-Xms`.
+ *
+ * A distinct class so `/api/games/memory` can answer **400** rather than 500. The message
+ * reached the user either way (the card toasts `data.error`), but a 500 says "the server
+ * broke", and this is the server working correctly and declining. The status code is what a
+ * log, a monitor or a future retry reads.
+ */
+export class MemoryRangeError extends Error {
+  readonly isMemoryRange = true;
+}
+
+export function isMemoryRangeError(e: unknown): e is MemoryRangeError {
+  return e instanceof Error && (e as MemoryRangeError).isMemoryRange === true;
+}
+
 export async function setMemory(game: GameId, gb: number, startedBy?: string | null): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");
   const cap = await maxGameGb();
   if (!Number.isFinite(gb) || gb < 1 || gb > cap) {
-    throw new Error(
+    throw new MemoryRangeError(
       `Memory must be between 1 and ${cap} GB. This host has ` +
         `${Math.round(await hostTotalGb())} GB, and the server needs roughly a gigabyte ` +
         `above its heap plus room for the OS and the dashboard.`
+    );
+  }
+
+  // Checked BEFORE the operation is admitted, like the cap above: a change that cannot
+  // be applied must not stop the world, recreate its container, or mark an in-flight
+  // backup pre-empted on the way to failing.
+  const floorGb = await heapFloorGb(game);
+  if (floorGb !== null && gb < floorGb) {
+    throw new MemoryRangeError(
+      `${GAMES[game].name}'s heap can't be set below ${floorGb} GB: docker-compose.yml also ` +
+        `sets MIN_MEMORY (-Xms) to ${floorGb} GB, and a JVM with -Xmx under -Xms refuses to ` +
+        `start. Nothing was changed. Lower MIN_MEMORY on the server first if you really need ` +
+        `${gb} GB.`
     );
   }
 
@@ -1692,13 +1886,9 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
       // Project Zomboid memory change showed a bare "Restarting" for the whole 300s
       // stop, which is exactly the "indistinguishable from hung" failure that
       // splitting `restartGame` into save/stop/start was meant to eliminate.
-      op.step("Editing docker-compose.yml", { game });
-      const { text, applied } = patchServiceEnv(await readCompose(), rt.service, updates);
-      if (applied.length === 0) {
-        throw new Error(`Couldn't find ${rt.memory!.keys.join("/")} in the ${rt.service} service`);
-      }
-      await writeCompose(text);
-      op.settle(`Set ${applied.join(", ")} to ${value} in docker-compose.yml`);
+      op.step(`Editing ${ENV_FILE}`, { game });
+      const { applied } = await writeServiceEnvToDotEnv(game, updates);
+      op.settle(`Set ${applied.join(", ")} to ${value} in ${ENV_FILE}`);
 
       const wasRunning = (await containerState(rt.container)) === "running";
       // Save first — recreating a running game server is otherwise a hard kill.

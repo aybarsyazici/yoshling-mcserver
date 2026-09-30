@@ -7,6 +7,7 @@ import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
 import { useOperations } from "@/components/operations-provider";
 import { liveFileOperations, namedFileOperations, powerBlocker, powerState } from "@/lib/operation-ui";
+import { coResidency } from "@/lib/coresidency";
 import { StatusPill } from "@/components/ui-bits";
 import { PowerCore, type CoreState } from "@/components/power-core";
 import { PowerGlyph } from "@/components/glyphs";
@@ -26,9 +27,20 @@ export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, busy: serverBusy, can, memoryGb, clockSkewMs, refresh } = useGames(
+  const { games, running, busy: serverBusy, can, memoryGb, clockSkewMs, refresh } = useGames(
     localBusy ? 1500 : 4000
   );
+  /**
+   * Two worlds up at once. A claim about the BOX, not about this world — which is why it
+   * is not folded into `power.reason` (that line is per-world by construction, and
+   * conflating "this world is busy" with "the box is in a bad state" is the same mistake
+   * as the `busy`/`ownBusy` conflation `docs/OPERATIONS.md` records).
+   *
+   * It belongs on this page as well as on `/home` because this is where someone who has
+   * noticed the server misbehaving ends up, and "why is it swapping" is answerable only if
+   * something says two worlds are running.
+   */
+  const co = coResidency(running);
   // The registry, not just the power lock: a four-minute backup of this world also
   // has to disable these buttons, and the single-slot lock could never say so.
   const { operations, elapsedMs } = useOperations();
@@ -178,6 +190,24 @@ export function GameControls({ game }: { game: GameId }) {
 
   return (
     <div className="grid gap-4 md:grid-cols-[1.4fr_1fr]" style={{ ["--tint" as string]: meta.tint }}>
+      {/* The box is running more than one world. One sentence, from `coResidency()`, so
+          this page, `/{game}` and `/home` cannot word the same fact three ways — the
+          three-copies drift that `docs/OPERATIONS.md` records for the power control. */}
+      {/* No `role="status"` — see the note on the same element in `mission-control.tsx`: a
+          live region created with its content is the case screen readers do not announce,
+          and this is persistent state rather than an event. */}
+      {co.message && (
+        <p
+          className="op-warn rounded-xl px-4 py-2.5 text-xs ring-1 md:col-span-2"
+          style={{
+            background: "color-mix(in oklab, var(--op-warn) 10%, transparent)",
+            ["--tw-ring-color" as string]: "color-mix(in oklab, var(--op-warn) 35%, transparent)",
+          }}
+        >
+          {co.message}
+        </p>
+      )}
+
       {/* Status panel */}
       <div
         className="relative overflow-hidden rounded-2xl bg-card/70 p-6 ring-1 backdrop-blur"

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/format";
+import { MAX_WORLD_UPLOAD_BYTES, MAX_WORLD_UPLOAD_LABEL } from "@/lib/sdtd-upload-limits";
 import { Button } from "@/components/ui/button";
 import { UploadCloud, Globe, Loader2, CheckCircle2, Trash2 } from "lucide-react";
 
@@ -54,6 +55,21 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
     if (!f) return;
     if (!f.name.toLowerCase().endsWith(".zip")) {
       toast.error("Please choose a .zip file");
+      return;
+    }
+    // Refuse here, not after the transfer. The server's cap is the same constant, so the
+    // only thing uploading an oversized file achieved was spending the whole upload time
+    // to be told no — over a home connection, that is tens of minutes. The cap is also
+    // Caddy's real ceiling on the direct host (see `sdtd-upload-limits.ts`), so anything
+    // above it could not arrive even if the route allowed it.
+    if (f.size > MAX_WORLD_UPLOAD_BYTES) {
+      toast.error(
+        // Advice that is true for BOTH inputs this control accepts. It used to end
+        // "Upload the world on its own, without the Saves folder" — but the route accepts a
+        // save zip too (`looksSave`/`SAVE_MARKERS`), so someone whose oversize file *is*
+        // the save was told to remove the thing they were uploading.
+        `That file is ${formatBytes(f.size)} — the limit is ${MAX_WORLD_UPLOAD_LABEL}. Upload the world and the save as separate zips, or split it.`
+      );
       return;
     }
     setFile(f);
@@ -106,7 +122,14 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
       } else if (xhr.status === 409 && data.error) {
         toast.error(data.error);
       } else if (xhr.status === 413) {
-        toast.error("File too large for this route. The direct-upload host may not be configured.");
+        // Two very different 413s reach here and the old code gave both the same
+        // explanation. Ours carries a JSON `error`; Cloudflare's (100 MB) and Caddy's
+        // (2 GB) are HTML pages with none, and *those* are the ones that mean the
+        // request never reached the app.
+        toast.error(
+          data.error ||
+            `The upload was rejected before it reached the server — it is over ${MAX_WORLD_UPLOAD_LABEL}, or the direct-upload host is not configured and Cloudflare's 100 MB cap applied.`
+        );
       } else {
         toast.error(data.error || `Upload failed (HTTP ${xhr.status})`);
       }
@@ -160,7 +183,10 @@ export function SdtdWorldUpload({ tint }: { tint: string }) {
         ) : (
           <>
             <span className="text-sm font-medium">Drop a .zip here or click to browse</span>
-            <span className="text-xs text-muted-foreground">A world zip has files like dtm.raw / biomes.png / prefabs.xml</span>
+            <span className="text-xs text-muted-foreground">
+              A world zip has files like dtm.raw / biomes.png / prefabs.xml; a save zip has a
+              region/ folder. Up to {MAX_WORLD_UPLOAD_LABEL} each
+            </span>
           </>
         )}
       </label>

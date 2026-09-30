@@ -34,7 +34,30 @@ export default defineConfig({
     // the co-located ones. Two configs briefly existed with mutually exclusive
     // globs and no textual conflict between them, so `npm test` reported green
     // while silently running 80 of 197 tests. One config, one glob, both trees.
-    include: ["tests/**/*.test.ts", "src/**/*.test.ts"],
+    //
+    // `.tsx` is in the glob as well, for the component suites. **It has to be spelled
+    // out**: `*.test.ts` does not match `*.test.tsx`, so adding a React suite without
+    // widening this collects zero of it and `npm test` still reports green — which is
+    // the same silent-green failure the two-configs incident produced, in a form that
+    // is even easier to miss because there is no second file to notice.
+    include: ["tests/**/*.test.ts?(x)", "src/**/*.test.ts?(x)"],
+    /**
+     * `node` stays the DEFAULT, and the component suites opt in per file with
+     * `// @vitest-environment jsdom`.
+     *
+     * Not a global switch: the pure-logic tests have no DOM in them, and making every
+     * one of them construct a jsdom window is a cost paid by the suite whose entire
+     * selling point is that it runs in well under a second on a laptop. Measured on Node
+     * 20.12: `environment` 381-462 ms and a total of 1.3-1.5 s with the two `.tsx` files,
+     * against `environment 2 ms` / 654 ms total for the node-only tests before they
+     * existed. So the whole DOM cost is ~0.4 s and it is confined to the two files that
+     * need it.
+     *
+     * Deliberately no test COUNT in that sentence. The first version said "281 tests",
+     * which was already wrong by one when it was written and goes stale on every test
+     * anyone adds -- a measurement that decays is the thing this project keeps getting
+     * bitten by. The environment cost is the figure this comment exists to record.
+     */
     environment: "node",
     // Fixtures are read with `readFile`, so no setup file and no globals.
     globals: false,

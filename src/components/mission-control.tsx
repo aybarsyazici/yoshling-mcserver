@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
+import { coResidency } from "@/lib/coresidency";
 import { useOperations } from "@/components/operations-provider";
 import {
   blockedReason,
@@ -52,8 +53,29 @@ export function MissionControl({
   access: GameId[];
 }) {
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, activeGame, busy: serverBusy, can, memoryGb, hostGb, clockSkewMs, loading, refresh } =
-    useGames(localBusy ? 1500 : 5000);
+  const {
+    games,
+    activeGame,
+    running,
+    busy: serverBusy,
+    can,
+    memoryGb,
+    hostGb,
+    maxGb,
+    clockSkewMs,
+    loading,
+    refresh,
+  } = useGames(localBusy ? 1500 : 5000);
+  /**
+   * Two worlds up at once — the state this box cannot support and, until now, the state
+   * nothing in the app reported.
+   *
+   * It is read here rather than only in `RamBudget` because RAM is the *consequence*, not
+   * the fact. The landing page is where someone looks to find out which world holds the
+   * box, so it is where "actually, two do" has to appear — above the cards, not buried in
+   * a bar at the bottom.
+   */
+  const co = coResidency(running);
   /**
    * The live operation, read from the registry rather than kept here.
    *
@@ -169,10 +191,20 @@ export function MissionControl({
     ? "You can view these servers but not power them. Ask an admin for Mod access."
     : null;
 
-  /** The other worlds currently holding (or claiming) the box. */
+  /**
+   * The other worlds currently holding (or claiming) the box.
+   *
+   * Must stay identical to `powerState`'s `blocking` — this is the predicate that decides
+   * whether the "Switch servers?" dialog appears at all, and that one decides what it
+   * says, so a divergence produces a dialog that names nothing or no dialog at all. Both
+   * key on `containerRunning`, because a world that is up but not answering RCON reports
+   * `status: "offline"` and `powerOn` will still stop it.
+   */
   function runningOthers(game: GameId): GameId[] {
     return otherGames(game).filter((g) => {
-      const s = games?.[g]?.status;
+      const snap = games?.[g];
+      if (snap?.containerRunning !== undefined) return snap.containerRunning;
+      const s = snap?.status;
       return s === "online" || s === "starting";
     });
   }
@@ -325,13 +357,52 @@ export function MissionControl({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              {activeGame ? `${GAMES[activeGame].short} running` : "all stopped"}
+              {/* Every running world, not just the first. `activeGame` is a singular, so
+                  this caption named one world while two were up — and the power bus below
+                  can only light one branch, which made the idle caption the only place the
+                  truth could have appeared. */}
+              {co.running.length === 0
+                ? "all stopped"
+                : `${co.running.map((g) => GAMES[g].short).join(" + ")} running`}
             </motion.p>
           )}
         </AnimatePresence>
       </div>
 
-      {/* Which world the slot is currently wired to */}
+      {/* Two worlds at once, said plainly and above the fold.
+          This is the oldest open item in the project: it happened on 2026-09-26 (PZ
+          started on top of a 7DTD that had been up two days; 2.2 GB into swap when found)
+          and it was found by accident, because nothing anywhere reported it. The cause was a hand-run `docker start`, which no amount of
+          app-side refusal can prevent — so saying so is the part that has to work. */}
+      {/* No `role="status"`. `OperationLedger` records, at length, that a live region
+          created at the same moment as its content is the documented unreliable case for
+          `aria-live` — which is exactly what a `{cond && <p role="status">}` is. Claiming an
+          announcement that will not happen is the same class of lie as the rest of this
+          file's history; the ledger's one unconditional region is the honest mechanism, and
+          this is a persistent state notice rather than an event.
+
+          Contrast, because `globals.css` records that a Latte amber's contrast is a
+          measurement and not a derivation: `--op-warn` text on this 10%-alpha wash
+          computes to **5.50:1 on `--background` and 5.13:1 on `--card` in Latte, 9.62 and
+          10.43 in Mocha** — all clear of AA's 4.5. That is computed (sRGB compositing of a
+          0.1-alpha overlay, then WCAG relative luminance), not pixel-sampled on the box
+          the way the strip's 5.47 was, so treat it as one digit less certain. */}
+      {co.message && (
+        <p
+          className="op-warn mx-auto mt-4 max-w-xl rounded-xl px-4 py-2.5 text-center text-xs ring-1"
+          style={{
+            background: "color-mix(in oklab, var(--op-warn) 10%, transparent)",
+            ["--tw-ring-color" as string]: "color-mix(in oklab, var(--op-warn) 35%, transparent)",
+          }}
+        >
+          {co.message}
+        </p>
+      )}
+
+      {/* Which world the slot is currently wired to.
+          `live` stays singular on purpose: the bus is a picture of ONE trunk feeding one
+          branch, and lighting two would draw a box that can do something it cannot. The
+          sentence above is what covers the case the diagram cannot. */}
       <div className="h-14 w-full">
         <PowerBus worlds={worlds} live={activeGame} linesClassName={layout.bus} />
       </div>
@@ -366,7 +437,9 @@ export function MissionControl({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, delay: 0.35 }}
       >
-        <RamBudget activeGame={activeGame} hostGb={hostGb} memoryGb={memoryGb} />
+        {/* `running`, not `activeGame`: the bar's whole job is the box's memory limit, and
+            a singular could not show the limit being exceeded. */}
+        <RamBudget running={running} hostGb={hostGb} maxGb={maxGb} memoryGb={memoryGb} />
       </motion.div>
 
       {/* Hand-off confirm */}
@@ -720,8 +793,22 @@ function WorldCard({
           ) : (
             <StatusPill
               status={
-                isBusyThis && !isOnline ? (power.ownStopping ? "stopping" : "starting") : status
+                isBusyThis && !isOnline
+                  ? power.ownStopping
+                    ? "stopping"
+                    : "starting"
+                  : // An unreachable container is amber, not grey. The `status` it carries is
+                    // literally `offline`, and this pill printed "Stopped" beside a button
+                    // reading "Power off" — the last unfixed half of the `a7d76b8` honest-label
+                    // work, and the only one of the three power surfaces that still had it.
+                    // `game-controls.tsx` and `game-overview.tsx` both print `power.heading`.
+                    power.unreachable
+                    ? "starting"
+                    : status
               }
+              // The words come from the one shared derivation, so "Starting…" and "Not
+              // responding" cannot be worded differently here than on the other two surfaces.
+              label={!isBusyThis && power.unreachable ? power.heading : undefined}
               tint={meta.tint}
             />
           )}
