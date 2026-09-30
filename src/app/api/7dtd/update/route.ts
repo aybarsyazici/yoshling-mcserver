@@ -6,7 +6,8 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { db } from "@/lib/db";
 import { patchServiceEnv, readCompose, writeCompose } from "@/lib/compose";
-import { recreateService } from "@/lib/game-manager";
+import { containerIsRunning, recreateService } from "@/lib/game-manager";
+import { CoResidencyError, refuseCoResidency } from "@/lib/coresidency";
 import { POWER_RESOURCES, runOperation } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 
@@ -112,6 +113,44 @@ export async function POST() {
       async (op) => {
         const [installedBefore] = await Promise.all([installedBuildId()]);
 
+        /**
+         * Refuse before touching anything if another world holds the box.
+         *
+         * `recreateService("7dtd", { start: true })` below **starts the container** —
+         * that is how `START_MODE=3` gets to run SteamCMD. So this route was a start
+         * path that never evicted: run it while Project Zomboid was up and the box had
+         * two worlds on it, with a green "Update requested" and nothing anywhere saying
+         * so. `POWER_RESOURCES` serialised it; serialising is not evicting.
+         *
+         * It **refuses** rather than evicting, and that asymmetry with `powerOn` is
+         * deliberate. `powerOn` evicts because the user pressed Power on after a dialog
+         * that named the world going down. Nobody pressing "Update" consented to
+         * stopping someone else's game, and doing it anyway would be this codebase's
+         * signature defect — a destructive action reported as a success — wearing a
+         * fix's clothes. See `admitStart`'s `mayEvict` in `lib/coresidency.ts`.
+         *
+         * Inside the operation, not before it, so the refusal is recorded in the ledger
+         * with the blocker named instead of vanishing into a 4-second toast. It runs
+         * after admission, which is safe here precisely because admission holds
+         * `POWER_RESOURCES`: no app path can start a world between this check and the
+         * recreate. The remaining case is an out-of-band `docker start`, which is what
+         * caused the 2026-09-26 overlap and is what the reporting side is for.
+         */
+        op.step("Checking the box has room");
+        try {
+          await refuseCoResidency("7dtd", containerIsRunning, "The update");
+        } catch (e) {
+          if (e instanceof CoResidencyError) {
+            op.reject(
+              `${e.running.length > 1 ? "Other worlds are" : "Another world is"} running — ` +
+                `the update was not started`
+            );
+            op.fact({ label: "Power", value: "another world is running", verdict: "warn" });
+          }
+          throw e;
+        }
+        op.settle("Nothing else is running");
+
         op.step("Saving the world");
         // Best-effort: the server may not be up, and that is not a reason to refuse.
         let saved = false;
@@ -189,6 +228,15 @@ export async function POST() {
     });
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
+    // 409, not 500: nothing broke. Another world holds the box, the request was refused
+    // before anything was touched, and the fix is an action the caller can take — which
+    // is the same shape as every other conflict this app answers with 409.
+    if (e instanceof CoResidencyError) {
+      return NextResponse.json(
+        { error: e.message, conflict: "coresidency", running: e.running },
+        { status: 409 }
+      );
+    }
     return NextResponse.json({ error: (e as Error).message || "Update failed" }, { status: 500 });
   }
 }

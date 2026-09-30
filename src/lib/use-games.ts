@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameId, ServerStatus } from "@/lib/games";
+import { runningWorlds } from "@/lib/coresidency";
 
 export interface GameSnapshot {
   game: GameId;
@@ -44,6 +45,21 @@ export interface ControlLock {
 export interface GamesState {
   games: Record<GameId, GameSnapshot> | null;
   activeGame: GameId | null;
+  /**
+   * Every world whose container is up — plural, and that is the point.
+   *
+   * `activeGame` is a singular and cannot express the one state this box must not be in.
+   * Only one world fits in 16 GB; `powerOn` evicts, but on 2026-09-26 two worlds ran for
+   * two days at 2 GB into swap after a hand-run `docker start`, and nothing in the app
+   * said so — the dashboard whose whole subject is which world holds the box had no way
+   * to report that two did.
+   *
+   * Server-computed from `containerRunning` so that a world which is up but not answering
+   * still counts. `runningWorlds(games)` in `lib/coresidency.ts` re-derives the same list
+   * client-side and is the fallback used below, so a browser holding this page across a
+   * deploy to an older build does not silently stop reporting.
+   */
+  running: GameId[];
   /** A server power op is in flight (from any client); disables controls. */
   busy: ControlLock | null;
   /**
@@ -74,6 +90,13 @@ export interface GamesState {
   /** Total host RAM in GB. */
   hostGb: number | null;
   /**
+   * The most heap one world may be given (`maxGameGb()`): host total minus a 2.5 GB
+   * reserve, ~13 GB on this box. **It assumes that world is the only one running** — it
+   * subtracts nothing for whatever else is up. `perWorldCeiling()` is what turns it into
+   * a figure a user can act on; do not render it bare.
+   */
+  maxGb: number | null;
+  /**
    * The server's clock at the last poll, minus the browser's at the same moment.
    * Elapsed times add this: `Date.now() - busy.since` mixes a browser clock with a
    * server epoch, and a machine a few minutes out then shows nonsense or negative
@@ -88,11 +111,13 @@ export interface GamesState {
 export function useGames(interval = 5000): GamesState {
   const [games, setGames] = useState<Record<GameId, GameSnapshot> | null>(null);
   const [activeGame, setActiveGame] = useState<GameId | null>(null);
+  const [running, setRunning] = useState<GameId[]>([]);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
   const [can, setCan] = useState({ start: false, stop: false, restart: false });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
+  const [maxGb, setMaxGb] = useState<number | null>(null);
   const [clockSkewMs, setClockSkewMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
@@ -107,11 +132,18 @@ export function useGames(interval = 5000): GamesState {
       if (typeof data.serverNow === "number") setClockSkewMs(data.serverNow - receivedAt);
       setGames(data.games);
       setActiveGame(data.activeGame ?? null);
+      // Prefer the server's list; fall back to deriving it from the snapshot it just
+      // sent. The fallback is not defensive padding — a browser can hold this page
+      // across a deploy, and an older build that has `games` but no `running` would
+      // otherwise report "one world up" while two were, which is the exact silence
+      // this field exists to end.
+      setRunning(Array.isArray(data.running) ? data.running : runningWorlds(data.games));
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
       if (data.can) setCan(data.can);
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
+      setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);
     } catch {
       /* keep last known */
     } finally {
@@ -135,5 +167,18 @@ export function useGames(interval = 5000): GamesState {
     };
   }, [refresh, interval]);
 
-  return { games, activeGame, busy, access, can, memoryGb, hostGb, clockSkewMs, loading, refresh };
+  return {
+    games,
+    activeGame,
+    running,
+    busy,
+    access,
+    can,
+    memoryGb,
+    hostGb,
+    maxGb,
+    clockSkewMs,
+    loading,
+    refresh,
+  };
 }
