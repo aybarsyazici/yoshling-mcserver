@@ -4,30 +4,32 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { readdir, stat, rm, readFile, writeFile, mkdir } from "fs/promises";
+import { stat, rm, readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
-import { db } from "@/lib/db";
-import { containerIsRunning, RUNTIME, withGameStopped } from "@/lib/game-manager";
-import { sdtdSaveWorld } from "@/lib/telnet";
-import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
+import { withGameStopped } from "@/lib/game-manager";
 import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
-import { formatBytes } from "@/lib/format";
+import { BadArchiveError, removeManifestSidecar, safeBackupName } from "@/lib/backup-archive";
 import {
-  BadArchiveError,
-  readManifestSidecar,
-  refuseIfPreemptedEarly,
-  removeManifestSidecar,
-  safeBackupName,
-  writeManifestSidecar,
-} from "@/lib/backup-archive";
+  archiveResponse,
+  BACKUP_DIRS,
+  listArchives,
+  readBackupManifest,
+} from "@/lib/backup-store";
+import {
+  createBackup,
+  SDTD_DIR,
+  SDTD_XML_PATH,
+  type SevenDaysManifest,
+} from "@/lib/backup-create";
+import { integrityFact, verifyArchive } from "@/lib/backup-integrity";
+import { describePolicy, policyFor } from "@/lib/backup-retention";
+import { readJournal, recordBackupEvent } from "@/lib/backup-log";
+import { intervalMsFor, scheduleEnabled } from "@/lib/backup-schedule";
 
 export const maxDuration = 300;
 
 const execFileAsync = promisify(execFile);
-const SDTD_DIR = RUNTIME["7dtd"].dir; // .local/share/7DaysToDie (saves + GeneratedWorlds)
-const CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config"; // serverfiles (sdtdserver.xml)
-const BACKUP_DIR = "/app/data/backups-7dtd";
-const XML_PATH = path.join(CONFIG_DIR, "sdtdserver.xml");
+const BACKUP_DIR = BACKUP_DIRS["7dtd"];
 const TAR_TIMEOUT_MS = 240_000;
 
 // A self-contained 7DTD backup bundles three things so a restore fully rebuilds
@@ -36,21 +38,8 @@ const TAR_TIMEOUT_MS = 240_000;
 //   GeneratedWorlds/<world>/   – the custom map itself (if the active world is custom)
 //   sdtdserver.xml             – server settings (incl. which world/game is active)
 // A manifest.json records the world name so the UI can show it and so world
-// deletion can refuse to remove a world that a backup depends on.
-
-interface Manifest {
-  createdAt: string;
-  gameWorld: string; // value of GameWorld at backup time
-  includesWorldMap: boolean; // true if GeneratedWorlds/<gameWorld> was bundled
-  /**
-   * Whether the server was asked to write its save out before the copy.
-   *
-   * `false` = the server was stopped, so there was nothing to flush and the files on
-   * disk were already at rest. `undefined` = an archive from before this was recorded,
-   * i.e. genuinely unknown rather than "no".
-   */
-  flushed?: boolean;
-}
+// deletion can refuse to remove a world that a backup depends on. The shape lives in
+// `lib/backup-create.ts`, next to the code that writes it.
 
 async function isDir(p: string): Promise<boolean> {
   return stat(p)
@@ -58,86 +47,85 @@ async function isDir(p: string): Promise<boolean> {
     .catch(() => false);
 }
 
-function readGameWorld(xml: string): string {
-  const m = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i);
-  return m ? m[1] : "";
-}
-
-/**
- * A backup's manifest — from the sidecar if there is one, else out of the tar.
- *
- * Reading the in-tar copy costs a full gzip decompression of a ~290 MB archive to get
- * ~100 bytes, and this is called once per archive by the GET **and** again by
- * `worldsUsedByBackups`, which the world-delete guard calls. Measured on production
- * 2026-09-29: `GET /api/7dtd/backups` took **7.9 s** to return 955 bytes of JSON for
- * six archives. That is the backups page's first paint.
- *
- * The in-tar copy is not going anywhere — it is what makes an archive self-describing
- * after it has been copied off the box, which the sidecar cannot be.
- *
- * The fallback **fills the sidecar in**, so the nine archives that predate this get the
- * speed-up on their second listing rather than never. Best-effort: a write that fails
- * changes nothing, and only a manifest that actually parsed is ever cached.
- */
-async function backupManifest(file: string): Promise<Manifest | null> {
-  const target = path.join(BACKUP_DIR, file);
-  const sidecar = await readManifestSidecar<Manifest>(target);
-  if (sidecar) return sidecar;
-  // The tar is created with `-C <dir> .`, so members are stored as
-  // "./manifest.json". Try both spellings to be safe across tar versions.
-  for (const member of ["./manifest.json", "manifest.json"]) {
-    try {
-      const { stdout } = await execFileAsync("tar", ["-xzOf", target, member], {
-        maxBuffer: 1024 * 1024,
-      });
-      const parsed: Manifest = JSON.parse(stdout);
-      await writeManifestSidecar(target, parsed);
-      return parsed;
-    } catch {
-      /* try the other spelling */
-    }
-  }
-  return null;
-}
+const backupManifest = (file: string) =>
+  readBackupManifest<SevenDaysManifest>(BACKUP_DIR, file);
 
 /** Which custom worlds are referenced by existing backups (for delete-guard). */
 export async function worldsUsedByBackups(): Promise<Set<string>> {
   const used = new Set<string>();
-  try {
-    const files = (await readdir(BACKUP_DIR)).filter((f) => f.endsWith(".tar.gz"));
-    for (const f of files) {
-      const m = await backupManifest(f);
-      if (m?.includesWorldMap && m.gameWorld) used.add(m.gameWorld);
-    }
-  } catch {}
+  for (const a of await listArchives(BACKUP_DIR)) {
+    const m = await backupManifest(a.name);
+    if (m?.includesWorldMap && m.gameWorld) used.add(m.gameWorld);
+  }
   return used;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
 
+  const { searchParams } = new URL(request.url);
+
+  // ?download=<archive> — see the note in `/api/server/backups`. Gated on
+  // `settings.edit` rather than on mere read access: a 7DTD archive is the whole save
+  // plus `sdtdserver.xml`, which contains the telnet password.
+  const download = searchParams.get("download");
+  if (download) {
+    if (!hasPermission(session.user.role, "settings.edit")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const name = safeBackupName(download);
+    if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
+    try {
+      const response = await archiveResponse(BACKUP_DIR, name);
+      await recordBackupEvent(
+        "7dtd",
+        "download",
+        { userId: session.user.id, name: session.user.name ?? "" },
+        { outcome: "ok", name },
+        { action: "backup_download", details: { name } }
+      );
+      return response;
+    } catch {
+      return NextResponse.json({ error: "No such backup" }, { status: 404 });
+    }
+  }
+
+  if (searchParams.get("meta")) {
+    const policy = policyFor("7dtd");
+    return NextResponse.json({
+      policy,
+      policyText: describePolicy(policy),
+      schedule: {
+        enabled: scheduleEnabled(),
+        everyHours: Math.round(intervalMsFor("7dtd") / 3_600_000),
+      },
+      // See the note in `/api/server/backups`: the journal's `error` strings are raw
+      // thrown messages and can carry container paths, so they follow `settings.edit`.
+      journal: hasPermission(session.user.role, "settings.edit")
+        ? await readJournal("7dtd", 8)
+        : [],
+    });
+  }
+
   try {
     await mkdir(BACKUP_DIR, { recursive: true });
-    const entries = await readdir(BACKUP_DIR);
     const backups = await Promise.all(
-      entries
-        .filter((e) => e.endsWith(".tar.gz"))
-        .map(async (name) => {
-          const s = await stat(path.join(BACKUP_DIR, name));
-          const m = await backupManifest(name);
-          return {
-            name,
-            size: s.size,
-            createdAt: s.mtime.toISOString(),
-            world: m?.gameWorld ?? null,
-            includesWorldMap: m?.includesWorldMap ?? false,
-          };
-        })
+      (await listArchives(BACKUP_DIR)).map(async (a) => {
+        const m = await backupManifest(a.name);
+        return {
+          name: a.name,
+          size: a.size,
+          createdAt: new Date(a.createdAtMs).toISOString(),
+          world: m?.gameWorld ?? null,
+          includesWorldMap: m?.includesWorldMap ?? false,
+          verifiable: Boolean(m?.sha256),
+          automatic: m?.automatic ?? false,
+        };
+      })
     );
-    backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return NextResponse.json(backups);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
@@ -154,173 +142,17 @@ export async function POST(request: NextRequest) {
   }
 
   const { action, backupName } = await request.json();
+  const actor = { userId: session.user.id, name: session.user.name ?? "" };
 
   if (action === "create") {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const work = path.join(BACKUP_DIR, `.work-${stamp}`);
-    let target = "";
     try {
-      // Holds `files:7dtd`: two creates now serialise instead of colliding on the
-      // same second-resolution `.work-${stamp}` directory, which each one begins by
-      // `rm -rf`-ing. A power operation is still admitted over this, with a
-      // confirmation naming the torn archive — Power off is the recovery path on this
-      // box and must never be blocked by a four-minute `tar`.
-      const backup = await runOperation(
-        {
-          kind: "backup.create",
-          game: "7dtd",
-          title: "Creating a backup",
-          startedBy: session.user.name ? { name: session.user.name } : null,
-        },
-        async (op) => {
-          await mkdir(BACKUP_DIR, { recursive: true });
-
-          // Ask the game to write its save out before we copy it. No `create` path used
-          // to do this, though every driver exposes a save and the *restore* paths all
-          // use one, so a backup taken while people played copied files the server was
-          // still midway through writing.
-          //
-          // Flush only — deliberately no `save-off` equivalent, because 7DTD has none.
-          // Inventing a command that silently fails is the defect class being cleaned up.
-          const flushed = await flushSaves(op);
-
-          // Preemption is checked at EVERY step boundary from here on, not only after the
-          // tar. Measured on production 2026-09-29 (on Project Zomboid, same shape): the
-          // flag was set 94 s into a 9m 43s backup and the only check ran last, so the
-          // app spent a further ~7m 55s writing an archive it had already decided to
-          // delete, competing for disk with the operation that condemned it.
-          refuseIfPreemptedEarly(op, "this backup");
-
-          // Determine the active world from the config.
-          let xml = "";
-          try { xml = await readFile(XML_PATH, "utf-8"); } catch {}
-          const gameWorld = readGameWorld(xml);
-
-          // Stage the pieces in a work dir, then tar them together.
-          await rm(work, { recursive: true, force: true });
-          await mkdir(work, { recursive: true });
-
-          // 1) Saves/ — `cp -a` rather than fs.cp because the game container runs as
-          // a non-root user and the copy has to keep its ownership. A backup without
-          // Saves/ is worthless, so refuse instead of writing one that looks fine.
-          op.step("Copying the saves");
-          const savesSrc = path.join(SDTD_DIR, "Saves");
-          if (!(await isDir(savesSrc))) {
-            throw new Error(`No Saves/ in ${SDTD_DIR} — the server has not generated a world yet.`);
-          }
-          await execFileAsync("cp", ["-a", savesSrc, work]);
-          op.settle("Copied the saves");
-
-          // The saves copy is the long one, so this boundary saves the most.
-          refuseIfPreemptedEarly(op, "this backup");
-
-          // 2) the custom world map, only if the active world is a custom one.
-          const worldSrc = path.join(SDTD_DIR, "GeneratedWorlds", gameWorld);
-          let includesWorldMap = false;
-          op.step("Copying the world map");
-          if (gameWorld && (await isDir(worldSrc))) {
-            await mkdir(path.join(work, "GeneratedWorlds"), { recursive: true });
-            await execFileAsync("cp", ["-a", worldSrc, path.join(work, "GeneratedWorlds")]);
-            includesWorldMap = true;
-            op.settle(`Copied the world map — ${gameWorld}`);
-          } else {
-            // Stock world (Navezgane/Pregen…) — it ships with the server, so there is
-            // genuinely nothing to bundle and the archive is still a full restore
-            // point. Deliberately NOT a `noop`: that would make the operation
-            // `partial` and say "this is not a restore point", which would be false.
-            op.settle(
-              gameWorld
-                ? `No custom map to copy — "${gameWorld}" ships with the server`
-                : "No world map named in the config"
-            );
-          }
-
-          // 3) sdtdserver.xml
-          if (xml) await writeFile(path.join(work, "sdtdserver.xml"), xml, "utf-8");
-
-          // 4) manifest
-          // `flushed` goes in the manifest so a restore can say whether this archive came
-          // from a quiesced world rather than leaving that to be assumed. Older bundles
-          // have no such key, which reads as `undefined` — honestly "unknown".
-          const manifest: Manifest = {
-            createdAt: new Date().toISOString(),
-            gameWorld,
-            includesWorldMap,
-            flushed,
-          };
-          await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
-
-          const filename = `7dtd-${gameWorld || "world"}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
-          target = path.join(BACKUP_DIR, filename);
-
-          // The last boundary before a `tar` nothing can interrupt.
-          refuseIfPreemptedEarly(op, "this backup");
-
-          op.step("Compressing the archive");
-          await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
-
-          let size: number | null = null;
-          let mtime = new Date();
-          try {
-            const s = await stat(target);
-            size = s.size;
-            mtime = s.mtime;
-          } catch {}
-          op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
-
-          // A power operation admitted over this one means the world was saved and
-          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
-          // as a restore point would be exactly the "reports success after doing the
-          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
-          // below does the `rm`.
-          refuseIfPreempted(op, "this backup");
-
-          // Only now, after the preemption refusal: a sidecar written earlier would
-          // outlive the archive that refusal deletes, and be adopted by the next archive
-          // to land on the same name.
-          await writeManifestSidecar(target, manifest);
-
-          const facts: OperationFact[] = [];
-          if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
-          facts.push({
-            label: "World map",
-            value: includesWorldMap ? "included" : "not needed (stock world)",
-          });
-          facts.push({
-            label: "Saves flushed first",
-            value: flushed ? "yes" : "not needed — the server was not running",
-          });
-          return {
-            facts,
-            value: {
-              name: filename,
-              size: size ?? 0,
-              createdAt: mtime.toISOString(),
-              world: gameWorld || null,
-              includesWorldMap,
-            },
-          };
-        }
-      );
-      await logBackup(session.user.id, "backup_create", {
-        name: backup.name,
-        sizeBytes: backup.size,
-        world: backup.world,
-        includesWorldMap: backup.includesWorldMap,
-      });
-      return NextResponse.json({ success: true, backup });
+      // The work lives in `lib/backup-create.ts` so the scheduler takes the same backup —
+      // same telnet flush, same pre-emption boundaries, same checksum, same retention.
+      const { backup, pruned } = await createBackup("7dtd", actor);
+      return NextResponse.json({ success: true, backup, pruned });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
-      // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
-      // that the listing would offer as restorable — and its sidecar has to go with it,
-      // or the manifest outlives the archive it describes.
-      if (target) {
-        await rm(target, { force: true }).catch(() => {});
-        await removeManifestSidecar(target);
-      }
       return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: 500 });
-    } finally {
-      await rm(work, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -334,8 +166,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No such backup" }, { status: 404 });
     }
 
+    const m = await backupManifest(name);
     try {
-      const m = await backupManifest(name);
+      // Checksum **before** the world is stopped: a corrupt archive then costs no
+      // downtime at all. An archive with no recorded checksum is unknown, not bad —
+      // every archive on the box today predates them — so it is reported, not refused.
+      const integrity = await verifyArchive(BACKUP_DIR, name, m);
+
       // A running server holds the save in memory and writes it back on its next
       // autosave, so restoring underneath it changed nothing that survived — and
       // still reported success. `withGameStopped` saves + stops first, restores,
@@ -350,11 +187,10 @@ export async function POST(request: NextRequest) {
           op.detail(name);
           await restoreBundle(backupPath, m);
           op.settle(
-            m?.includesWorldMap
-              ? "Replaced the saves and the world map"
-              : "Replaced the saves"
+            m?.includesWorldMap ? "Replaced the saves and the world map" : "Replaced the saves"
           );
           op.fact({ label: "Archive", value: name });
+          op.fact(integrityFact(integrity));
           if (m?.gameWorld) op.fact({ label: "World", value: m.gameWorld });
         },
         {
@@ -364,20 +200,44 @@ export async function POST(request: NextRequest) {
           restartOnFailure: false,
         }
       );
-      await logBackup(session.user.id, "backup_restore", {
-        name,
-        world: m?.gameWorld ?? null,
-        includesWorldMap: m?.includesWorldMap ?? false,
-        restartedAfter: restarted,
+      await recordBackupEvent(
+        "7dtd",
+        "restore",
+        actor,
+        { outcome: "ok", name, detail: m?.gameWorld ?? integrity.state },
+        {
+          action: "backup_restore",
+          details: {
+            name,
+            world: m?.gameWorld ?? null,
+            includesWorldMap: m?.includesWorldMap ?? false,
+            restartedAfter: restarted,
+          },
+        }
+      );
+      return NextResponse.json({
+        success: true,
+        restoredWorld: m?.gameWorld ?? null,
+        restarted,
+        checksum: integrity.state,
       });
-      return NextResponse.json({ success: true, restoredWorld: m?.gameWorld ?? null, restarted });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
+      // A failed restore is the thing people need to find an hour later, and nothing used
+      // to record one. A conflict is excluded above: it never started.
+      const error = (e as Error).message || "Restore failed";
+      await recordBackupEvent(
+        "7dtd",
+        "restore",
+        actor,
+        { outcome: "failed", name, error },
+        { action: "backup_failed", details: { what: "restore", name, error } }
+      );
       // The archive is wrong about itself — the user's own file, not a broken server.
       if (e instanceof BadArchiveError) {
         return NextResponse.json({ error: e.message }, { status: 400 });
       }
-      return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
+      return NextResponse.json({ error }, { status: 500 });
     }
   }
 
@@ -389,6 +249,8 @@ export async function POST(request: NextRequest) {
     // while a restore reads it, or while a create writes into this directory, is the
     // case worth refusing. An `rm` is sub-second, so it gets the lane rather than a
     // `runOperation` record — a strip row and a completion toast for it would be noise.
+    // `backup.restore` declares every `files:` lane, so this is also what makes "never
+    // delete the archive a restore is reading" true rather than hoped for.
     const laneBusy = fileLaneBusy("7dtd");
     if (laneBusy) return laneBusy;
 
@@ -406,7 +268,13 @@ export async function POST(request: NextRequest) {
     try {
       await rm(target);
       await removeManifestSidecar(target);
-      await logBackup(session.user.id, "backup_delete", { name });
+      await recordBackupEvent(
+        "7dtd",
+        "delete",
+        actor,
+        { outcome: "ok", name },
+        { action: "backup_delete", details: { name } }
+      );
       return NextResponse.json({ success: true });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
@@ -417,79 +285,12 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * The durable half of this feature.
- *
- * The operation registry forgets a clean record in 10 minutes; `/activity` does not.
- * Until 2026-09-29 **no backup action of any kind had ever written a row** — verified
- * against the production DB, which held 182 rows across ten action types and not one
- * `backup_*`. A restore replaces the save people play, and a restore does not even go
- * through `/api/games/control`, so it left no `server_stop`/`server_start` either:
- * "when did the world get replaced, and by whom" was unanswerable ten minutes later.
- *
- * `game` has to be in `details`: `/api/activity` selects each world's panel with
- * `contains "<game>"`, and an untagged row is shown to everyone.
- *
- * Logged rather than swallowed, following `mc-whitelist`'s precedent. Only ever called
- * after the work succeeded — a refused backup writes nothing, because a log of things
- * that did not happen is worse than no log.
- */
-async function logBackup(
-  userId: string,
-  action: "backup_create" | "backup_restore" | "backup_delete",
-  details: Record<string, unknown>
-): Promise<void> {
-  try {
-    await db.activity.create({
-      data: { userId, action, details: JSON.stringify({ game: "7dtd", ...details }) },
-    });
-  } catch (e) {
-    console.error(`[7dtd/backups] could not write the ${action} activity row:`, e);
-  }
-}
-
-/**
- * Ask 7DTD to write its save to disk before the copy, over telnet.
- *
- * Returns whether the flush was asked for at all — `false` means the container is not
- * running, which is a `noop` step rather than a failure. A telnet failure is recorded as
- * a warn and does NOT abort: a torn archive beats no archive, and an unreachable server
- * is exactly when someone wants a backup.
- *
- * No `save-off`: 7DTD has no such command, so there is nothing to pause and nothing to
- * re-enable in a `finally`.
- */
-async function flushSaves(op: OpHandle): Promise<boolean> {
-  op.step("Flushing the saves to disk");
-  if (!(await containerIsRunning("7dtd").catch(() => false))) {
-    // `done`, NOT `noop`: a stopped server's files are already consistent, which is the
-    // best case for a backup. As `noop` this concluded `partial` and the summary read
-    // "but part of it is missing. This is not a restore point." for a flawless archive.
-    op.settle("The server is stopped — its files are already at rest");
-    return false;
-  }
-  const t0 = Date.now();
-  try {
-    await sdtdSaveWorld();
-    op.settle(`Flushed the saves — ${Date.now() - t0} ms`);
-    return true;
-  } catch (e) {
-    op.settle("Could not flush the saves — the server did not answer over telnet");
-    op.fact({
-      label: "Save flush",
-      value: `failed (${(e as Error).message}) — the archive may be torn`,
-      verdict: "warn",
-    });
-    return true;
-  }
-}
-
-/**
  * Extract the bundle, check each piece is really in it, and only then replace the
  * live copy. Every step below used to be `rm -rf <live>` followed by `cp … || true`
  * with the whole block wrapped in a swallow, so a bundle missing its `Saves/`
  * deleted the save, copied nothing, and answered `{success:true}`.
  */
-async function restoreBundle(backupPath: string, m: Manifest | null): Promise<void> {
+async function restoreBundle(backupPath: string, m: SevenDaysManifest | null): Promise<void> {
   const work = path.join(BACKUP_DIR, `.restore-${Date.now()}`);
   await rm(work, { recursive: true, force: true });
   await mkdir(work, { recursive: true });
@@ -535,7 +336,7 @@ async function restoreBundle(backupPath: string, m: Manifest | null): Promise<vo
     // write is not, and used to be swallowed.
     const xmlSrc = path.join(work, "sdtdserver.xml");
     const savedXml = await readFile(xmlSrc, "utf-8").catch(() => null);
-    if (savedXml !== null) await writeFile(XML_PATH, savedXml, "utf-8");
+    if (savedXml !== null) await writeFile(SDTD_XML_PATH, savedXml, "utf-8");
   } finally {
     await rm(work, { recursive: true, force: true }).catch(() => {});
   }

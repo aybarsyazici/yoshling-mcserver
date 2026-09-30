@@ -3,27 +3,28 @@ import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { readdir, stat, rm, writeFile, mkdir, cp } from "fs/promises";
+import { readdir, stat, rm, mkdir, cp } from "fs/promises";
 import path from "path";
-import { db } from "@/lib/db";
-import { PZ_DIR, pzSave, savePaths } from "@/lib/zomboid";
-import { containerIsRunning, withGameStopped } from "@/lib/game-manager";
-import { refuseIfPreempted, runOperation, type OperationFact, type OpHandle } from "@/lib/operations";
+import { PZ_DIR, savePaths } from "@/lib/zomboid";
+import { withGameStopped } from "@/lib/game-manager";
 import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
-import { formatBytes } from "@/lib/format";
+import { BadArchiveError, removeManifestSidecar, safeBackupName } from "@/lib/backup-archive";
 import {
-  BadArchiveError,
-  readManifestSidecar,
-  refuseIfPreemptedEarly,
-  removeManifestSidecar,
-  safeBackupName,
-  writeManifestSidecar,
-} from "@/lib/backup-archive";
+  archiveResponse,
+  BACKUP_DIRS,
+  listArchives,
+  readBackupManifest,
+} from "@/lib/backup-store";
+import { createBackup, type ZomboidManifest } from "@/lib/backup-create";
+import { integrityFact, verifyArchive } from "@/lib/backup-integrity";
+import { describePolicy, policyFor } from "@/lib/backup-retention";
+import { readJournal, recordBackupEvent } from "@/lib/backup-log";
+import { intervalMsFor, scheduleEnabled } from "@/lib/backup-schedule";
 
 export const maxDuration = 300;
 
 const execFileAsync = promisify(execFile);
-const BACKUP_DIR = "/app/data/backups-zomboid";
+const BACKUP_DIR = BACKUP_DIRS.zomboid;
 const TAR_TIMEOUT_MS = 240_000;
 
 // A Project Zomboid backup is self-contained: restoring it rebuilds the world,
@@ -31,22 +32,8 @@ const TAR_TIMEOUT_MS = 240_000;
 //   Saves/Multiplayer/<name>/  – the world (map, players, builds)
 //   db/<name>.db               – player accounts / whitelist
 //   Server/<name>*             – .ini, SandboxVars.lua, spawnregions.lua
-// manifest.json records the server name so a restore knows where things go.
-
-interface Manifest {
-  createdAt: string;
-  serverName: string;
-  includesWorld: boolean;
-  includesDb: boolean;
-  /**
-   * Whether the server was asked to write the world out before the copy.
-   *
-   * `false` = the server was stopped, so there was nothing to flush and the files were
-   * already at rest. `undefined` = an archive from before this was recorded, i.e.
-   * genuinely unknown rather than "no".
-   */
-  flushed?: boolean;
-}
+// manifest.json records the server name so a restore knows where things go. The shape
+// lives in `lib/backup-create.ts`, next to the code that writes it.
 
 async function exists(p: string): Promise<boolean> {
   return stat(p).then(
@@ -55,63 +42,72 @@ async function exists(p: string): Promise<boolean> {
   );
 }
 
-/**
- * Read a backup's manifest.
- *
- * The sidecar first, because reading the copy inside the tar means decompressing the
- * whole gzip stream to get ~100 bytes — the listing calls this once per archive, so
- * that cost lands on the backups page's first paint. The in-tar copy stays as the
- * fallback for every archive written before the sidecar existed, and as the thing that
- * keeps an archive self-describing once it has been copied off the box.
- *
- * The fallback **fills the sidecar in**, so archives that predate this get the speed-up
- * on their second listing rather than never. Best-effort: a write that fails changes
- * nothing, and only a manifest that actually parsed is ever cached.
- */
-async function backupManifest(file: string): Promise<Manifest | null> {
-  const target = path.join(BACKUP_DIR, file);
-  const sidecar = await readManifestSidecar<Manifest>(target);
-  if (sidecar) return sidecar;
-  // tar stores members as "./manifest.json" when created with `-C <dir> .`;
-  // try both spellings to be safe across tar versions.
-  for (const member of ["./manifest.json", "manifest.json"]) {
-    try {
-      const { stdout } = await execFileAsync("tar", ["-xzOf", target, member], {
-        maxBuffer: 1024 * 1024,
-      });
-      const parsed: Manifest = JSON.parse(stdout);
-      await writeManifestSidecar(target, parsed);
-      return parsed;
-    } catch {
-      /* try the other spelling */
-    }
-  }
-  return null;
-}
+const backupManifest = (file: string) => readBackupManifest<ZomboidManifest>(BACKUP_DIR, file);
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
 
+  const { searchParams } = new URL(request.url);
+
+  // ?download=<archive> — see the note in `/api/server/backups`. A PZ archive carries
+  // the player database and the `.ini`, which holds the RCON and admin passwords, so it
+  // is gated on `settings.edit` and not on read access to the world.
+  const download = searchParams.get("download");
+  if (download) {
+    if (!hasPermission(gate.session.user.role, "settings.edit")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const name = safeBackupName(download);
+    if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
+    try {
+      const response = await archiveResponse(BACKUP_DIR, name);
+      await recordBackupEvent(
+        "zomboid",
+        "download",
+        { userId: gate.session.user.id, name: gate.session.user.name ?? "" },
+        { outcome: "ok", name },
+        { action: "backup_download", details: { name } }
+      );
+      return response;
+    } catch {
+      return NextResponse.json({ error: "No such backup" }, { status: 404 });
+    }
+  }
+
+  if (searchParams.get("meta")) {
+    const policy = policyFor("zomboid");
+    return NextResponse.json({
+      policy,
+      policyText: describePolicy(policy),
+      schedule: {
+        enabled: scheduleEnabled(),
+        everyHours: Math.round(intervalMsFor("zomboid") / 3_600_000),
+      },
+      // See the note in `/api/server/backups`: the journal's `error` strings are raw
+      // thrown messages and can carry container paths, so they follow `settings.edit`.
+      journal: hasPermission(gate.session.user.role, "settings.edit")
+        ? await readJournal("zomboid", 8)
+        : [],
+    });
+  }
+
   try {
     await mkdir(BACKUP_DIR, { recursive: true });
-    const entries = await readdir(BACKUP_DIR);
     const backups = await Promise.all(
-      entries
-        .filter((e) => e.endsWith(".tar.gz"))
-        .map(async (name) => {
-          const s = await stat(path.join(BACKUP_DIR, name));
-          const m = await backupManifest(name);
-          return {
-            name,
-            size: s.size,
-            createdAt: s.mtime.toISOString(),
-            world: m?.serverName ?? null,
-            includesWorldMap: m?.includesWorld ?? false,
-          };
-        })
+      (await listArchives(BACKUP_DIR)).map(async (a) => {
+        const m = await backupManifest(a.name);
+        return {
+          name: a.name,
+          size: a.size,
+          createdAt: new Date(a.createdAtMs).toISOString(),
+          world: m?.serverName ?? null,
+          includesWorldMap: m?.includesWorld ?? false,
+          verifiable: Boolean(m?.sha256),
+          automatic: m?.automatic ?? false,
+        };
+      })
     );
-    backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return NextResponse.json(backups);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
@@ -126,181 +122,20 @@ export async function POST(request: NextRequest) {
   }
 
   const { action, backupName } = await request.json();
+  const actor = { userId: gate.session.user.id, name: gate.session.user.name ?? "" };
 
   if (action === "create") {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const work = path.join(BACKUP_DIR, `.work-${stamp}`);
-    let target = "";
     try {
-      // Measured on the box: 1.9 GB of Saves → **4 min 20 s** and a 198 MB archive.
-      // Past Cloudflare's ~100s origin read timeout, so the client's own response is
-      // not a reliable source of truth for the outcome — server-side tracking is the
-      // only possible mechanism here, not a nicety. Holds `files:zomboid`, so a
-      // restore can no longer run through the middle of the `cp -r` and tear it.
-      const backup = await runOperation(
-        {
-          kind: "backup.create",
-          game: "zomboid",
-          title: "Creating a backup",
-          startedBy: gate.session.user.name ? { name: gate.session.user.name } : null,
-        },
-        async (op) => {
-          await mkdir(BACKUP_DIR, { recursive: true });
-          const { name, world, db: dbFile, serverDir } = await savePaths();
-
-          // Ask the game to write the world out before we copy it. No `create` path used
-          // to do this, though every driver exposes a save and the *restore* paths all use
-          // one, so a backup taken while people played copied files the server was still
-          // midway through writing — and the copy here takes 4m 20s, which is a lot of
-          // wall-clock for the world to be moving underneath.
-          //
-          // Flush only — deliberately no `save-off` equivalent, because Project Zomboid
-          // has none. Inventing a command that silently fails is the defect class being
-          // cleaned up.
-          const flushed = await flushWorld(op);
-
-          // Preemption is checked at EVERY step boundary from here on, not only after
-          // the tar. Measured on production 2026-09-29: `op.preempted` was set 94 s into
-          // a 9m 43s backup and the only check ran last, so the app spent a further
-          // ~7m 55s copying 291 MiB it had already decided to throw away — competing for
-          // disk with the power operation that condemned it — and then handed the user an
-          // error. Refusing here costs nothing and leaves nothing behind.
-          refuseIfPreemptedEarly(op, "this backup");
-
-          // Stage the pieces in a work dir, then tar them together.
-          await rm(work, { recursive: true, force: true });
-          await mkdir(work, { recursive: true });
-
-          // 1) the world
-          op.step("Copying the world");
-          op.detail(name);
-          let includesWorld = false;
-          if (await exists(world)) {
-            await mkdir(path.join(work, "Saves", "Multiplayer"), { recursive: true });
-            await cp(world, path.join(work, "Saves", "Multiplayer", name), { recursive: true });
-            includesWorld = true;
-            op.settle("Copied the world");
-          } else {
-            // Never started — nothing to snapshot yet. The config is still worth
-            // keeping, but an archive with no world is NOT a restore point, and that
-            // has to be visible rather than inferred from a 4 MB size.
-            op.settle("No world on disk yet — nothing to copy", { kind: "noop" });
-          }
-
-          // The world copy is the long one (4m 20s for 1.9 GB), so this boundary is the
-          // one that saves the most.
-          refuseIfPreemptedEarly(op, "this backup");
-
-          // 2) the player database
-          op.step("Copying the player database");
-          let includesDb = false;
-          if (await exists(dbFile)) {
-            await mkdir(path.join(work, "db"), { recursive: true });
-            await cp(dbFile, path.join(work, "db", `${name}.db`));
-            includesDb = true;
-            op.settle("Copied the player database");
-          } else {
-            op.settle("No player database yet");
-          }
-
-          refuseIfPreemptedEarly(op, "this backup");
-
-          // 3) the server config trio (.ini + SandboxVars + spawnregions)
-          op.step("Copying the server config");
-          await mkdir(path.join(work, "Server"), { recursive: true });
-          let configFiles = 0;
-          for (const f of await readdir(serverDir)) {
-            if (!f.startsWith(name)) continue;
-            await cp(path.join(serverDir, f), path.join(work, "Server", f), { recursive: true });
-            configFiles++;
-          }
-          op.settle("Copied the server config", {
-            count: { done: configFiles, noun: "files" },
-          });
-
-          const manifest: Manifest = {
-            createdAt: new Date().toISOString(),
-            serverName: name,
-            includesWorld,
-            includesDb,
-            flushed,
-          };
-          await writeFile(path.join(work, "manifest.json"), JSON.stringify(manifest), "utf-8");
-
-          const filename = `zomboid-${name}-${stamp}.tar.gz`.replace(/[^a-zA-Z0-9._-]/g, "_");
-          target = path.join(BACKUP_DIR, filename);
-
-          // The last boundary before ~10 minutes of `tar` that cannot be interrupted.
-          refuseIfPreemptedEarly(op, "this backup");
-
-          op.step("Compressing the archive");
-          await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
-
-          let size: number | null = null;
-          let mtime = new Date();
-          try {
-            const s = await stat(target);
-            size = s.size;
-            mtime = s.mtime;
-          } catch {}
-          op.settle(size != null ? `Wrote the archive — ${formatBytes(size)}` : "Wrote the archive");
-
-          // A power operation admitted over this one means the world was saved and
-          // stopped mid-archive. Nothing can abort the `tar`, but publishing the result
-          // as a restore point would be exactly the "reports success after doing the
-          // wrong thing" defect — and the confirm dialog promised deletion. The `catch`
-          // below does the `rm`.
-          refuseIfPreempted(op, "this backup");
-
-          // Only now, after the preemption refusal: a sidecar written earlier would
-          // outlive the archive that refusal deletes, and be adopted by the next archive
-          // to land on the same name.
-          await writeManifestSidecar(target, manifest);
-
-          const facts: OperationFact[] = [];
-          if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
-          facts.push({
-            label: "World map",
-            value: includesWorld ? "included" : "not included",
-            // A config-only archive is not something you can restore a world from.
-            verdict: includesWorld ? undefined : "warn",
-          });
-          facts.push({ label: "Player database", value: includesDb ? "included" : "not included" });
-          facts.push({
-            label: "World flushed first",
-            value: flushed ? "yes" : "not needed — the server was not running",
-          });
-          return {
-            facts,
-            value: {
-              name: filename,
-              size: size ?? 0,
-              createdAt: mtime.toISOString(),
-              world: name,
-              includesWorldMap: includesWorld,
-            },
-          };
-        }
-      );
-      await logBackup(gate.session.user.id, "backup_create", {
-        name: backup.name,
-        sizeBytes: backup.size,
-        world: backup.world,
-        includesWorldMap: backup.includesWorldMap,
-      });
-      return NextResponse.json({ success: true, backup });
+      // Measured on the box: 442,064 files / 1.9 GB of Saves → ~11 minutes and a ~290 MB
+      // archive. Far past Cloudflare's ~100s origin read timeout, so the client's own
+      // response is not a reliable source of truth for the outcome — server-side tracking
+      // is the only possible mechanism here, not a nicety. The work lives in
+      // `lib/backup-create.ts` so the scheduler takes the identical backup.
+      const { backup, pruned } = await createBackup("zomboid", actor);
+      return NextResponse.json({ success: true, backup, pruned });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
-      // A tar that died partway (timeout, disk full) leaves a truncated .tar.gz
-      // that the listing would offer as restorable — and its sidecar has to go with
-      // it, or the manifest outlives the archive it describes.
-      if (target) {
-        await rm(target, { force: true }).catch(() => {});
-        await removeManifestSidecar(target);
-      }
       return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: 500 });
-    } finally {
-      await rm(work, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -314,9 +149,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No such backup" }, { status: 404 });
     }
 
+    const m = await backupManifest(name);
     try {
-      const m = await backupManifest(name);
       const serverName = m?.serverName ?? (await savePaths()).name;
+
+      // Checksum **before** `withGameStopped`. A Project Zomboid stop-and-start is the
+      // most expensive thing this app does, and refusing a corrupt archive after paying
+      // for it would be the wrong order. An archive with no recorded checksum is unknown
+      // rather than bad, so it is reported as a fact, not refused.
+      const integrity = await verifyArchive(BACKUP_DIR, name, m);
+
       // A running server holds the world in memory and writes it back on its next
       // autosave, so restoring underneath it changed nothing that survived — and
       // still reported success. `withGameStopped` saves + stops first, restores,
@@ -332,6 +174,7 @@ export async function POST(request: NextRequest) {
           await restoreBundle(backupPath, serverName, m);
           op.settle("Replaced the world, the player database and the config");
           op.fact({ label: "Archive", value: name });
+          op.fact(integrityFact(integrity));
           op.fact({ label: "World", value: serverName });
         },
         {
@@ -341,19 +184,40 @@ export async function POST(request: NextRequest) {
           restartOnFailure: false,
         }
       );
-      await logBackup(gate.session.user.id, "backup_restore", {
-        name,
-        world: serverName,
-        restartedAfter: restarted,
+      await recordBackupEvent(
+        "zomboid",
+        "restore",
+        actor,
+        { outcome: "ok", name, detail: serverName },
+        {
+          action: "backup_restore",
+          details: { name, world: serverName, restartedAfter: restarted },
+        }
+      );
+      return NextResponse.json({
+        success: true,
+        restoredWorld: serverName,
+        restarted,
+        checksum: integrity.state,
       });
-      return NextResponse.json({ success: true, restoredWorld: serverName, restarted });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
+      // A restore that half-happened leaves Project Zomboid powered off
+      // (`restartOnFailure: false`), and until now the only durable trace of that was the
+      // world being off. A conflict is excluded above: it never started.
+      const error = (e as Error).message || "Restore failed";
+      await recordBackupEvent(
+        "zomboid",
+        "restore",
+        actor,
+        { outcome: "failed", name, error },
+        { action: "backup_failed", details: { what: "restore", name, error } }
+      );
       // The archive is wrong about itself — the user's own file, not a broken server.
       if (e instanceof BadArchiveError) {
         return NextResponse.json({ error: e.message }, { status: 400 });
       }
-      return NextResponse.json({ error: (e as Error).message || "Restore failed" }, { status: 500 });
+      return NextResponse.json({ error }, { status: 500 });
     }
   }
 
@@ -365,6 +229,8 @@ export async function POST(request: NextRequest) {
     // while a restore reads it, or while a create writes into this directory, is the
     // case worth refusing. An `rm` is sub-second, so it gets the lane rather than a
     // `runOperation` record — a strip row and a completion toast for it would be noise.
+    // A `backup.restore` declares every `files:` lane, which is what makes "never delete
+    // the archive a restore is reading" enforced rather than assumed.
     const laneBusy = fileLaneBusy("zomboid");
     if (laneBusy) return laneBusy;
 
@@ -378,7 +244,13 @@ export async function POST(request: NextRequest) {
     try {
       await rm(target);
       await removeManifestSidecar(target);
-      await logBackup(gate.session.user.id, "backup_delete", { name });
+      await recordBackupEvent(
+        "zomboid",
+        "delete",
+        actor,
+        { outcome: "ok", name },
+        { action: "backup_delete", details: { name } }
+      );
       return NextResponse.json({ success: true });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
@@ -386,81 +258,6 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-}
-
-/**
- * The durable half of this feature.
- *
- * The operation registry forgets a clean record in 10 minutes; `/activity` does not.
- * Until 2026-09-29 **no backup action of any kind had ever written a row** — verified
- * against the production DB, which held 182 rows across ten action types and not one
- * `backup_*`. A restore replaces the world people play, and ten minutes afterwards
- * nothing anywhere recorded that it happened or who did it. Every neighbouring
- * feature (file edits, mod installs, `set_memory`, power) already wrote one.
- *
- * `game` has to be in `details`: `/api/activity` selects each world's panel with
- * `contains "<game>"`, and an untagged row is shown to everyone.
- *
- * Logged rather than swallowed, following `mc-whitelist`'s precedent — "who restored
- * the world" is precisely the question this row exists to answer, so a row that failed
- * to write is worth a line in the container log.
- *
- * Only ever called after the work succeeded. A refused backup (bad archive, no world
- * member, preempted) writes nothing: a log of things that did not happen is worse than
- * no log.
- */
-async function logBackup(
-  userId: string,
-  action: "backup_create" | "backup_restore" | "backup_delete",
-  details: Record<string, unknown>
-): Promise<void> {
-  try {
-    await db.activity.create({
-      data: { userId, action, details: JSON.stringify({ game: "zomboid", ...details }) },
-    });
-  } catch (e) {
-    console.error(`[zomboid/backups] could not write the ${action} activity row:`, e);
-  }
-}
-
-/**
- * Ask Project Zomboid to write the world to disk before the copy, over RCON.
- *
- * Returns whether the flush was asked for at all — `false` means the container is not
- * running, which is a `noop` step rather than a failure. An RCON failure is recorded as a
- * warn and does NOT abort: a torn archive beats no archive, and an unreachable server is
- * exactly when someone wants a backup. (PZ wedging its game loop while the container
- * stays up is a state this box has actually been in — 2026-09-22.)
- *
- * The save itself is fast — ten consecutive `SaveAll` calls measured 94–156 ms on
- * 2026-09-29 — so this adds nothing meaningful to the 4m 20s copy.
- *
- * No `save-off`: Project Zomboid has no such command, so there is nothing to pause and
- * nothing to re-enable in a `finally`.
- */
-async function flushWorld(op: OpHandle): Promise<boolean> {
-  op.step("Flushing the world to disk");
-  if (!(await containerIsRunning("zomboid").catch(() => false))) {
-    // `done`, NOT `noop`: a stopped server's files are already consistent, which is the
-    // best case for a backup. As `noop` this concluded `partial` and the summary read
-    // "but part of it is missing. This is not a restore point." for a flawless archive.
-    op.settle("The server is stopped — its files are already at rest");
-    return false;
-  }
-  const t0 = Date.now();
-  try {
-    await pzSave();
-    op.settle(`Flushed the world — ${Date.now() - t0} ms`);
-    return true;
-  } catch (e) {
-    op.settle("Could not flush the world — the server did not answer over RCON");
-    op.fact({
-      label: "World flush",
-      value: `failed (${(e as Error).message}) — the archive may be torn`,
-      verdict: "warn",
-    });
-    return true;
-  }
 }
 
 /**
@@ -473,7 +270,7 @@ async function flushWorld(op: OpHandle): Promise<boolean> {
 async function restoreBundle(
   backupPath: string,
   serverName: string,
-  m: Manifest | null
+  m: ZomboidManifest | null
 ): Promise<void> {
   // The web container writes as root; the game runs as another uid (1000 on this
   // box). Neither `fs.cp` nor this bundle carries ownership — every member of the
