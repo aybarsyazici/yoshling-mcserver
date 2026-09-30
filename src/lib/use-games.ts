@@ -121,13 +121,23 @@ export function useGames(interval = 5000): GamesState {
   const [running, setRunning] = useState<GameId[]>([]);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
-  // All false until the first poll answers: showing a control and then hiding it is worse
-  // than the reverse, and a 403 the user never asked for is the defect this exists to stop.
+  /**
+   * The three power flags start **false** and `settings` starts **true**, and the asymmetry
+   * is deliberate.
+   *
+   * For a power button, showing it enabled and then disabling it is the defect the flags
+   * exist to remove — someone presses it in the gap and gets an unexplained 403. For a
+   * navigation link the cost runs the other way: every account on this box is ADMIN, so a
+   * Settings link that vanishes on load and reappears a second later reads as broken for
+   * every real user, while the worst case of guessing `true` is one link that 403s with an
+   * explanation. The route is the enforcement either way; these flags only decide what is
+   * worth offering.
+   */
   const [can, setCan] = useState({
     start: false,
     stop: false,
     restart: false,
-    settings: false,
+    settings: true,
   });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
