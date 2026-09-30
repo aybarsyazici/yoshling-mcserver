@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { tailContainerLog } from "@/lib/game-manager";
 
 /**
@@ -58,7 +59,10 @@ export async function POST(request: NextRequest) {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  if (session.user.role !== "ADMIN" && session.user.role !== "MOD") {
+  // `console.execute`, not a hand-written `ADMIN || MOD`: the three console routes
+  // (here, 7DTD telnet, PZ RCON) each spelled the same pair out separately, so
+  // narrowing or widening who may run a game command meant finding all three.
+  if (!hasPermission(session.user.role, "console.execute")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

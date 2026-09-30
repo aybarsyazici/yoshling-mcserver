@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { readFile, writeFile, rm, readdir, mkdir } from "fs/promises";
@@ -64,7 +65,12 @@ export async function POST() {
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
-  if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  // `world.reset`: deletes the save and starts a fresh world. Was a bare
+  // `role !== "ADMIN"`; named so the decision to narrow it back is one line in
+  // `permissions.ts` rather than a string compare buried here.
+  if (!hasPermission(session.user.role, "world.reset")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   try {
     /**

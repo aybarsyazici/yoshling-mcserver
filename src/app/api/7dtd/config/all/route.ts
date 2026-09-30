@@ -79,6 +79,21 @@ export async function GET() {
   }
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
+  // `LOCKED` hides `TelnetPassword` but deliberately leaves `ServerPassword`
+  // editable, so this GET hands it out — and on production it is a real 5-character
+  // value, not blank (checked 2026-09-30). World access alone was the whole gate,
+  // which made the permission check `/api/7dtd/files` already had pointless: the same
+  // secret was one panel away. Verified with the live XML: the only two
+  // `*Password|*Token|*Secret` properties in it are `ServerPassword` and
+  // `TelnetPassword`.
+  if (!hasPermission(session.user.role, "settings.read")) {
+    // `config-panel.tsx` toasts `data.error` verbatim, so say why rather than
+    // "Forbidden" — an unexplained 403 is how the power-button gate got reported.
+    return NextResponse.json(
+      { error: "These settings include the server password, so reading them needs the admin or moderator role." },
+      { status: 403 }
+    );
+  }
   try {
     const xml = await readFile(XML_PATH, "utf-8");
     const properties = parseProperties(xml).filter((p) => !LOCKED.has(p.name));

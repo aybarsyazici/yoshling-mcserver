@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { db } from "@/lib/db";
@@ -76,7 +77,13 @@ export async function POST() {
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
-  if (session.user.role !== "ADMIN") return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  // `server.update`: re-downloads the game build via SteamCMD and recreates the
+  // container. Was a bare `role !== "ADMIN"`, which withheld the documented fix for
+  // the #1 "stuck at Starting game" cause (client/server build mismatch) from the
+  // MOD looking after this world — see docs/7-DAYS-TO-DIE.md.
+  if (!hasPermission(session.user.role, "server.update")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   try {
     /**

@@ -43,7 +43,10 @@ export async function GET(request: NextRequest) {
   // Same gate as the editor: these trees hold the live `TelnetPassword` /
   // `RCONPassword`, which the settings pages have a locked-key set to hide. An
   // open GET here made that set decorative.
-  if (!hasPermission(gate.session.user.role, "settings.edit")) {
+  //
+  // `settings.read` rather than `settings.edit` (same roles, clearer intent) — see
+  // `/api/server/files`: an `…edit` key on a GET invites someone to drop the check.
+  if (!hasPermission(gate.session.user.role, "settings.read")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -190,8 +193,11 @@ export async function DELETE(request: NextRequest) {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
   const session = gate.session;
-  if (session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  // Deleting a game file has no undo, so it gets its own capability instead of
+  // riding on `settings.edit`. Was a bare `role !== "ADMIN"` — see `permissions.ts`
+  // for why the three file browsers now narrow from one line.
+  if (!hasPermission(session.user.role, "files.delete")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const laneBusy = fileLaneBusy("zomboid");

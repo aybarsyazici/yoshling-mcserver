@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
+import { hasPermission } from "@/lib/permissions";
 import { tailContainerLog } from "@/lib/game-manager";
 
 export async function GET(request: NextRequest) {
@@ -21,8 +22,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
-  const { role } = gate.session.user;
-  if (role !== "ADMIN" && role !== "MOD") {
+  // See `/api/server/console` — one capability for all three game consoles.
+  if (!hasPermission(gate.session.user.role, "console.execute")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
