@@ -6,15 +6,33 @@ services:
       - "25565:25565"
     environment:
       EULA: "TRUE"
-      TYPE: "FABRIC"
+      # ── UI-owned, and that is why these three read from `.env` ──────────────
+      #
+      # The Minecraft settings page writes TYPE/VERSION and the memory card writes
+      # MEMORY. They used to be patched into THIS file, which the deploy then threw
+      # away: `deploy.sh` runs `git checkout -f -B main FETCH_HEAD`, so every deploy
+      # silently reverted whatever had been applied through the dashboard (undone by
+      # hand once, in f0cf692). The app now patches `/opt/yoshling/.env`, which is
+      # gitignored and therefore survives the checkout, and these lines interpolate
+      # from it.
+      #
+      # The `:-` form matters twice over. It keeps the current production values as the
+      # defaults, so a box with no `.env` keys -- which is every box today -- boots
+      # exactly as it did before; and `:-` (unlike `-`) also falls back when the key is
+      # present but EMPTY, so a truncated `MC_MEMORY=` cannot hand the JVM a blank -Xmx.
+      #
+      # Per-service key names are not cosmetic: `VERSION` is the Minecraft version here
+      # and the Steam branch in the sevendtd block, so one shared `VERSION` key would
+      # make editing Minecraft change which build 7 Days to Die downloads.
+      TYPE: "${MC_TYPE:-FABRIC}"
       # 26.1.2, not 1.21.4. These disagreed for weeks: ServerConfig.mcVersion said
       # 26.1.2, the mc-data volume holds fabric-server-mc.26.1.2-loader.0.19.3 next
       # to the 217 MB world, and only this file said 1.21.4. Fabric Loader aborts on
       # 26.1.2-dependent jars before it opens level.dat, so the symptom was never
       # world corruption -- it was a boot failure the status probe rendered as a
       # permanent "Starting...".
-      VERSION: "26.1.2"
-      MEMORY: "4G"
+      VERSION: "${MC_VERSION:-26.1.2}"
+      MEMORY: "${MC_MEMORY:-4G}"
       RCON_PASSWORD: "${RCON_PASSWORD}"
       ENABLE_RCON: "true"
       RCON_PORT: 25575
@@ -62,10 +80,18 @@ services:
       - "8080:8080/tcp" # web admin
       - "8081:8081/tcp" # telnet control
     environment:
+      # A literal, and it must stay one. `/api/7dtd/update` flips this to "3" and
+      # straight back to "1" inside one operation, using `patchServiceEnv` on THIS
+      # file. Moving it to `.env` would not help: the patch rewrites whatever is on the
+      # line, so the first update would replace `${SDTD_START_MODE:-1}` with a bare "1"
+      # and permanently detach the line from its key -- trading a dirty file that
+      # self-heals within one operation for a silent, permanent drift.
       START_MODE: "1"
       # Steam branch: "stable" (Default Public) or "latest_experimental".
       # Switching branches requires a one-time update run (START_MODE=3) so the
       # server files re-download on the new branch — see CLAUDE.md.
+      # Read out of this file by /api/7dtd/update, not written by the UI, so it also
+      # stays a literal.
       VERSION: "latest_experimental"
       TimeZone: "Europe/London"
       TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
@@ -119,11 +145,18 @@ services:
       # Must match PZ_RCON_PASSWORD below; the app controls the server over RCON.
       RCONPASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
       SELF_MANAGED_MODS: "true"
+      # -Xms. Measured on production 2026-09-30 from the container's own log:
+      # `-Xms2048m -Xmx12288m`, i.e. these two lines land on the JVM verbatim. NOT
+      # UI-owned, and that asymmetry has teeth — `setMemory` writes only the max, so a
+      # heap chosen below this one produces `-Xmx` under a larger `-Xms` and the JVM
+      # refuses to start at all. `setMemory` now reads this value and refuses first.
       MIN_MEMORY: "2048m"
-      # 12 GB on the current 16 GB box. The Settings page computes the ceiling
-      # from host RAM (total - 2.5 GB reserve) and writes this line, so don't
-      # hand-edit it — change it in the UI, which also recreates the container.
-      MAX_MEMORY: "12288m"
+      # 12 GB on the current 16 GB box. UI-owned: the Settings page computes the ceiling
+      # from host RAM (total - 2.5 GB reserve) and writes `PZ_MAX_MEMORY` in `.env`, then
+      # recreates the container. Don't hand-edit -- change it in the UI. The default here
+      # is the production value, so a box with no `.env` key boots unchanged; see the
+      # long note in the minecraft block for why it is `.env` and not this file.
+      MAX_MEMORY: "${PZ_MAX_MEMORY:-12288m}"
       PORT: "16261"
       UDPPORT: "16262"
       MODFOLDERS: "workshop,steam,mods"
