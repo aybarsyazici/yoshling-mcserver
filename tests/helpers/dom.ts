@@ -6,6 +6,7 @@
  * and must keep doing so — see the note in `vitest.config.mts`.
  */
 
+import { runningWorlds } from "@/lib/coresidency";
 import type { GameId } from "@/lib/games";
 import type { OperationView, OpStepView } from "@/lib/operations-types";
 import type { ControlLock, GameSnapshot, GamesState } from "@/lib/use-games";
@@ -82,11 +83,25 @@ export function worlds(
 export const ALL_POWERS = { start: true, stop: true, restart: true };
 export const NO_POWERS = { start: false, stop: false, restart: false };
 
-/** A `useGames()` return value, complete enough that no surface reads `undefined`. */
+/**
+ * A `useGames()` return value, complete enough that no surface reads `undefined`.
+ *
+ * `running` is **derived from the games actually returned** unless the caller overrides
+ * it, rather than defaulting to `[]`. A fixture with `containerRunning: true` beside
+ * `running: []` is a state the app cannot produce — `useGames` computes one from the
+ * other — and an impossible fixture is how a later correct change gets made to look like
+ * a break. Overriding it is still allowed, because the endpoint sends `running`
+ * separately and a tab held across a deploy can legitimately see the two disagree.
+ */
 export function gamesState(over: Partial<GamesState> = {}): GamesState {
+  const games = over.games === undefined ? worlds() : over.games;
   return {
-    games: worlds(),
+    games,
     activeGame: null,
+    running: runningWorlds(games),
+    // ~13 GB: the 16 GB box minus HOST_RESERVE_GB, which is what `maxGameGb()` returns
+    // on the real host. A number rather than `null` so the ceiling copy renders.
+    maxGb: 13,
     busy: null,
     access: ["minecraft", "7dtd", "zomboid"],
     can: ALL_POWERS,
