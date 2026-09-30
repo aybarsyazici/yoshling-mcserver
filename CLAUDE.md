@@ -213,8 +213,14 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
 silently doesn't — the old heap size stays. This is the trap the Minecraft memory
 setting fell into before. So `setMemory` in `game-manager`:
 
-1. patches only that service's env in compose (`lib/compose.ts`, scoped — `MEMORY`
-   and `VERSION` mean different things in different service blocks),
+1. patches **`.env`**, not compose (`lib/dotenv-patch.ts`). Compose interpolates —
+   `MEMORY: "${MC_MEMORY:-4G}"` — so the app no longer writes a git-tracked file and
+   `deploy.sh`'s `git checkout -f` can no longer discard a setting. The scoping lesson
+   survives one layer down as per-service key names (`MC_VERSION` vs the `sevendtd`
+   block's own `VERSION`), because the same word means different things in different
+   service blocks. The write is temp-file + `rename`, ENOENT-only on read, mode 0600,
+   one `.env.bak` kept — **`.env` is gitignored and holds every production secret, so
+   unlike the compose file it replaced there is nothing to restore it from.**
 2. gracefully saves + stops the world **if it was running**,
 3. `docker compose create --force-recreate <service>` — `create`, not `up`, so a
    stopped world **stays stopped** and changing its memory can't evict whichever
@@ -238,9 +244,13 @@ deliberate omission.)
 after the move to netcup. The cap is derived at request time:
 `maxGameGb()` = `/proc/meminfo` MemTotal − `HOST_RESERVE_GB` (2.5) ≈ **13 GB** on
 the 16 GB box. Two things follow. That ceiling **assumes the world is alone on the
-box** — it does not subtract whatever else is running. And PZ's `RUNTIME` entry
-patches only `MAX_MEMORY`, not `MIN_MEMORY`, so choosing a heap below the compose
-`MIN_MEMORY` writes `-Xmx` under a larger `-Xms` and the JVM refuses to start.
+box** — but it now *says so* where someone picks a heap, and two worlds running at once
+is reported rather than silent (see `src/lib/coresidency.ts`). And PZ's `RUNTIME` entry
+patches only `MAX_MEMORY`, not `MIN_MEMORY` — choosing a heap below the compose
+`MIN_MEMORY` would write `-Xmx` under a larger `-Xms`, a JVM that refuses to start.
+**`setMemory` now reads `MIN_MEMORY` and refuses before admission**, and the card's
+buttons start at that floor rather than offering 1 GB for a world whose `-Xms` is 2 GB.
+`MIN_MEMORY` → `-Xms` is measured, not inferred (production: `-Xms2048m -Xmx12288m`).
 
 **Every container now has a `mem_limit`** (MC 6g, 7DTD 10g, PZ 14g) — previously none
 did, and it was the only thing that would have contained the over-commit that put this
@@ -324,7 +334,7 @@ npm run dev      # dev server (needs .env — see below)
 npm run build    # production build (also the deploy build)
 npm run lint     # eslint (not run during build; pre-existing `any` warnings exist)
 npx tsc --noEmit # typecheck
-npm test         # vitest, 199 pure-logic tests, ~430ms, no Docker/network needed
+npm test         # vitest, 549 tests, ~1.6s, no Docker/network/server needed
 ```
 
 **Run `npm test` before you ship.** It exists because the same classes of defect kept
@@ -406,14 +416,25 @@ see [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md).
 Back up the DB before schema-affecting deploys:
 `docker cp yoshling-web-1:/app/data/yoshling.db /root/yoshling-deploy-backup/`.
 
-**`/api/settings` edits `/opt/yoshling/docker-compose.yml` in place.** Changing the
-Minecraft version/loader/memory in the UI rewrites exactly the `TYPE`, `VERSION`
-and `MEMORY` lines *inside the `minecraft:` service block* (`patchServiceEnv`), then
-runs `docker compose up -d --force-recreate minecraft`. It used to regenerate the
-whole file from a two-service template, which silently deleted the `sevendtd` (and
-now `zomboid`) services and the volume declarations the web container mounts. If
-you ever touch that route: keep it a scoped patch, and remember `VERSION` means the
-Minecraft version in one block and the Steam branch in another.
+**`/api/settings` writes `/opt/yoshling/.env`, NOT `docker-compose.yml`** (changed
+2026-09-30). Changing the Minecraft version/loader in the UI patches `MC_TYPE` /
+`MC_VERSION`, which compose interpolates as `${MC_TYPE:-FABRIC}` / `${MC_VERSION:-26.1.2}`,
+then recreates the service through `applyServiceEnv`. `.env` is gitignored, so the value
+survives `deploy.sh`'s `git checkout -f` — which is the whole reason it moved.
+
+Two pieces of history worth keeping, because both were expensive:
+
+- The route once regenerated the whole compose file from a **two-service template**,
+  silently deleting the `sevendtd` (and later `zomboid`) services and the volume
+  declarations the web container mounts. Keep any compose write a *scoped patch*.
+- `VERSION` means the Minecraft version in one service block and the **Steam branch** in
+  another, which is why the `.env` keys are per-service (`MC_VERSION`, not `VERSION`).
+
+**One writer of compose remains**: `/api/7dtd/update` flips `START_MODE` to 3 and back to
+1 inside a single operation. Deliberately left there — moving it to `.env` would have the
+first update rewrite `${SDTD_START_MODE:-1}` into a bare literal and detach the line
+permanently, trading a dirty file that self-heals within one operation for silent drift.
+`deploy.sh`'s compose guard is the backstop.
 
 ### Applying DB migrations in production (manual)
 
@@ -624,44 +645,40 @@ file-browser GETs exposing `rcon.password`; and the zombie-process leak. Details
 the per-finding corrections are in
 [`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
 
-Still open:
+Still open — and the list is now short enough to state precisely.
 
-- **Nothing detects or refuses two worlds running at once.** `powerOn` evicts; the
-  other start paths now hold the lock but still don't evict, and no code path *reports*
-  co-residency. The `mem_limit`s bound the damage; they don't prevent it. (The
-  2026-09-26 overlap was caused by a hand-run `docker start`, not by app code — six
-  findings blaming `restartGame`/`withGameStopped` were refuted.)
-- **Backups are still manual-only** — no scheduling, retention, pruning, checksum or
-  download — and `create` still snapshots a live world, so one taken while people play
-  can be torn. An out-of-band safety set from before the fixes is on the box at
-  `/root/pre-fix-backup-2026-09-28/` (all four archives verified with `tar -tzf`).
-- ~~PZ never exits on SIGTERM~~ — **fixed 2026-09-29**: the driver asks the game to
-  `quit` over RCON and it exits in ~12s with code 0. Kept in this list only so nobody
-  re-reports it; `dockerd` logged 14 `failed to exit within 5m0s` events for PZ in the
-  three days before the fix and **0** since.
-- **`docker-compose.yml` is git-owned in practice** (the box's copy was byte-identical
-  to git), but the app still writes it and `deploy.sh`'s `git checkout -f` discards
-  that. `deploy.sh` now **refuses and prints the diff** instead of reverting silently
-  (`FORCE_COMPOSE=1` overrides). The real fix — have those features write to git, or
-  drop compose from the checkout — is still open, so don't add another writer.
-- ~~There is no test suite~~ — **there is now: `npm test`, 199 tests, ~430 ms, no Docker
-  or network.** Added 2026-09-30. It covers the pure logic where regressions have
-  actually happened (`concludeOperation`/`summarize`, the PZ `.ini` parser,
-  `patchServiceEnv`, path containment, the `.acf` two-section trap, `operation-ui`).
-  **Run it before you ship.** Two things about it are load-bearing: the config must stay
-  `vitest.config.mts` (as `.ts` it loads via a CJS shim that `require()`s ESM-only Vite
-  and dies on Node 20.12 — the Prisma trap again), and vitest stays on major 3 because 4
-  needs Node ≥ 20.19. A test that merely encodes current behaviour is worse than none —
-  one here pinned a bug instead of the property and turned a correct fix red.
-- **224 legacy `ModpackMod` rows** have no download source. The apply now refuses
-  rather than wiping your mods for nothing, but three packs (COBBLEVERSE, Fabulously
-  Optimized, Hoplite) need re-importing to be usable.
-- The old Hetzner box (`178.105.163.254`, key `~/.ssh/mc_yoshling`) is still running as
-  a rollback. **Minecraft has now booted on netcup**; 7DTD has run but still has no
-  observed in-game join.
-- **Two secrets have been pasted into chat transcripts and should be rotated: the
-  netcup root password, and the 7DTD `TelnetPassword`** (which must be changed in both
-  `sdtdserver.xml` and `SDTD_TELNET_PASSWORD` in `.env`, or telnet control breaks).
+**Closed 2026-09-29/30, listed only so nobody re-reports them:** PZ's five-minute
+SIGKILL stop (now ~12 s, exit 0, via RCON `quit`); the app writing `docker-compose.yml`
+(now `.env`, gitignored, survives `git checkout -f` — compose hashes verified identical
+on deploy); no test suite (`npm test`, 549 tests); no co-residency detection; backups
+having no retention/pruning/checksums/download/schedule; Minecraft's in-game whitelist
+and ops writing `uuid: ""`; the 7DTD `TelnetPassword` (rotated and telnet control
+re-verified end to end); the 224 dead `ModpackMod` rows (re-imported). Details in
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md) and
+[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
+
+Genuinely open:
+
+- **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11**, so on a
+  26.1.2 server neither can install no matter how often it is re-imported. The apply
+  refuses with an honest version mismatch. Not a bug — a fact about those packs.
+- **`create` still snapshots a live world**, so a manual backup taken while people play
+  can be torn. The automatic ones refuse while anyone is connected; a manual one is the
+  operator's call.
+- **Two out-of-band safety sets are on the box** and nothing prunes them:
+  `/root/pre-fix-backup-2026-09-28/` and `/root/safety-backup-2026-09-29/`. Delete when
+  you are confident; retention does not reach outside `/app/data`.
+- **`/api/7dtd/update` is the last compose writer** (a transient `START_MODE` flip inside
+  one operation). Deliberate — see the deployment section.
+- **Needs a human, not code:**
+  - **The netcup root password is still the one from a chat transcript.** Rotating it
+    needs the netcup control panel; nothing in this repo can do it.
+  - **The old Hetzner box (`178.105.163.254`) is still running** as a paid rollback.
+    Minecraft now boots on netcup and every feature has been exercised here, so the
+    original reason to keep it is gone — but deleting it is a judgement call.
+  - **No in-game join has ever been observed on netcup**, for 7DTD *or* Minecraft. The
+    dashboard's telnet and RCON views are healthy and the worlds boot, but only a person
+    with the game can prove a client connects.
 
 > **Keep this file current** — see "Documentation rules" at the top. Update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh

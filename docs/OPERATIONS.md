@@ -264,3 +264,97 @@ real incidents. Testing them needs the Docker calls behind an injectable seam.
 Also uncovered: the three backup routes' flush helpers (module-private, they call
 `containerIsRunning`), which is why the honesty guarantee was moved into `summarize()`
 instead — the sentence no longer depends on each route author choosing `done` over `noop`.
+
+---
+
+# Closing the last open items — 2026-09-30
+
+`npm test` is now **549 tests, ~1.6 s**, still with no Docker, network or server.
+
+## `game-manager.ts` is testable, and the seam is the point
+
+Every `docker` fork now goes through `src/lib/docker-cli.ts`, which is injectable
+(`setCommandRunner`, refused under `NODE_ENV=production`). That made the code the harness
+author had named as the highest-value untested thing in the repo — **eviction ordering and
+`wasRunning` gating** — pinnable. Both have caused real incidents.
+
+`powerOn` deliberately **keeps its own eviction loop** rather than calling the shared
+`admitStart`. Rewriting a path pinned by 34 tests to remove a two-line probe loop is the
+churn that has broken this code before. Instead the two copies are asserted to **agree**
+over every combination of running worlds — slicing the loop to one world reddens it.
+
+## Mutation checking is the answer to "does this test pin anything"
+
+The suite already shipped one test that encoded a bug rather than a property and turned a
+correct fix red. The counter-measure used throughout this round: for each property, break
+it deliberately and confirm the test goes red. Recorded where done — e.g. 15 mutants
+against the `game-manager` suite, 15 caught, 0 survived.
+
+Three tests were found **not** to pin what they claimed, and all three were fixable:
+
+- The streaming upload's whole reason to exist. Replacing `pipeline()` with the
+  `ws.write()` loop its own header warns against left every test green, because the bytes
+  on disk are identical and that is all they checked. Telling them apart needs a sink that
+  drains slowly, which a local file never does — hence an injectable `createSink`.
+- The permissions reachability guard was satisfied by a **discarded call**: keeping
+  `hasPermission(role, "settings.read")` and replacing its `if` with `if (false)` handed a
+  MEMBER the live `ServerPassword` with everything green. The guard now requires each key
+  to appear *negated with a 403* in the same block.
+- `/home`'s `StatusPill` still paired "Stopped" with "Power off" — the surviving half of
+  the `a7d76b8` honest-label fix, with no coverage either way.
+
+**Prefer a drift guard to asserting one surface's markup.** The power control exists on
+three surfaces and has twice drifted; the guards assert the three *agree*, so a fourth
+surface fails loudly rather than silently missing a fix.
+
+## Two destructive paths that looked fine
+
+- **Retention deleted history, not bursts.** `keep: N` only bounds a burst bigger than N,
+  and on this box it wasn't: 7DTD had six archives, five written within seven minutes. At
+  `keep: 5` the count rule selected the 2026-07-23 and 2026-05-29 archives — in each case
+  the only restore point older than a day — and kept near-identical copies of one moment,
+  logging `outcome: "ok"`. **The oldest archive is now exempt from the count rule** (not
+  from an explicit `maxAgeDays`, which is an operator asking for a date cutoff).
+- **`.env` is now the app's write target and the only copy of every secret.** The first
+  version read it with `catch { return "" }`, so an EACCES/EIO read as "no file yet" would
+  have replaced `AUTH_SECRET`, `DATABASE_URL`, `DISCORD_CLIENT_SECRET` and all four game
+  passwords with a four-line file — and the read-back guard runs *after* the write, so the
+  operator would be told the setting failed while the box could no longer authenticate
+  anyone. Unlike the compose file it replaced, `.env` is gitignored: there is nothing to
+  `git checkout`. Now ENOENT-only, temp-file + `rename`, mode 0600, one `.env.bak`.
+
+## Co-residency, verified in a browser
+
+The oldest open item. Reproduced the 2026-09-26 condition on production with a raw
+`docker start` — bypassing the hand-off, exactly as the incident did — and confirmed both
+messages render:
+
+> Minecraft and Project Zomboid are running at the same time. The box only has room for
+> one — stop all but one.
+>
+> Minecraft and Project Zomboid are allocated 16 GB of the box's 15.6 GB. That is more
+> heap than the box has.
+
+The RAM sentence only appears where the arithmetic supports it: with 7 Days to Die
+involved there is no heap figure to add up. An earlier draft ended "so it is swapping",
+which rendering it for every combination caught as something the function cannot know —
+the measurement-you-have-not-checked trap, inside the module written to stop the app being
+wrong about the box. That also fixes `RamBudget` reading **0 GB** whenever 7DTD was live.
+
+## The instrumentation layer is finally proven
+
+`docs/OPERATIONS.md` recorded this as the last unverified layer of the `globalThis`
+registry fix, because the Workshop watcher only enters an operation when a mod is stale and
+none ever was. Exercised by lowering **one already-installed 45 KB mod's**
+`WorkshopItemsInstalled.timeupdated` — so SteamCMD re-fetched bytes it already had: no new
+mod, no `.ini` change, no risk to the 89-mod save. Then *without* forcing a check, the
+watcher's own timer picked it up three minutes later and the registry recorded:
+
+```
+mods.update   startedBy=None   ok
+"Finished in 53s. 1 mods updated, the server is back up."
+```
+
+`startedBy=None` is the proof — no human actor, so it came from the timer, in the
+`instrumentation.ts` bundler layer. (That sentence also exposed a `"1 mods"` pluralisation
+bug, now fixed and pinned.)
