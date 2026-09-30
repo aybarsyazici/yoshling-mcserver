@@ -180,7 +180,15 @@ export async function recordBackupEvent(
   entry: Omit<JournalEntry, "at" | "game" | "event" | "actor">,
   activity?: { action: BackupActivityAction; details: Record<string, unknown> }
 ): Promise<void> {
-  await journalBackup({ game, event, actor: actor?.name ?? null, ...entry });
+  // `||`, not `??`. A Discord account with no display name gives `{name: ""}` — the
+  // routes build the actor as `{userId, name: session.user.name ?? ""}` — and `??` only
+  // collapses null/undefined, so an empty name journalled `actor: ""`, which the backups
+  // page renders as **"the scheduler"** because "" is falsy. That is a false attribution on
+  // a prune, a delete and a restore, and `createBackup` already handles the same case
+  // correctly one file away (`startedBy: actor?.name ? {name: actor.name} : null`, "an
+  // empty attribution renders worse than none") — so the two records of one backup
+  // disagreed about who took it.
+  await journalBackup({ game, event, actor: actor?.name || null, ...entry });
   if (actor && activity) {
     await logBackupActivity(actor.userId, game, activity.action, activity.details);
   }

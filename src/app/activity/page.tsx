@@ -151,6 +151,22 @@ function formatAction(action: string, details: Record<string, unknown>): string 
       return `restored the world from a backup${on}${details.name ? ` (${details.name})` : ""}`;
     case "backup_delete":
       return `deleted a backup${on}${details.name ? ` (${details.name})` : ""}`;
+    // The three the lifecycle change added and did not render. `default` turned
+    // `backup_failed` into "<user> backup failed", which parses as the *user* having
+    // failed — on the one row class that exists specifically so a failure is durable.
+    case "backup_failed":
+      return `had a backup ${details.what === "restore" ? "restore" : "run"} fail${on}${
+        details.name ? ` (${details.name})` : ""
+      }${details.error ? ` — ${details.error}` : ""}`;
+    case "backup_prune": {
+      const names = Array.isArray(details.names) ? (details.names as string[]) : [];
+      const n = typeof details.count === "number" ? details.count : names.length;
+      return `pruned ${n} old ${n === 1 ? "backup" : "backups"}${on}${
+        names.length > 0 ? ` (${names.join(", ")})` : ""
+      }`;
+    }
+    case "backup_download":
+      return `downloaded a backup${on}${details.name ? ` (${details.name})` : ""}`;
     default:
       return action.replace(/_/g, " ");
   }

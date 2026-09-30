@@ -89,6 +89,8 @@ export async function GET(request: NextRequest) {
       journal: hasPermission(gate.session.user.role, "settings.edit")
         ? await readJournal("zomboid", 8)
         : [],
+      // See the note in `/api/server/backups`.
+      canDownload: hasPermission(gate.session.user.role, "settings.edit"),
     });
   }
 

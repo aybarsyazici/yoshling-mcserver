@@ -732,6 +732,9 @@ async function createZomboid(
     // is knowable with a metadata-only walk, so it is counted first and then reported as a
     // real `count` progress. No percentage of bytes and no ETA: those would be numbers
     // this cannot measure.
+    // Always true by the time the copy returns — the `else` below refuses — but kept as a
+    // manifest field because archives written before that refusal existed can have it
+    // false, and `readBackupManifest` has to be able to say so.
     let includesWorld = false;
     let worldFiles = 0;
     if (await exists(world)) {
@@ -768,11 +771,32 @@ async function createZomboid(
         });
       }
     } else {
-      // Never started — nothing to snapshot yet. The config is still worth keeping, but an
-      // archive with no world is NOT a restore point, and that has to be visible rather
-      // than inferred from a 4 MB size.
+      // **Refuse, rather than write a 4 MB archive of the config trio.**
+      //
+      // This used to settle "No world on disk yet — nothing to copy" as a `noop` and carry
+      // on, and that had two consequences neither of which is visible from here. `partial`
+      // is a *conclusion*, never a throw, so `runOperation` returned normally, the journal
+      // recorded `outcome: "ok"` and the scheduler cleared its failure cooldown. And the
+      // archive still took the never-pruned newest slot and still ran retention: simulated
+      // against the real `selectForPruning`, five world archives plus one world-less newest
+      // one at `keep: 5` selected a genuine restore point for deletion and kept the 4 MB
+      // one. Repeat it daily and `keep` days later every real archive is gone, each step
+      // logged as a success. It also reset the schedule clock, suppressing the next real
+      // attempt for 24h.
+      //
+      // Refusing matches `createSevenDays` ("No Saves/ in …") and Minecraft (whose `tar -C
+      // MC_DIR world` exits non-zero and is deleted in the catch), so all three creates now
+      // agree that an archive with no world is not worth writing. It is reachable without
+      // anyone doing anything odd: `serverName()` resolves the name by stat-then-guess and
+      // prefers `servertest.ini` when the configured name's `.ini` is absent, so a rename
+      // through the settings page or a config import that drops a second `.ini` lands here.
+      // Loud is the correct answer to that, not a 4 MB archive.
       op.step("Copying the world");
-      op.settle("No world on disk yet — nothing to copy", { kind: "noop" });
+      throw new Error(
+        `No world at ${world} — Project Zomboid has not generated one for "${name}" yet, ` +
+          `so there is nothing to back up. (If the server does have a world, the server ` +
+          `name resolved here may be wrong — check which .ini is in ${serverDir}.)`
+      );
     }
 
     // The world copy is the long one, so this boundary is the one that saves the most.
@@ -826,12 +850,10 @@ async function createZomboid(
 
     const facts: OperationFact[] = [
       ...sealed.facts,
-      {
-        label: "World map",
-        value: includesWorld ? "included" : "not included",
-        // A config-only archive is not something you can restore a world from.
-        verdict: includesWorld ? undefined : "warn",
-      },
+      // No `verdict: "warn"` branch any more: there is no path to here with
+      // `includesWorld` false, because the copy step now throws instead of settling `noop`.
+      // A warn that cannot fire is a claim the reader cannot check.
+      { label: "World map", value: "included" },
       { label: "Player database", value: includesDb ? "included" : "not included" },
       {
         label: "World flushed first",

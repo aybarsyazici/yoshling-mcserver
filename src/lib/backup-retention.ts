@@ -33,6 +33,23 @@
 // after any prune there is always at least one restore point, whatever the numbers are
 // set to — including `keep: 0`, a zero-length `maxAgeDays`, or a directory where every
 // file is older than the age limit.
+//
+// ## The oldest archive survives the COUNT rule
+//
+// Because `keep: N` only bounds a burst when the burst is bigger than N, and on this box
+// it is not. Measured set on 2026-09-30: 7 Days to Die had 6 archives, one from
+// 2026-07-23 and **five written between 13:34 and 13:41 on 2026-09-29**. Running the
+// count rule at the default `keep: 5` over exactly that set selected
+// `7dtd-Reveo_Valley-2026-07-23T…` for deletion — the only restore point older than a
+// day — and kept four near-identical copies of one seven-minute window. Minecraft was
+// the same shape: 3 of its 5 are from one afternoon, and the 2026-05-29 archive was
+// selected. Repeat daily and what `keep` trims is the history, not the burst.
+//
+// So the oldest archive is exempt from the count rule, which means a prune can never
+// collapse the whole history into one moment; the cost is exactly one stale archive per
+// world. It is **not** exempt from `maxAgeDays`, because that rule is an operator saying
+// "delete anything past this date" and an unannounced "…except one" would make it a lie.
+// The two exemptions coincide when a world has a single archive.
 
 import { rm } from "fs/promises";
 import path from "path";
@@ -117,12 +134,16 @@ export function selectForPruning(
 
   const doomed: typeof sorted = [];
   const blocked: string[] = [];
+  const oldest = sorted.length - 1;
   for (let i = 0; i < sorted.length; i++) {
     // Index 0 is the newest and is never a candidate: this is what guarantees a restore
     // point survives every possible setting of `keep` and `maxAgeDays`.
     if (i === 0) continue;
     const a = sorted[i];
-    const beyondKeep = i >= keep;
+    // The oldest archive is exempt from the COUNT rule — see "The oldest archive
+    // survives the count rule" above. Not exempt from the age rule, which is an explicit
+    // instruction to delete things past a date.
+    const beyondKeep = i >= keep && i !== oldest;
     const tooOld = ageCutoff !== null && a.createdAtMs < ageCutoff;
     if (!beyondKeep && !tooOld) continue;
     if (protect.has(a.name)) {

@@ -65,10 +65,25 @@ describe("selectForPruning — the keep-N boundary", () => {
     expect(selectForPruning(daily(5), keepOnly(5), { now: NOW }).delete).toEqual([]);
   });
 
-  it("deletes exactly one at N+1, and it is the oldest", () => {
+  /**
+   * This used to assert `delete == ["world-05.tar.gz"]` at N+1 — i.e. that the count rule
+   * deletes the oldest archive first. It was changed deliberately, not weakened: the
+   * oldest archive is now exempt from the count rule, because on the measured archive set
+   * the "oldest first" order is what made `keep` trim the history instead of the burst
+   * (see the two cases in "the oldest archive survives the count rule" below). So at N+1
+   * the only candidate is the exempt one and nothing is deleted; the count rule starts
+   * biting at N+2, on the SECOND oldest.
+   */
+  it("deletes nothing at N+1, because the only candidate is the exempt oldest", () => {
     const s = selectForPruning(daily(6), keepOnly(5), { now: NOW });
+    expect(s.delete).toEqual([]);
+    expect(s.keep).toBe(6);
+  });
+
+  it("deletes the second oldest at N+2, keeping both ends", () => {
+    const s = selectForPruning(daily(7), keepOnly(5), { now: NOW });
     expect(s.delete).toEqual(["world-05.tar.gz"]);
-    expect(s.keep).toBe(5);
+    expect(s.keep).toBe(6);
   });
 
   it("deletes nothing below N", () => {
@@ -96,16 +111,91 @@ describe("selectForPruning — the keep-N boundary", () => {
       createdAtMs: NOW - i * 90_000,
     }));
     const s = selectForPruning(burst, { keep: 3, maxAgeDays: 30 }, { now: NOW });
-    expect(s.delete).toHaveLength(3);
-    expect(s.keep).toBe(3);
+    // Two, not three: the oldest of the six is exempt from the count rule. The property
+    // this test exists for is unchanged — a burst inside the age window IS pruned, which
+    // "beyond N AND older than D" would not do — and it is still the assertion that says
+    // no if anyone converts the rule to AND, because AND would delete zero here.
+    expect(s.delete).toHaveLength(2);
+    expect(s.keep).toBe(4);
+  });
+});
+
+/**
+ * The defect these exist for, measured rather than imagined.
+ *
+ * `keep: N` only bounds a burst if the burst is bigger than N. On this box it was not.
+ * Read inside `yoshling-web-1` on 2026-09-30: 7 Days to Die had six archives, one from
+ * 2026-07-23 and **five written between 13:34:06 and 13:41:12 on 2026-09-29**; Minecraft
+ * had five, of which three were from one afternoon. Running the count rule over exactly
+ * those sets at the default `keep: 5` selected the 2026-07-23 archive and the 2026-05-29
+ * archive — in each case the only restore point older than a day — and kept a pile of
+ * near-identical copies of one moment. Run daily, `keep` days later the entire history is
+ * gone, each step logged `outcome: "ok"`.
+ *
+ * The property: a count-rule prune can never collapse a world's history into one burst.
+ */
+describe("selectForPruning — the oldest archive survives the count rule", () => {
+  /** The real 7DTD directory: 1 old archive + a 5-file burst 7 minutes wide. */
+  const SEVEN_DTD = [
+    { name: "7dtd-Reveo_Valley-2026-09-29T13-41-12.tar.gz", createdAtMs: Date.UTC(2026, 8, 29, 13, 41, 12) },
+    { name: "7dtd-Reveo_Valley-2026-09-29T13-40-40.tar.gz", createdAtMs: Date.UTC(2026, 8, 29, 13, 40, 40) },
+    { name: "7dtd-Reveo_Valley-2026-09-29T13-37-55.tar.gz", createdAtMs: Date.UTC(2026, 8, 29, 13, 37, 55) },
+    { name: "7dtd-Reveo_Valley-2026-09-29T13-36-20.tar.gz", createdAtMs: Date.UTC(2026, 8, 29, 13, 36, 20) },
+    { name: "7dtd-Reveo_Valley-2026-09-29T13-33-40.tar.gz", createdAtMs: Date.UTC(2026, 8, 29, 13, 33, 40) },
+    { name: "7dtd-Reveo_Valley-2026-07-23T19-46-06.tar.gz", createdAtMs: Date.UTC(2026, 6, 23, 19, 46, 6) },
+  ];
+
+  it("does not delete the only restore point older than the burst", () => {
+    const fresh = { name: "7dtd-Reveo_Valley-2026-09-30T02-00-00.tar.gz", createdAtMs: NOW };
+    const s = selectForPruning([fresh, ...SEVEN_DTD], DEFAULT_POLICY, {
+      now: NOW,
+      protect: [fresh.name],
+    });
+    expect(s.delete).not.toContain("7dtd-Reveo_Valley-2026-07-23T19-46-06.tar.gz");
+    // It still prunes — the point is which one it gives up.
+    expect(s.delete).toEqual(["7dtd-Reveo_Valley-2026-09-29T13-33-40.tar.gz"]);
+  });
+
+  /**
+   * The general form: repeated creates must not be able to erase a distinct old restore
+   * point. Simulated as the scheduler would do it — create, prune, create, prune — which
+   * is the sequence in which the daily-burst shape actually destroys history.
+   */
+  it("still holds after many rounds of create-then-prune", () => {
+    let archives = [...SEVEN_DTD];
+    const oldest = "7dtd-Reveo_Valley-2026-07-23T19-46-06.tar.gz";
+    for (let round = 0; round < 40; round++) {
+      const fresh = { name: `new-${String(round).padStart(3, "0")}.tar.gz`, createdAtMs: NOW + round * DAY };
+      archives = [fresh, ...archives];
+      const s = selectForPruning(archives, DEFAULT_POLICY, {
+        now: NOW + round * DAY,
+        protect: [fresh.name],
+      });
+      archives = archives.filter((a) => !s.delete.includes(a.name));
+    }
+    expect(archives.map((a) => a.name)).toContain(oldest);
+    // And it did not simply refuse to prune: the directory is bounded.
+    expect(archives.length).toBeLessThanOrEqual(DEFAULT_POLICY.keep + 1);
+  });
+
+  /**
+   * The exemption is from the COUNT rule only. `maxAgeDays` is an operator saying "delete
+   * anything past this date", and a silent "…except one" would make that a lie — so the
+   * age rule can still take the oldest archive, while the newest-archive guarantee holds.
+   */
+  it("is not exempt from the age rule", () => {
+    const archives = daily(4).map((a) => ({ ...a, createdAtMs: a.createdAtMs - 365 * DAY }));
+    const s = selectForPruning(archives, { keep: 10, maxAgeDays: 7 }, { now: NOW });
+    expect(s.delete).toContain("world-03.tar.gz");
+    expect(s.keep).toBe(1);
   });
 });
 
 describe("selectForPruning — ordering", () => {
   it("returns the doomed names oldest first, so a partial failure loses the oldest", () => {
     const s = selectForPruning(daily(9), keepOnly(3), { now: NOW });
+    // `world-08` is the oldest and exempt from the count rule, so the list starts at 07.
     expect(s.delete).toEqual([
-      "world-08.tar.gz",
       "world-07.tar.gz",
       "world-06.tar.gz",
       "world-05.tar.gz",
@@ -174,7 +264,8 @@ describe("selectForPruning — protect", () => {
     expect(s.delete).not.toContain("world-03.tar.gz");
     expect(s.protected).toEqual(["world-03.tar.gz"]);
     // A protected archive still counts as kept, or the reported total would be wrong.
-    expect(s.keep).toBe(2);
+    // Three survive, not two: the newest, the protected one, and the exempt oldest.
+    expect(s.keep).toBe(3);
   });
 
   it("protecting the newest is a no-op, because it was never a candidate", () => {

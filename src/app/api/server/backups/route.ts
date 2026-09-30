@@ -107,6 +107,18 @@ export async function GET(request: NextRequest) {
       journal: hasPermission(session.user.role, "settings.edit")
         ? await readJournal("minecraft", 8)
         : [],
+      // Whether the Download button should be rendered at all.
+      //
+      // The download endpoint requires `settings.edit`; the button did not know that, and
+      // it carried `download="<archive>.tar.gz"` — so a viewer without the capability got
+      // a 27-byte file called `world-2026-09-29T19-35-16.tar.gz` containing
+      // `{"error":"Forbidden"}` and a completed-download indicator. Success reported after
+      // doing nothing, by this round's own new feature. The `download` attribute is gone
+      // too (`archiveResponse` sets Content-Disposition, so the filename still comes out
+      // right on the success path, and an error now renders in the tab where it can be
+      // read) — but not offering an action that will be refused is the better half of the
+      // fix.
+      canDownload: hasPermission(session.user.role, "settings.edit"),
     });
   }
 

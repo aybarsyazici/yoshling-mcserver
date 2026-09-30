@@ -521,6 +521,12 @@ function formatAction(action: string): string {
     backup_create: "made a backup",
     backup_restore: "restored the world from a backup",
     backup_delete: "deleted a backup",
+    // The three added by the backup lifecycle change. Without them the fallback rendered
+    // "backup failed" as if it described the user, and "backup prune" / "backup download"
+    // as bare underscored keys.
+    backup_failed: "had a backup fail",
+    backup_prune: "pruned old backups",
+    backup_download: "downloaded a backup",
     server_update: "updated the server",
     server_reset: "reset the world",
   };

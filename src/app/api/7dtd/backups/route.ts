@@ -107,6 +107,8 @@ export async function GET(request: NextRequest) {
       journal: hasPermission(session.user.role, "settings.edit")
         ? await readJournal("7dtd", 8)
         : [],
+      // See the note in `/api/server/backups`.
+      canDownload: hasPermission(session.user.role, "settings.edit"),
     });
   }
 

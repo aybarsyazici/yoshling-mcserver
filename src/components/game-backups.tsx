@@ -63,6 +63,17 @@ interface BackupMeta {
   policyText: string;
   schedule: { enabled: boolean; everyHours: number };
   journal: JournalEntry[];
+  /**
+   * Whether the viewer may use the download endpoint, which requires `settings.edit`
+   * because an archive contains `sdtdserver.xml` (telnet password) for 7DTD and the `.ini`
+   * plus the player database for PZ.
+   *
+   * Reported by the server rather than derived here, and defaulted to **false** below: a
+   * button that 403s is how the power controls got reported as a bug, and in this case the
+   * 403 was invisible — the anchor's `download` attribute made the browser save
+   * `{"error":"Forbidden"}` under the archive's own name and show a finished download.
+   */
+  canDownload?: boolean;
 }
 
 // What a backup captures, and what a restore replaces, spelled out per game.
@@ -372,23 +383,31 @@ export function GameBackups({ game }: { game: GameId }) {
                       reads, and the moment someone most wants a copy off the box is the
                       moment something is going wrong on it. The lane exists to stop two
                       *writers*; this is not one. */}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    // `render`, not `<a><Button/></a>` as the mod dialog does: a <button>
-                    // inside an <a> is invalid HTML and only one of the two is keyboard
-                    // activatable. This renders a single anchor wearing the button's
-                    // styling.
-                    render={
-                      <a
-                        href={`${endpoint}?download=${encodeURIComponent(b.name)}`}
-                        download={b.name}
-                        aria-label={`Download backup ${b.name}`}
-                      />
-                    }
-                  >
-                    <Download className="h-3.5 w-3.5" /> Download
-                  </Button>
+                  {lifecycle?.canDownload && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      // `render`, not `<a><Button/></a>` as the mod dialog does: a <button>
+                      // inside an <a> is invalid HTML and only one of the two is keyboard
+                      // activatable. This renders a single anchor wearing the button's
+                      // styling.
+                      //
+                      // **No `download` attribute.** `archiveResponse` already sends
+                      // `Content-Disposition: attachment; filename="<name>"`, so a successful
+                      // download still saves under the right name — while a 403 or a 404
+                      // (reachable now that archives get pruned: a listing rendered before a
+                      // prune, clicked after it) renders its JSON in the tab instead of being
+                      // saved as a 27-byte `.tar.gz` under a finished-download indicator.
+                      render={
+                        <a
+                          href={`${endpoint}?download=${encodeURIComponent(b.name)}`}
+                          aria-label={`Download backup ${b.name}`}
+                        />
+                      }
+                    >
+                      <Download className="h-3.5 w-3.5" /> Download
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="outline"
@@ -528,7 +547,11 @@ const formatSize = formatBytes;
  * person who does not exist.
  */
 function journalSentence(e: JournalEntry): string {
-  const who = e.actor ? e.actor : "the scheduler";
+  // `=== null`, not falsy: the distinction being drawn is between a recorded ABSENCE of an
+  // actor and a recorded-but-blank one. `actor: ""` reaching here used to print "the
+  // scheduler" and claim the timer did something a person did; `recordBackupEvent` now
+  // normalises "" to null, and this is the belt to that braces.
+  const who = e.actor === null || e.actor === undefined ? "the scheduler" : e.actor || "someone";
   const what = e.name ? ` ${e.name}` : "";
   if (e.outcome === "failed") {
     return `${e.event === "restore" ? "Restore" : "Backup"}${what} failed — ${
