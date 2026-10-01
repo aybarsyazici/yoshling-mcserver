@@ -43,12 +43,12 @@ export type SideDeclaration = "required" | "optional" | "unsupported" | "unknown
  *
  * **The task that produced this file asked for `env.server`, and that field is real but
  * it is not on the API's version object.** Measured against the live API on 2026-10-01
- * (`/v2/project/<id>/version`, 160 versions across the 40 most-downloaded mods): a
- * version object's keys are
+ * (`/v2/project/<id>/version` over 527 projects, 2,751 versions — see the table on
+ * `ENVIRONMENT_TO_SERVER` for how that sample was drawn): a version object's keys are
  * `author_id changelog changelog_url date_published dependencies downloads environment
  * featured files game_versions id loaders name project_id requested_status status
  * version_number version_type` — there is no `env`, and `environment` is a single
- * string, present on 160 of 160. `env: {client, server}` is the **modpack-index** shape
+ * string, present on 2,751 of 2,751. `env: {client, server}` is the **modpack-index** shape
  * (documented in Modrinth's `.mrpack` format: "an object which contains a client and a
  * server value", each `required | optional | unsupported`, and the whole field
  * optional). So both are accepted here and `env` is ranked first as the most specific —
@@ -82,41 +82,86 @@ export interface ServerSideVerdict {
    * paraphrase it into "skipped". Empty string when there is nothing to say.
    */
   reason: string;
+  /**
+   * The raw `environment` string, set **only** when it is a value this app has no
+   * mapping for — i.e. Modrinth has extended the enum since the table below was
+   * measured.
+   *
+   * This is the "loud" half of failing safe. The fall-through is the safe half and it
+   * stays: an unmapped value is treated as undeclared, so the next signal decides and
+   * nothing is dropped on a string we cannot read. But silence was the wrong second
+   * half. `singleplayer_only` existed in the live API the whole time this file's first
+   * draft was being written and was not in its table, so every `singleplayer_only` mod
+   * fell through to a project field that for all three of them says the server is
+   * *required* — and was installed, silently, by the feature whose entire job is to keep
+   * exactly that jar off the server. A value we cannot read has to reach the report, or
+   * the enum is never updated because nobody learns it drifted.
+   */
+  unrecognisedEnvironment?: string;
 }
 
 /**
  * The `environment` enum, mapped to what it says about the *server*.
  *
- * Measured, not inferred — these are the only six values returned across the 160
- * versions sampled on 2026-10-01, with their counts:
+ * Measured, not inferred. 2026-10-01, `/v2/project/<id>/version` over **527 projects /
+ * 2,751 versions** (up to 6 versions each). The sample is deliberately not just the
+ * most-downloaded mods — that first sample was 160 versions of the top 40 mods and it
+ * *missed three of the ten values*, including the one that matters most. It is the top
+ * 200 mods by downloads, the top 100 each of `server_side:required`,
+ * `server_side:unsupported` and `client_side:unsupported`, the top 60 plugins, the 100
+ * newest mods, and the top 40 each of modpacks and datapacks.
  *
- * | `environment`                   |  n | server is |
- * |---------------------------------|----|-----------|
- * | `client_only`                   | 66 | unsupported |
- * | `client_or_server_prefers_both` | 36 | optional |
- * | `client_or_server`              | 24 | optional |
- * | `client_only_server_optional`   | 16 | optional |
- * | `client_and_server`             | 14 | required |
- * | `unknown`                       |  4 | unknown |
+ * | `environment`                   |   n | server is |
+ * |---------------------------------|-----|-----------|
+ * | `client_and_server`             | 724 | required |
+ * | `client_only`                   | 686 | unsupported |
+ * | `server_only`                   | 503 | required |
+ * | `unknown`                       | 355 | unknown |
+ * | `client_or_server_prefers_both` | 191 | optional |
+ * | `client_only_server_optional`   | 122 | optional |
+ * | `client_or_server`              |  85 | optional |
+ * | `server_only_client_optional`   |  55 | required |
+ * | `dedicated_server_only`         |  16 | required |
+ * | `singleplayer_only`             |  14 | unsupported |
  *
- * `server_only` is absent from that sample because the sample was the most-downloaded
- * *mods*, which skew client-side; it is in the enum and was observed directly on
- * LuckPerms, so it is mapped rather than left to fall through.
+ * The three at the bottom are the ones the narrow sample missed, and they are the reason
+ * a wider one was worth drawing:
+ *
+ * - **`singleplayer_only` is the shape this whole feature exists to exclude** and is the
+ *   only addition that changes an answer from install to skip (e4mc, buildpaste, runlab —
+ *   mods that open a *singleplayer* world, which is the opposite of a dedicated server).
+ *   All 14 of those versions sit on a project whose `server_side` says **required**, so
+ *   without a mapping here every one of them is installed on the server. That is the
+ *   strongest argument in this file for ranking the version above the project.
+ * - `server_only_client_optional` (c2me, vmp, tectonic, open-parties-and-claims) and
+ *   `dedicated_server_only` (bluemap, dynmap, dcintegration) are server mods. They were
+ *   already being installed by the fall-through, so mapping them changes no outcome in
+ *   the sample — it changes the *basis*, from "nothing declared, so install" to "declared
+ *   required", and it removes the per-project HTTP fetch those 71 versions were each
+ *   costing.
  *
  * **`client_only_server_optional` installs.** It reads like a skip and is not one:
- * Modrinth's own project field for all 16 of those versions is `server_side: optional`,
+ * Modrinth's project field says `server_side: optional` for 107 of those 122 versions,
  * i.e. the server is a supported target. Overriding a pack author to remove a mod the
  * registry says the server tolerates is the wrong direction of error — see the note on
  * `serverSideVerdict`.
  *
- * An unrecognised value maps to `unknown` and therefore falls through to the next
- * signal, which is the only safe thing to do with an enum Modrinth can extend: guessing
- * from the string ("does it contain 'client'?") would read a future
- * `client_or_server_prefers_server` as client-only and delete it from every pack.
+ * A value **not** in this table maps to `unknown`, falls through to the next signal, and
+ * is reported through `unrecognisedEnvironment`. Falling through is the only safe thing
+ * to do with an enum Modrinth can extend — guessing from the string ("does it contain
+ * 'client'?") would read a future `client_or_server_prefers_server` as client-only and
+ * delete it from every pack, and would have read `singleplayer_only` as server-side.
+ * Reporting it is what stops the table going stale again. Note that the literal string
+ * `"unknown"` is a *mapped* value, not an unrecognised one: Modrinth returns it for 355
+ * of 2,751 versions and it means "this build says nothing", which is a different fact
+ * from "we cannot read what this build said".
  */
 const ENVIRONMENT_TO_SERVER: Record<string, SideDeclaration> = {
   client_only: "unsupported",
+  singleplayer_only: "unsupported",
   server_only: "required",
+  server_only_client_optional: "required",
+  dedicated_server_only: "required",
   client_and_server: "required",
   client_or_server: "optional",
   client_or_server_prefers_both: "optional",
@@ -144,28 +189,47 @@ function normaliseSide(raw: string | null | undefined): SideDeclaration {
  *   file is fixing, and it is reported rather than hidden.
  *
  * The signal ordering (file `env` → version `environment` → project `server_side`) is
- * most-specific-first, and the measurement that justifies it is the one disagreement in
- * the sample: 2 versions declared `client_and_server` while their project declared
- * `server_side: unsupported` — stale project metadata that a per-project check would
- * have used to drop a mod its own build says needs a server. Worth stating the other
- * half too, because it is what makes filtering safe: across all 160 versions
- * `client_only` paired with `server_side: unsupported` 66 times out of 66 and never
- * disagreed. **The signals never conflict on a skip; they conflict only on an install,
- * and the ordering resolves those toward installing.**
+ * most-specific-first, and the measurement over 2,751 versions says the version is the
+ * one to trust when they differ:
+ *
+ * - **A skip the project contradicts: 17 of 2,751 (0.6%).** All 14 `singleplayer_only`
+ *   versions sit on a project declaring `server_side: required` (e4mc, buildpaste,
+ *   runlab), plus 3 `client_only` versions on a project declaring `required`/`optional`
+ *   (pick-up-notifier, simple-homing-xp-no-particles). Every one of those is a client
+ *   mod with stale project metadata, so the version-first ordering gets all 17 right and
+ *   a project-first ordering would get all 17 wrong — by *installing* them.
+ * - An install the project contradicts: 37 of 2,751, led by 15 `client_and_server`
+ *   versions whose project says `unsupported`. Same conclusion, other direction: the
+ *   build knows, the project field has rotted.
+ *
+ * **The earlier draft of this comment said "the signals never conflict on a skip" and
+ * that is false** — it was measured over 160 versions of the top 40 mods, where
+ * `client_only` paired with `server_side: unsupported` 66 times out of 66. The wider
+ * sample has 17 counter-examples. The ordering survives the correction (it is right in
+ * all 17); the claim that nothing contested is ever skipped does not, so do not lean on
+ * it. What makes filtering safe is that a skip needs a **positive `unsupported`** from
+ * the most specific signal available, not that the signals agree.
  *
  * The fall-through on `unknown` is why this cannot be a one-liner: `unknown` is a value
- * the API returns (4 of 160), and in every case it was paired with a project
- * `server_side` that *was* decided. Treating it as "not server-supported" would drop
- * those; treating it as decided-install would ignore a project that says `unsupported`.
+ * the API returns (355 of 2,751), and 335 of those are paired with a project
+ * `server_side` that *was* decided. Treating it as "not server-supported" would drop 331
+ * mods the registry says the server supports; treating it as decided-install would
+ * ignore the 4 whose project says `unsupported`.
  */
 export function serverSideVerdict(signals: ModSideSignals): ServerSideVerdict {
+  const rawEnvironment = (signals.environment ?? "").trim().toLowerCase();
+  const mappedEnvironment = rawEnvironment ? ENVIRONMENT_TO_SERVER[rawEnvironment] : undefined;
+  // Loud, not silent — see `unrecognisedEnvironment`. An absent/blank `environment` is
+  // not unrecognised, it is simply not there; only a value Modrinth published that this
+  // table has no row for counts.
+  const loud: Pick<ServerSideVerdict, "unrecognisedEnvironment"> =
+    rawEnvironment && mappedEnvironment === undefined
+      ? { unrecognisedEnvironment: rawEnvironment }
+      : {};
+
   const candidates: Array<{ basis: ServerSideVerdict["basis"]; declared: SideDeclaration }> = [
     { basis: "file-env", declared: normaliseSide(signals.env?.server) },
-    {
-      basis: "version-environment",
-      declared:
-        ENVIRONMENT_TO_SERVER[(signals.environment ?? "").trim().toLowerCase()] ?? "unknown",
-    },
+    { basis: "version-environment", declared: mappedEnvironment ?? "unknown" },
     { basis: "project-server-side", declared: normaliseSide(signals.serverSide) },
   ];
 
@@ -176,6 +240,7 @@ export function serverSideVerdict(signals: ModSideSignals): ServerSideVerdict {
       basis: "nothing-declared",
       declared: "unknown",
       reason: "",
+      ...loud,
     };
   }
 
@@ -185,23 +250,61 @@ export function serverSideVerdict(signals: ModSideSignals): ServerSideVerdict {
       basis: decided.basis,
       declared: "unsupported",
       // Names the publisher of the claim, because "skipped as client-only" with no
-      // source is unarguable-with, and a wrong skip is the expensive direction.
+      // source is unarguable-with, and a wrong skip is the expensive direction. The
+      // version branch quotes the raw enum value: `singleplayer_only` and `client_only`
+      // are both skips and they are not the same statement, and a user looking at a
+      // mod they expected on the server needs the word Modrinth actually published.
       reason:
         decided.basis === "project-server-side"
           ? "client-only — Modrinth lists this project as server-side unsupported"
+          : decided.basis === "version-environment"
+          ? `client-only — this build declares \`${rawEnvironment}\`, which has no server support`
           : "client-only — this build declares no server support",
+      ...loud,
     };
   }
 
-  return { install: true, basis: decided.basis, declared: decided.declared, reason: "" };
+  return { install: true, basis: decided.basis, declared: decided.declared, reason: "", ...loud };
+}
+
+/**
+ * The warning raised when Modrinth published an `environment` value this app cannot read.
+ *
+ * Its own sentence, next to the table it is about, so the route cannot water it down into
+ * "some mods could not be checked". It names the value *and* a mod carrying it, because
+ * the only useful action is to look that value up and add a row to
+ * `ENVIRONMENT_TO_SERVER` — and a warning that does not say which string to look up gets
+ * read once and never acted on.
+ *
+ * Returns `""` for an empty list so a caller can `if (sentence)` without a length check.
+ */
+export function unrecognisedEnvironmentSentence(
+  seen: Array<{ name: string; environment: string }>,
+  limit = 5
+): string {
+  if (seen.length === 0) return "";
+  const values = [...new Set(seen.map((s) => s.environment))];
+  const examples = seen.slice(0, limit).map((s) => `\`${s.environment}\` on ${s.name}`);
+  const rest = seen.length - examples.length;
+  return (
+    `Modrinth reported ${values.length} \`environment\` value${values.length === 1 ? "" : "s"} ` +
+    `this app does not recognise (${examples.join(", ")}${rest > 0 ? `, +${rest} more` : ""}). ` +
+    `They were treated as undeclared, so nothing was skipped because of them — but the ` +
+    `mapping in src/lib/mod-admission.ts is out of date and should be updated.`
+  );
 }
 
 /**
  * Is this version's server support merely undeclared?
  *
- * The routes use it to decide whether the extra per-project fetch is worth making:
- * only 4 of 160 sampled versions are undecided, so resolving the fallback eagerly would
- * add ~160 HTTP round trips to a 166-mod apply to change ~4 answers.
+ * The routes use it to decide whether the extra per-project fetch is worth making.
+ * Measured over 2,751 versions: the version's own `environment` decides **2,396 of them
+ * (87%)**, so fetching the project for every mod would add one HTTP round trip per mod to
+ * change at most 13% of the answers. (The first draft of this comment said 4 of 160 —
+ * 2.5% — because it was measured on the top 40 mods only. 13% is a smaller saving than
+ * that implied but still the overwhelming majority of a 166-mod apply's fetches, and
+ * mapping `server_only_client_optional` and `dedicated_server_only` above removed 71 of
+ * the sample's fallbacks outright.)
  */
 export function needsProjectFallback(signals: Omit<ModSideSignals, "serverSide">): boolean {
   return serverSideVerdict(signals).basis === "nothing-declared";
@@ -344,6 +447,44 @@ function short(hex: string): string {
   return hex.trim().toLowerCase().slice(0, 12);
 }
 
+/**
+ * The declaration a plain HTTP download *does* come with: `Content-Length`.
+ *
+ * This exists because the modpack installer's direct-download (Technic/Solder) branch used
+ * to call `checkIntegrity({}, …)` — a literal empty declaration — which can only ever
+ * answer `{ok: true}`, so the `if (!check.ok)` guard below it was unreachable code with a
+ * comment claiming it was "unreachable today, live tomorrow". It was unreachable
+ * permanently, and this is the path with *no* registry hashes, i.e. the only one where a
+ * truncated download had nothing at all standing in its way. `ModpackMod` stores
+ * `modrinthId slug name versionId downloadUrl` and no hash or size column, so the
+ * declaration cannot come from our database; it has to come off the wire.
+ *
+ * `Content-Length` catches exactly the truncation that a dropped connection produces,
+ * which is the corruption `checkIntegrity`'s size branch was written for. It is a weaker
+ * guarantee than a hash and the result says so (`checked: "size"`, never "verified").
+ *
+ * **The `Content-Encoding` guard is load-bearing.** `fetch` decodes the body
+ * transparently, so for a gzip/br response `Content-Length` is the *compressed* length and
+ * comparing it against the decoded byte count fails every single file — a total failure
+ * that looks exactly like universal corruption, which is the same trap the case-sensitive
+ * hex compare had. Jars are already-compressed zips and are normally served `identity`,
+ * but a CDN that gzips regardless must not take every direct download down with it.
+ */
+export function declaredFromHeaders(headers: {
+  get(name: string): string | null;
+}): DeclaredArtefact {
+  const encoding = (headers.get("content-encoding") ?? "").trim().toLowerCase();
+  if (encoding && encoding !== "identity") return {};
+
+  const raw = (headers.get("content-length") ?? "").trim();
+  // Digits only: a missing header, `""`, a comma-joined duplicate (`"42, 42"`) or any
+  // other junk is "no declaration", not a number to compare against. `Number("")` is 0
+  // and `Number("42, 42")` is NaN, and either reaching the comparison is a false verdict.
+  if (!/^\d+$/.test(raw)) return {};
+  const size = Number(raw);
+  return Number.isSafeInteger(size) && size > 0 ? { size } : {};
+}
+
 // ---------------------------------------------------------------------------
 // Saying what was skipped
 // ---------------------------------------------------------------------------
@@ -440,4 +581,107 @@ export function skippedSentence(skipped: SkippedMod[], limit = 8): string {
     (rest > 0 ? `, +${rest} more` : "") +
     `.`
   );
+}
+
+// ---------------------------------------------------------------------------
+// What the apply reports, in one place
+// ---------------------------------------------------------------------------
+
+export interface ApplyReport extends ApplyVerdict {
+  installed: number;
+  /**
+   * The sentence the operation's final step records. `concludeOperation` reads the step's
+   * count rather than its words, but these words are what a human reads in the ledger
+   * months later, so they have to be true on every path that can reach them.
+   */
+  stepLabel: string;
+  /**
+   * The **amber** channel. `modpacks.tsx` renders every entry in `chart-5` — the warning
+   * colour — so a string belongs here only if something actually wants looking at.
+   *
+   * **Client-only skips are deliberately NOT in here**, and this is the one property of
+   * this function worth protecting. They were: the route pushed `skippedSentence(skipped)`
+   * into `warnings` *and* returned the named list in `skipped`, so a correct apply of a
+   * real pack rendered the same decision twice — once amber as a warning, once in the
+   * world accent under a heading whose own comment said "nothing went wrong here". A large
+   * pack is 30–50% client mods, so that amber block fired on every correct install, which
+   * is how a report teaches people to ignore it. The colour is a claim; the two have to
+   * agree. Skips travel in `skipped`, which the dialog renders in the world's accent.
+   */
+  warnings: string[];
+  skipped: SkippedMod[];
+  errors: string[];
+  /** The headline sentence, present only when the apply did not finish. */
+  error?: string;
+}
+
+/**
+ * Everything the modpack apply says about itself, derived once from the tally.
+ *
+ * It lives here rather than in the route because the route had four readers of the same
+ * arithmetic — the HTTP status, the response `error`, the operation's final step and the
+ * per-mod progress bar — and nothing stopping them disagreeing. `applyVerdict` already
+ * owned the counts; this owns the sentences built from them.
+ */
+export function applyReport(input: {
+  /** Rows in the modpack. */
+  packSize: number;
+  installed: number;
+  skipped: SkippedMod[];
+  errors: string[];
+  /**
+   * Warnings raised before the download loop — rows with no download source, `environment`
+   * values this app cannot read. Genuine warnings, passed through.
+   */
+  warnings: string[];
+  /** Mods now on disk with nothing published to compare them against. */
+  unverified: string[];
+}): ApplyReport {
+  const verdict = applyVerdict({
+    packSize: input.packSize,
+    skipped: input.skipped.length,
+    installed: input.installed,
+  });
+  const { total, failed, complete } = verdict;
+  const warnings = [...input.warnings];
+
+  if (input.unverified.length > 0) {
+    warnings.push(
+      `${input.unverified.length} mod${input.unverified.length === 1 ? " was" : "s were"} ` +
+        `installed without a checksum to verify against ` +
+        `(${input.unverified.slice(0, 5).join(", ")}` +
+        `${input.unverified.length > 5 ? `, +${input.unverified.length - 5} more` : ""}). ` +
+        `Modrinth publishes one for every file, so this means the mod came from a direct ` +
+        `download source.`
+    );
+  }
+
+  return {
+    ...verdict,
+    installed: input.installed,
+    // ONE shortfall sentence, because there is only one kind of shortfall left to report.
+    //
+    // This used to special-case `installed === 0` as "no download source recorded", which
+    // became unreachable the moment the plan pass landed: a row with no source is counted
+    // out *before* the download loop (it is pushed to `errors` and the pack is refused
+    // outright when none has a source), so reaching the loop at all means the plan was
+    // non-empty and `installed === 0` means every planned download failed. The old label
+    // named the one cause that could no longer produce it, which is worse than no label —
+    // somebody reading "no download source recorded" after a Modrinth outage goes and
+    // re-imports a pack that was fine.
+    stepLabel: complete
+      ? `Installed ${input.installed} of ${total} mods`
+      : `Installed ${input.installed} of ${total} mods — ${failed} failed`,
+    warnings,
+    skipped: input.skipped,
+    errors: input.errors,
+    ...(complete
+      ? {}
+      : {
+          error:
+            input.installed === 0
+              ? `No mods were installed (0 of ${total}). The server's mods are now empty.`
+              : `Only ${input.installed} of ${total} mods were installed.`,
+        }),
+  };
 }

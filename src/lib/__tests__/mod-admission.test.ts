@@ -1,47 +1,91 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyReport,
   applyVerdict,
   checkIntegrity,
+  declaredFromHeaders,
   digestsOf,
   needsProjectFallback,
   serverModTotal,
   serverSideVerdict,
   skippedSentence,
+  unrecognisedEnvironmentSentence,
   type ObservedArtefact,
 } from "../mod-admission";
 
 /**
- * The live Modrinth API, measured 2026-10-01 over `/v2/project/<id>/version` for the 40
- * most-downloaded mods — 160 versions. These are the real pairings of a version's
- * `environment` against its project's `server_side`, with the counts, and they are the
- * reason `mod-admission.ts` is shaped the way it is rather than a one-line
- * `environment === "client_only"` test:
+ * The live Modrinth API, measured 2026-10-01 over `/v2/project/<id>/version` across **527
+ * projects / 2,751 versions** — the top 200 mods by downloads, the top 100 each of
+ * `server_side:required`, `server_side:unsupported` and `client_side:unsupported`, the top
+ * 60 plugins, the 100 newest mods, and the top 40 each of modpacks and datapacks. These
+ * are the real pairings of a version's `environment` against its project's `server_side`,
+ * with the counts, and they are the reason `mod-admission.ts` is shaped the way it is
+ * rather than a one-line `environment === "client_only"` test.
  *
- * | `environment`                   | `server_side` |  n |
- * |---------------------------------|---------------|----|
- * | `client_only`                   | unsupported   | 66 |
- * | `client_or_server_prefers_both` | optional      | 36 |
- * | `client_or_server`              | optional      | 24 |
- * | `client_only_server_optional`   | optional      | 16 |
- * | `client_and_server`             | optional      |  8 |
- * | `client_and_server`             | required      |  4 |
- * | `unknown`                       | required      |  4 |
- * | `client_and_server`             | unsupported   |  2 |
+ * **This table replaces a 160-version one drawn from the 40 most-downloaded mods, and the
+ * narrow sample was actively misleading.** It contained no `server_only` row at all — even
+ * though the source comment claimed the value had been "observed directly on LuckPerms" —
+ * so flipping `server_only` from `required` to `unsupported` in the enum map was
+ * catastrophic and undetected: every server-only mod in every pack, silently dropped. It
+ * also missed `server_only_client_optional`, `dedicated_server_only` and
+ * `singleplayer_only` entirely. Nine rows below exist only because the sample was widened.
  *
- * Named mods confirmed individually: Sodium, Iris and Sodium Extra are `client_only` /
- * `server_side: unsupported`; Lithium and Fabric API are `client_or_server_prefers_both` /
- * `optional`; FerriteCore is `client_or_server` / `optional`; LuckPerms is `server_only`
- * with some versions `unknown`, project `server_side: required`.
+ * Every row is a (environment, server_side) pair that occurs in the wild; `n` is how often.
+ * Rows are ordered by `environment` frequency, and the whole table is driven through
+ * `serverSideVerdict` in the first test, so a mapping change that happens to keep one
+ * hand-picked case working still turns it red.
  */
 const MEASURED = [
-  { environment: "client_only", serverSide: "unsupported", n: 66, install: false },
-  { environment: "client_or_server_prefers_both", serverSide: "optional", n: 36, install: true },
-  { environment: "client_or_server", serverSide: "optional", n: 24, install: true },
-  { environment: "client_only_server_optional", serverSide: "optional", n: 16, install: true },
-  { environment: "client_and_server", serverSide: "optional", n: 8, install: true },
-  { environment: "client_and_server", serverSide: "required", n: 4, install: true },
-  { environment: "unknown", serverSide: "required", n: 4, install: true },
-  { environment: "client_and_server", serverSide: "unsupported", n: 2, install: true },
+  { environment: "client_and_server", serverSide: "required", n: 683, install: true },
+  { environment: "client_and_server", serverSide: "optional", n: 24, install: true },
+  { environment: "client_and_server", serverSide: "unsupported", n: 15, install: true },
+  { environment: "client_only", serverSide: "unsupported", n: 681, install: false },
+  { environment: "client_only", serverSide: "optional", n: 2, install: false },
+  { environment: "client_only", serverSide: "required", n: 1, install: false },
+  { environment: "server_only", serverSide: "required", n: 495, install: true },
+  { environment: "server_only", serverSide: "optional", n: 2, install: true },
+  { environment: "unknown", serverSide: "required", n: 315, install: true },
+  { environment: "unknown", serverSide: "optional", n: 16, install: true },
+  { environment: "unknown", serverSide: "unsupported", n: 4, install: false },
+  { environment: "client_or_server_prefers_both", serverSide: "optional", n: 185, install: true },
+  { environment: "client_or_server_prefers_both", serverSide: "unsupported", n: 6, install: true },
+  { environment: "client_only_server_optional", serverSide: "optional", n: 107, install: true },
+  { environment: "client_only_server_optional", serverSide: "unsupported", n: 15, install: true },
+  { environment: "client_or_server", serverSide: "optional", n: 82, install: true },
+  { environment: "client_or_server", serverSide: "required", n: 3, install: true },
+  { environment: "server_only_client_optional", serverSide: "required", n: 55, install: true },
+  { environment: "dedicated_server_only", serverSide: "required", n: 15, install: true },
+  { environment: "dedicated_server_only", serverSide: "unsupported", n: 1, install: true },
+  { environment: "singleplayer_only", serverSide: "required", n: 14, install: false },
+] as const;
+
+/**
+ * The three values the narrow sample missed, with the projects they were measured on and
+ * what each one says about a dedicated server.
+ *
+ * Separate from `MEASURED` because these are the rows a regression is most likely to
+ * remove — they are the ones somebody tidying the enum map would not recognise — and
+ * because the direction of each one needs stating on its own, with the mod that proves it.
+ */
+const WIDENED_SAMPLE_ADDITIONS = [
+  {
+    environment: "singleplayer_only",
+    install: false,
+    projects: ["e4mc", "buildpaste", "runlab"],
+    why: "opens a SINGLEPLAYER world; the opposite of a dedicated server",
+  },
+  {
+    environment: "server_only_client_optional",
+    install: true,
+    projects: ["c2me-fabric", "vmp-fabric", "tectonic", "open-parties-and-claims"],
+    why: "server performance and worldgen mods",
+  },
+  {
+    environment: "dedicated_server_only",
+    install: true,
+    projects: ["bluemap", "dynmap", "dcintegration", "tab-was-taken"],
+    why: "web maps and chat bridges that only exist on a server",
+  },
 ] as const;
 
 describe("which mods belong on a dedicated server", () => {
@@ -55,6 +99,81 @@ describe("which mods belong on a dedicated server", () => {
       const v = serverSideVerdict({ environment: row.environment, serverSide: row.serverSide });
       expect(v.install, `${row.environment} / ${row.serverSide}`).toBe(row.install);
     }
+    // Every value in the enum is exercised, so a row cannot be quietly dropped from the
+    // table above and take its coverage with it. 10 distinct values were measured.
+    expect(new Set(MEASURED.map((r) => r.environment)).size).toBe(10);
+  });
+
+  /**
+   * **Each value decided on its own, with no project field to lean on.**
+   *
+   * `MEASURED` always supplies a `serverSide`, and for every row except the skips that
+   * field agrees with the answer — so flipping a single mapping in `ENVIRONMENT_TO_SERVER`
+   * can leave the table green by falling through to a project that happens to say the same
+   * thing. `server_only` → `"unsupported"` is exactly that mutation: catastrophic (every
+   * server-only mod in every pack dropped) and invisible, because `server_only` had no row
+   * in the old table at all.
+   *
+   * Here the version is the only signal, so the mapping itself is what passes or fails.
+   */
+  it("decides each environment value with no project field to fall back on", () => {
+    const expected: Record<string, { install: boolean; declared: string }> = {
+      client_only: { install: false, declared: "unsupported" },
+      singleplayer_only: { install: false, declared: "unsupported" },
+      server_only: { install: true, declared: "required" },
+      server_only_client_optional: { install: true, declared: "required" },
+      dedicated_server_only: { install: true, declared: "required" },
+      client_and_server: { install: true, declared: "required" },
+      client_or_server: { install: true, declared: "optional" },
+      client_or_server_prefers_both: { install: true, declared: "optional" },
+      client_only_server_optional: { install: true, declared: "optional" },
+    };
+    for (const [environment, want] of Object.entries(expected)) {
+      const v = serverSideVerdict({ environment });
+      expect(v.install, environment).toBe(want.install);
+      expect(v.declared, environment).toBe(want.declared);
+      expect(v.basis, environment).toBe("version-environment");
+      // A mapped value is never reported as drift, however surprising it looks.
+      expect(v.unrecognisedEnvironment, environment).toBeUndefined();
+    }
+    // `unknown` is the tenth value and the only one that decides nothing.
+    expect(serverSideVerdict({ environment: "unknown" }).basis).toBe("nothing-declared");
+    expect(serverSideVerdict({ environment: "unknown" }).unrecognisedEnvironment).toBeUndefined();
+    // The table above has to stay exhaustive, or a future value can be added to the map
+    // with no row here and no test.
+    expect(Object.keys(expected)).toHaveLength(9);
+  });
+
+  /**
+   * The three values the 160-version sample missed, each asserted on its own with the
+   * projects it was measured on. `singleplayer_only` is the one that changes an answer, and
+   * it is the whole justification for widening the sample.
+   */
+  it.each(WIDENED_SAMPLE_ADDITIONS)(
+    "maps $environment ($why)",
+    ({ environment, install, projects }) => {
+      expect(projects.length).toBeGreaterThan(0);
+      expect(serverSideVerdict({ environment }).install).toBe(install);
+    }
+  );
+
+  /**
+   * `server_only` on its own, named, because it is the mutation that survived review and
+   * the one with the largest blast radius: 503 of 2,751 sampled versions are `server_only`,
+   * and mapping it to `unsupported` would make the installer drop every one of them —
+   * LuckPerms, dynmap, every permissions and admin mod — while reporting a clean apply,
+   * since a skip is not a failure.
+   */
+  it("installs a server_only mod, which is the mutation with the widest blast radius", () => {
+    const v = serverSideVerdict({ environment: "server_only" });
+    expect(v.install).toBe(true);
+    expect(v.declared).toBe("required");
+    expect(v.reason).toBe("");
+    // Even with no project field, and even when the project disagrees (measured: 2 of 503
+    // `server_only` versions sit on a project saying `optional`, 6 on one saying `unknown`).
+    expect(serverSideVerdict({ environment: "server_only", serverSide: "unknown" }).install).toBe(
+      true
+    );
   });
 
   /**
@@ -73,19 +192,18 @@ describe("which mods belong on a dedicated server", () => {
 
   /**
    * `client_only_server_optional` is the trap: it reads like a skip and is not one.
-   * Modrinth's own project field for all 16 of those versions says `server_side:
-   * optional`, i.e. the server is a supported target — so dropping it would be us
-   * overriding the registry to remove a mod a pack author chose.
+   * Modrinth's project field says `server_side: optional` for 107 of those 122 versions,
+   * i.e. the server is a supported target — so dropping it would be us overriding the
+   * registry to remove a mod a pack author chose.
    */
   it("installs client_only_server_optional, which reads like a skip", () => {
     expect(serverSideVerdict({ environment: "client_only_server_optional" }).install).toBe(true);
   });
 
   /**
-   * The disagreement that fixes the signal ORDER, and the only one in the sample: 2
-   * versions declare `client_and_server` while their project declares `server_side:
-   * unsupported`. Per-project-first would drop a mod whose own build says it needs a
-   * server. Per-version-first installs it.
+   * The disagreement that fixes the signal ORDER. 15 versions declare `client_and_server`
+   * while their project declares `server_side: unsupported`. Per-project-first would drop a
+   * mod whose own build says it needs a server. Per-version-first installs it.
    */
   it("prefers the version's own declaration over stale project metadata", () => {
     const v = serverSideVerdict({ environment: "client_and_server", serverSide: "unsupported" });
@@ -94,22 +212,44 @@ describe("which mods belong on a dedicated server", () => {
   });
 
   /**
-   * The complement, and the reason filtering is safe at all: the two signals NEVER
-   * disagreed on a skip across 160 versions — `client_only` paired with `unsupported`
-   * 66 times out of 66. So the destructive decision is never made on contested data.
+   * **A test whose predecessor encoded a false claim.** It read "the two signals NEVER
+   * disagreed on a skip across 160 versions" and asserted, for every skipping row, that the
+   * project field alone would also have skipped. That held only because the 160-version
+   * sample was the top 40 mods. The 2,751-version sample has **17 counter-examples**: all
+   * 14 `singleplayer_only` versions sit on a project declaring `server_side: required`, and
+   * 3 `client_only` versions on one declaring `required`/`optional`.
+   *
+   * So the honest property is not "the signals agree before we skip" — they sometimes do
+   * not. It is **"a skip needs a positive `unsupported` from the most specific signal
+   * available, and that signal is the version"**, which gets all 17 right where a
+   * project-first ordering would get all 17 wrong by installing a singleplayer mod on a
+   * dedicated server.
    */
-  it("agrees with the project field on every skip", () => {
-    for (const row of MEASURED.filter((r) => !r.install)) {
-      expect(serverSideVerdict({ serverSide: row.serverSide }).install).toBe(false);
-      expect(serverSideVerdict({ environment: row.environment }).install).toBe(false);
+  it("skips on the version's declaration even when the project contradicts it", () => {
+    // The real counter-examples, by project, from the measurement.
+    const contested = [
+      { mod: "e4mc", environment: "singleplayer_only", serverSide: "required" },
+      { mod: "buildpaste", environment: "singleplayer_only", serverSide: "required" },
+      { mod: "runlab", environment: "singleplayer_only", serverSide: "required" },
+      { mod: "simple-homing-xp-no-particles", environment: "client_only", serverSide: "required" },
+      { mod: "pick-up-notifier", environment: "client_only", serverSide: "optional" },
+    ];
+    for (const row of contested) {
+      const v = serverSideVerdict({ environment: row.environment, serverSide: row.serverSide });
+      expect(v.install, row.mod).toBe(false);
+      expect(v.basis, row.mod).toBe("version-environment");
     }
+    // And the project field alone still skips the uncontested majority (681 of 686
+    // `client_only` versions pair with `unsupported`), so the fallback is not useless — it
+    // is just not the signal that decides when both are present.
+    expect(serverSideVerdict({ serverSide: "unsupported" }).install).toBe(false);
   });
 
   /**
-   * `unknown` is a value the API returns (4 of 160), not a missing field, and it has to
+   * `unknown` is a value the API returns (355 of 2,751), not a missing field, and it has to
    * fall THROUGH to the project rather than being decided. Both directions matter: it
-   * must not drop a mod whose project says `required`, and it must not install one whose
-   * project says `unsupported`.
+   * must not drop the 331 mods whose project says `required`/`optional`, and it must not
+   * install the 4 whose project says `unsupported`.
    */
   it("falls through an unknown environment to the project's server_side", () => {
     expect(serverSideVerdict({ environment: "unknown", serverSide: "required" }).install).toBe(true);
@@ -125,7 +265,7 @@ describe("which mods belong on a dedicated server", () => {
    * An enum Modrinth has already extended once. A value we do not recognise must fall
    * through, never be guessed at from the string: a substring test for "client" would
    * read a future `client_or_server_prefers_server` as client-only and delete it from
-   * every pack it appears in.
+   * every pack it appears in — and would have read `singleplayer_only` as server-side.
    */
   it("falls through a value it does not recognise rather than guessing", () => {
     const future = serverSideVerdict({
@@ -137,6 +277,51 @@ describe("which mods belong on a dedicated server", () => {
     // With nothing else to go on it installs — fail-open, because a wrong skip removes a
     // mod the pack needs and nothing on screen would say which.
     expect(serverSideVerdict({ environment: "something_new_entirely" }).install).toBe(true);
+  });
+
+  /**
+   * **Safe AND loud.** Falling through silently is how `singleplayer_only` was installed on
+   * dedicated servers by the feature written to keep it off them: it was in the live API the
+   * whole time, it was not in the table, and nothing anywhere said so. The fall-through is
+   * the safe half and stays; `unrecognisedEnvironment` is the half that was missing.
+   */
+  it("reports an environment value it cannot read, while still installing the mod", () => {
+    const v = serverSideVerdict({ environment: "client_or_server_prefers_server" });
+    expect(v.install).toBe(true);
+    expect(v.unrecognisedEnvironment).toBe("client_or_server_prefers_server");
+
+    // Reported whatever the eventual verdict is, including when a project field decides it
+    // — the point is that our table is stale, not that the answer was wrong.
+    expect(
+      serverSideVerdict({ environment: "brand_new", serverSide: "unsupported" })
+        .unrecognisedEnvironment
+    ).toBe("brand_new");
+    expect(
+      serverSideVerdict({ environment: "BRAND_NEW", serverSide: "required" }).unrecognisedEnvironment
+    ).toBe("brand_new");
+
+    // And NOT reported for anything that is not drift: a mapped value (however odd it
+    // looks), a declared `unknown`, an absent field, or whitespace.
+    for (const environment of ["singleplayer_only", "dedicated_server_only", "unknown", "", "  "]) {
+      expect(
+        serverSideVerdict({ environment, serverSide: "required" }).unrecognisedEnvironment,
+        environment || "(blank)"
+      ).toBeUndefined();
+    }
+    expect(serverSideVerdict({}).unrecognisedEnvironment).toBeUndefined();
+    expect(serverSideVerdict({ environment: null }).unrecognisedEnvironment).toBeUndefined();
+  });
+
+  /** The skip reason quotes the raw enum value, because `client_only` and
+   * `singleplayer_only` are both skips and are not the same statement. */
+  it("names the declaration that decided a skip, not just the word client-only", () => {
+    expect(serverSideVerdict({ environment: "singleplayer_only" }).reason).toMatch(
+      /`singleplayer_only`/
+    );
+    expect(serverSideVerdict({ environment: "client_only" }).reason).toMatch(/`client_only`/);
+    // The project-decided skip keeps naming the project instead, since there is no version
+    // declaration to quote.
+    expect(serverSideVerdict({ serverSide: "unsupported" }).reason).toMatch(/project/);
   });
 
   /** Nothing declared at all (a Technic/Solder direct download) installs and says so. */
@@ -187,6 +372,84 @@ describe("which mods belong on a dedicated server", () => {
     expect(needsProjectFallback({})).toBe(true);
     expect(needsProjectFallback({ environment: "client_only" })).toBe(false);
     expect(needsProjectFallback({ environment: "client_or_server" })).toBe(false);
+    // The three added values decide locally, which is the 71 fetches of the sample that
+    // mapping them removed outright.
+    expect(needsProjectFallback({ environment: "singleplayer_only" })).toBe(false);
+    expect(needsProjectFallback({ environment: "server_only_client_optional" })).toBe(false);
+    expect(needsProjectFallback({ environment: "dedicated_server_only" })).toBe(false);
+    // An unreadable value still needs the fallback — that is what makes it safe.
+    expect(needsProjectFallback({ environment: "brand_new" })).toBe(true);
+  });
+});
+
+/**
+ * The declaration a plain HTTP download comes with, now that the direct-download branch no
+ * longer passes a literal `{}` to `checkIntegrity` (which could only ever answer `ok: true`,
+ * making the guard below it unreachable code on the one path with no registry hashes).
+ */
+describe("Content-Length as the direct download's declaration", () => {
+  const headers = (h: Record<string, string>) => new Headers(h);
+
+  it("reads a plain Content-Length as a size declaration", () => {
+    expect(declaredFromHeaders(headers({ "content-length": "4096" }))).toEqual({ size: 4096 });
+    expect(declaredFromHeaders(headers({ "Content-Length": " 4096 " }))).toEqual({ size: 4096 });
+  });
+
+  /**
+   * **The guard that stops this breaking every direct download.** `fetch` decodes the body
+   * transparently, so on a gzip response `Content-Length` is the *compressed* length and
+   * comparing it to the decoded byte count fails every single file — universal corruption
+   * that is really a universal false positive, the same shape as a case-sensitive hex
+   * compare against a registry that upper-cases its digests.
+   */
+  it("declares nothing when the transfer was encoded", () => {
+    expect(declaredFromHeaders(headers({ "content-length": "900", "content-encoding": "gzip" }))).toEqual(
+      {}
+    );
+    expect(declaredFromHeaders(headers({ "content-length": "900", "content-encoding": "br" }))).toEqual(
+      {}
+    );
+    // `identity` is "not encoded", so it is still comparable.
+    expect(
+      declaredFromHeaders(headers({ "content-length": "900", "content-encoding": "identity" }))
+    ).toEqual({ size: 900 });
+  });
+
+  it("declares nothing for a missing, empty or non-numeric header", () => {
+    expect(declaredFromHeaders(headers({}))).toEqual({});
+    expect(declaredFromHeaders(headers({ "content-length": "" }))).toEqual({});
+    expect(declaredFromHeaders(headers({ "content-length": "   " }))).toEqual({});
+    // A comma-joined duplicate header. `Number("42, 42")` is NaN and `Number("")` is 0;
+    // either one reaching the comparison is a false verdict on a good file.
+    expect(declaredFromHeaders(headers({ "content-length": "42, 42" }))).toEqual({});
+    expect(declaredFromHeaders(headers({ "content-length": "abc" }))).toEqual({});
+    expect(declaredFromHeaders(headers({ "content-length": "-1" }))).toEqual({});
+    // Zero is the "no value" case, same as on a registry file: a real jar is never empty.
+    expect(declaredFromHeaders(headers({ "content-length": "0" }))).toEqual({});
+  });
+
+  /** End to end: the header plus the bytes, through the real comparison. A truncated
+   * transfer is refused; a complete one passes as a size check, never as "verified". */
+  it("catches a truncated transfer and refuses to call a size check verification", () => {
+    const full = digestsOf(JAR);
+    const short = digestsOf(JAR.subarray(0, 4));
+
+    const bad = checkIntegrity(
+      declaredFromHeaders(headers({ "content-length": String(JAR.byteLength) })),
+      short
+    );
+    expect(bad.ok).toBe(false);
+    expect(bad.reason).toMatch(/truncated/);
+
+    const good = checkIntegrity(
+      declaredFromHeaders(headers({ "content-length": String(JAR.byteLength) })),
+      full
+    );
+    expect(good.ok).toBe(true);
+    expect(good.checked).toBe("size");
+
+    // No header at all: admitted, and flagged as unchecked so the report says so.
+    expect(checkIntegrity(declaredFromHeaders(headers({})), full).checked).toBe(null);
   });
 });
 
@@ -475,5 +738,143 @@ describe("the sentence the report leads with", () => {
    * reads "0 mods skipped" on the normal path is noise, and noise gets ignored. */
   it("says nothing when nothing was skipped", () => {
     expect(skippedSentence([])).toBe("");
+  });
+});
+
+describe("the warning raised by an environment value we cannot read", () => {
+  it("names the value and a mod carrying it", () => {
+    const s = unrecognisedEnvironmentSentence([
+      { name: "FromTheFuture", environment: "client_or_server_prefers_server" },
+    ]);
+    // The raw string, because the only useful action is to look it up and add a row.
+    expect(s).toContain("client_or_server_prefers_server");
+    expect(s).toContain("FromTheFuture");
+    // And it says what was done about it, so a reader does not assume mods were dropped.
+    expect(s).toMatch(/nothing was skipped/);
+    expect(s).toContain("src/lib/mod-admission.ts");
+  });
+
+  it("counts distinct values, not mods", () => {
+    const s = unrecognisedEnvironmentSentence([
+      { name: "A", environment: "brand_new" },
+      { name: "B", environment: "brand_new" },
+      { name: "C", environment: "also_new" },
+    ]);
+    expect(s).toMatch(/^Modrinth reported 2 `environment` values/);
+  });
+
+  it("truncates a long list and says how many are left", () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ name: `Mod ${i}`, environment: "x" }));
+    const s = unrecognisedEnvironmentSentence(many, 3);
+    expect(s).toContain("Mod 2");
+    expect(s).not.toContain("Mod 3");
+    expect(s).toContain("+6 more");
+  });
+
+  it("says nothing when the table is up to date", () => {
+    expect(unrecognisedEnvironmentSentence([])).toBe("");
+  });
+});
+
+describe("what the apply reports about itself", () => {
+  const sodium = { name: "Sodium", reason: "client-only — this build declares `client_only`" };
+  const iris = { name: "Iris", reason: "client-only — this build declares `client_only`" };
+
+  function report(over: Partial<Parameters<typeof applyReport>[0]> = {}) {
+    return applyReport({
+      packSize: 10,
+      installed: 8,
+      skipped: [sodium, iris],
+      errors: [],
+      warnings: [],
+      unverified: [],
+      ...over,
+    });
+  }
+
+  /**
+   * **The defect this function was extracted to fix.** The client-only skips were pushed
+   * into `warnings` *and* returned in `skipped`, so `modpacks.tsx` rendered the same
+   * decision twice — once in `chart-5`, the amber warning colour, and once in the world's
+   * accent under a heading whose own comment said "nothing went wrong here". A large pack
+   * is 30–50% client mods, so the amber block fired on every correct apply, which is how a
+   * report teaches people to ignore it.
+   *
+   * The colour is a claim. Skips travel in `skipped`; `warnings` stays empty unless
+   * something actually wants looking at.
+   */
+  it("keeps client-only skips out of the amber warning channel", () => {
+    const r = report();
+    expect(r.warnings).toEqual([]);
+    expect(r.skipped).toEqual([sodium, iris]);
+    // Stated the other way round too, so a mutant that puts the sentence back in under any
+    // wording is caught rather than only the exact `skippedSentence` call.
+    expect(r.warnings.join(" ")).not.toMatch(/skipped|client-only|Sodium|Iris/);
+  });
+
+  /** Warnings raised before the loop are passed through — the channel is not disabled, it
+   * is reserved for things that are actually warnings. */
+  it("passes through the warnings that are real warnings", () => {
+    const r = report({ warnings: ["3 of 10 mods in this pack have no download source"] });
+    expect(r.warnings).toEqual(["3 of 10 mods in this pack have no download source"]);
+  });
+
+  it("warns about mods installed with nothing to verify them against", () => {
+    const r = report({ unverified: ["Technic Thing"] });
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain("Technic Thing");
+    expect(r.warnings[0]).toMatch(/was installed without a checksum/);
+    // Plural agreement, because this sentence is read far more often than it is written.
+    expect(report({ unverified: ["A", "B"] }).warnings[0]).toMatch(/were installed/);
+    // Long lists are cut, with the remainder counted.
+    const many = report({ unverified: ["a", "b", "c", "d", "e", "f", "g"] });
+    expect(many.warnings[0]).toContain("+2 more");
+  });
+
+  /**
+   * **The step label the reviewer found unreachable.** It read
+   * `Installed 0 of N mods — no download source recorded`, which stopped being possible the
+   * moment the plan pass landed: a row with no source is counted out *before* the download
+   * loop, so reaching the loop means the plan was non-empty and `installed === 0` means
+   * every planned download failed. Naming the one cause that can no longer produce it is
+   * worse than naming none — somebody reading it after a Modrinth outage re-imports a pack
+   * that was fine.
+   */
+  it("says what actually happened when nothing installed", () => {
+    const r = report({ installed: 0, errors: ["A: 502", "B: 502", "C: 502"] });
+    expect(r.stepLabel).toBe("Installed 0 of 8 mods — 8 failed");
+    expect(r.stepLabel).not.toMatch(/no download source/);
+    expect(r.error).toMatch(/No mods were installed \(0 of 8\)/);
+    expect(r.complete).toBe(false);
+  });
+
+  it("states the shortfall when some installed and some did not", () => {
+    const r = report({ installed: 6 });
+    expect(r.stepLabel).toBe("Installed 6 of 8 mods — 2 failed");
+    expect(r.failed).toBe(2);
+    expect(r.error).toBe("Only 6 of 8 mods were installed.");
+  });
+
+  /**
+   * The green case, and the denominator decision in one assertion: 10 rows, 2 client-only,
+   * 8 installed is **complete**. Counting the skips would make it 8 of 10 — a `noop` step,
+   * outcome `partial`, amber on every correct apply of every real pack. That is the
+   * backup-`noop` regression this suite was created over.
+   */
+  it("calls an apply with only client-only shortfall complete, and adds no error", () => {
+    const r = report();
+    expect(r.total).toBe(8);
+    expect(r.complete).toBe(true);
+    expect(r.failed).toBe(0);
+    expect(r.stepLabel).toBe("Installed 8 of 8 mods");
+    expect(r.error).toBeUndefined();
+    expect(r.stepLabel).not.toMatch(/failed/);
+  });
+
+  /** The errors list is passed through untouched — the route's per-mod reasons are what the
+   * dialog lists, and a report that summarised them would lose the only actionable detail. */
+  it("passes the per-mod failures through verbatim", () => {
+    const errors = ["Gone: no compatible version", "Bad: sha512 mismatch"];
+    expect(report({ installed: 6, errors }).errors).toEqual(errors);
   });
 });

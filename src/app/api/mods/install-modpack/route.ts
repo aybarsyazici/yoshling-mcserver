@@ -4,15 +4,17 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { installMod, removeMod, serverSideFor } from "@/lib/mod-manager";
-import { getProjectVersions, type ModrinthVersion } from "@/lib/modrinth";
+import { getProjectVersions } from "@/lib/modrinth";
 import {
-  applyVerdict,
+  applyReport,
   checkIntegrity,
+  declaredFromHeaders,
   digestsOf,
-  serverModTotal,
   skippedSentence,
+  unrecognisedEnvironmentSentence,
   type SkippedMod,
 } from "@/lib/mod-admission";
+import { planModpackInstall, type PackMod } from "@/lib/mod-plan";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { mkdir, rm, stat } from "fs/promises";
@@ -49,22 +51,6 @@ const BACKUP_DIR = "/app/data/backups";
  * by hand had the long one.
  */
 const TAR_TIMEOUT_MS = 300_000;
-
-/**
- * The fields of a `ModpackMod` row this route reads.
- *
- * Replaces the `mods: any[]` the signature used to carry. Structural, not the Prisma type,
- * so the shape this code depends on is stated in one place — and `any[]` is what let
- * `(mod as any).downloadUrl` spread through the loop, which is how a row with no download
- * source reached the download step at all instead of being counted out at the top.
- */
-interface PackMod {
-  name: string;
-  slug: string;
-  modrinthId: string | null;
-  versionId: string | null;
-  downloadUrl: string | null;
-}
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -264,79 +250,55 @@ async function applyModpack(
   // It costs no extra network. The Modrinth version lookup used to happen inside the
   // download loop; it happens here instead and the resolved version is carried forward
   // on the plan, so the number of API calls is unchanged — only the order is. The one
-  // addition is a per-project fetch for the ~2.5% of versions whose `environment` is
+  // addition is a per-project fetch for the ~13% of versions whose `environment` is
   // `unknown`, which `serverSideFor` makes conditionally for exactly that reason.
-  // `url` and `modrinthId` are carried on the item rather than re-read off `mod` in the
-  // download loop. Both are nullable on the row, and the narrowing that proved them
-  // non-null happened here; re-deriving them later would need a second null check or a
-  // `!`, and a `!` on the wrong branch is how a `null` modrinthId reaches Modrinth as the
-  // string "null".
-  type PlanItem =
-    | { kind: "direct"; mod: PackMod; url: string }
-    | { kind: "modrinth"; mod: PackMod; modrinthId: string; version: ModrinthVersion };
-
-  const plan: PlanItem[] = [];
+  //
+  // The decisions themselves live in `src/lib/mod-plan.ts`, with the two Modrinth calls
+  // injected. They were inline here and were therefore untestable — this route needs
+  // `auth()`, Prisma, a mods directory, `tar` and the network — and an adversarial review
+  // showed what that costs: deleting the client-only filter outright
+  // (`if (false && !side.install)`) restored the exact pre-change behaviour and the whole
+  // suite stayed green. `src/lib/__tests__/mod-plan.test.ts` drives it directly now.
   op.step("Checking which mods run on a server");
-  let examined = 0;
-  for (const mod of modpack.mods) {
-    // Observed, one mod per iteration, same as the download loop below.
-    op.progress({ kind: "count", done: examined, total: modpack.mods.length, noun: "mods" });
-    op.detail(mod.name);
-    examined++;
-    try {
-      if (mod.downloadUrl) {
-        // A Technic/Solder direct download publishes no side declaration and no
-        // checksum, so there is nothing to filter on and nothing to verify against.
-        // Installed, and reported as unverified further down rather than counted as
-        // checked.
-        plan.push({ kind: "direct", mod, url: mod.downloadUrl });
-      } else if (mod.modrinthId) {
-        const versions = await getProjectVersions(mod.modrinthId, {
-          loaders: [serverConfig.modLoader],
-          game_versions: [serverConfig.mcVersion],
-        });
-        const version = mod.versionId
-          ? versions.find((v) => v.id === mod.versionId)
-          : versions[0];
-        if (!version) {
-          errors.push(`${mod.name}: no compatible version`);
-          continue;
-        }
-        const side = await serverSideFor(version, mod.modrinthId);
-        if (!side.install) {
-          // NOT an error and NOT silent. The 7DTD config route's documented defect was
-          // dropping settings it could not write and reporting "Saved"; the fix there
-          // was to name them. Same shape here: a skip is a decision the user gets to
-          // see and disagree with.
-          skipped.push({ name: mod.name, reason: side.reason });
-          continue;
-        }
-        plan.push({ kind: "modrinth", mod, modrinthId: mod.modrinthId, version });
-      } else {
-        // Modpacks imported before f2018a4 stored no modrinthId (the Modrinth project
-        // endpoint returns `id`, not `project_id`), so whole packs are unusable until
-        // they are imported again.
-        errors.push(`${mod.name}: no download source recorded — re-import this modpack`);
-      }
-    } catch (e) {
-      // A mod we could not even look up is a FAILURE, not a skip: it stays in the
-      // denominator and gets named. Treating a Modrinth timeout as "client-only" would
-      // quietly shrink the pack every time the API had a bad minute.
-      errors.push(
-        `${mod.name}: ${(e instanceof Error && e.message) || "could not be checked"}`
-      );
-    }
-  }
-  op.progress({ kind: "count", done: examined, total: modpack.mods.length, noun: "mods" });
+  const plan = await planModpackInstall({
+    mods: modpack.mods,
+    resolveVersions: (modrinthId) =>
+      getProjectVersions(modrinthId, {
+        loaders: [serverConfig.modLoader],
+        game_versions: [serverConfig.mcVersion],
+      }),
+    sideFor: serverSideFor,
+    onExamine: (mod, index) => {
+      // Observed, one mod per iteration, same as the download loop below.
+      op.progress({ kind: "count", done: index, total: modpack.mods.length, noun: "mods" });
+      op.detail(mod.name);
+    },
+  });
+  errors.push(...plan.errors);
+  skipped.push(...plan.skipped);
+  op.progress({
+    kind: "count",
+    done: modpack.mods.length,
+    total: modpack.mods.length,
+    noun: "mods",
+  });
   op.detail(undefined);
+
+  // An `environment` value Modrinth published and this app has no row for. A real warning:
+  // the mod was installed (falling through is the safe direction) but our table is stale,
+  // and `singleplayer_only` sat unmapped in the live API through this feature's first draft
+  // — silently installing on the server the one kind of mod it was written to keep off.
+  if (plan.unrecognised.length > 0) {
+    warnings.push(unrecognisedEnvironmentSentence(plan.unrecognised));
+  }
 
   // THE DENOMINATOR, and the one deliberate decision in this change: every row in the
   // pack minus the mods positively declared client-only, i.e. "the mods that belong on
-  // this server". Why neither the pack's row count nor `plan.length` works — one makes
-  // every honest apply amber, the other hides failures — is written out on
-  // `serverModTotal`, which is where the rule lives so that the unit tests pin the number
-  // this route actually reports rather than a copy of the arithmetic.
-  const total = serverModTotal(modpack.mods.length, skipped.length);
+  // this server". Why neither the pack's row count nor the plan's length works — one makes
+  // every honest apply amber, the other hides failures — is written out on `ModPlan.total`
+  // and `serverModTotal`, which is where the rule lives so that the unit tests pin the
+  // number this route reports rather than a copy of the arithmetic.
+  const total = plan.total;
 
   // ONE settle per path, and the branch is decided before it rather than after it.
   //
@@ -363,7 +325,7 @@ async function applyModpack(
   // and *"Installing the modpack failed after 2 steps: No mod in this pack runs on a
   // server."*, which is the true sentence; the route keeps its own 409, which is exactly
   // what `reject` is documented for.
-  if (plan.length === 0) {
+  if (plan.items.length === 0) {
     // Nothing has been backed up or deleted yet — same ordering argument as the
     // no-download-source branch above — so this refusal costs nothing.
     op.reject(`No mod in this pack runs on a server`);
@@ -402,13 +364,18 @@ async function applyModpack(
       // declining to put a client mod on a server is this step working. `noop` here would
       // make `concludeOperation` return `partial` and paint every correct apply of every
       // real pack amber — a large pack is 30-50% client mods.
-      count: { done: plan.length, total: modpack.mods.length, noun: "to install" },
+      count: { done: plan.items.length, total: modpack.mods.length, noun: "to install" },
     }
   );
 
-  if (skipped.length > 0) {
-    warnings.push(skippedSentence(skipped));
-  }
+  // The skips are NOT pushed into `warnings` here, and that omission is the fix for a real
+  // defect rather than an oversight. They used to be — and they were also returned in
+  // `skipped`, which `modpacks.tsx` renders in the world's accent under a heading saying
+  // nothing went wrong. `warnings` renders in `chart-5`, the amber warning colour. So one
+  // correct decision appeared twice in the same dialog in two colours that contradicted
+  // each other, on every apply of every real pack (30–50% client mods). The colour is a
+  // claim; see `ApplyReport.warnings`. They are recorded as an operation fact below, which
+  // is plain-toned and outlives the HTTP response.
 
   // Auto-backup the world before touching mods.
   //
@@ -503,7 +470,7 @@ async function applyModpack(
    * the report can say "installed but not verified" instead of implying it checked. */
   const unverified: string[] = [];
   op.step("Downloading mods");
-  for (const item of plan) {
+  for (const item of plan.items) {
     const mod = item.mod;
     // Real counts only: the loop genuinely handles one mod at a time, so this is
     // observed rather than interpolated. A count that only jumps 0 → n would be a fake.
@@ -513,9 +480,16 @@ async function applyModpack(
     op.detail(mod.name);
     try {
       if (item.kind === "direct") {
-        // Direct download (e.g. Technic/Solder). No checksum and no size are published
-        // on this path, so `checkIntegrity` answers `checked: null` — which is recorded
-        // as unverified rather than quietly treated as verified.
+        // Direct download (e.g. Technic/Solder). No registry publishes a hash for this
+        // path, so the declaration comes off the response itself: `declaredFromHeaders`
+        // reads `Content-Length`, which catches the truncated transfer a dropped
+        // connection produces.
+        //
+        // It used to pass a literal `{}` here, which `checkIntegrity` can only ever answer
+        // `{ok: true}` to — so the guard below was unreachable code carrying a comment that
+        // said it was "unreachable today, live tomorrow". It was unreachable permanently,
+        // on the one path with no hashes at all. `Content-Length` is the real declaration
+        // that was available the whole time.
         const { writeFile } = await import("fs/promises");
         const path = await import("path");
         const { getModsDir } = await import("@/lib/server-manager");
@@ -527,15 +501,16 @@ async function applyModpack(
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());
-        const check = checkIntegrity({}, digestsOf(buffer));
+        const check = checkIntegrity(declaredFromHeaders(response.headers), digestsOf(buffer));
         if (!check.ok) {
-          // Unreachable today (with nothing declared there is nothing to contradict),
-          // but the branch is here so that the day a direct source starts publishing a
-          // size or a hash, this path refuses a bad file instead of writing it. The
-          // order is the guarantee: the check is above the `writeFile`.
+          // The bytes are short of what the server said it was sending. Refused, not
+          // written — the order is the guarantee: this is above the `writeFile`.
           errors.push(`${mod.name}: ${check.reason}`);
           continue;
         }
+        // No `Content-Length` (or a compressed transfer, where it describes the encoded
+        // bytes and cannot be compared) means nothing was checked, and the report says so
+        // rather than implying it verified.
         if (check.checked === null) unverified.push(mod.name);
 
         const fileName = `${mod.slug}.jar`;
@@ -578,39 +553,27 @@ async function applyModpack(
   // This used to answer 200 {success:true} whatever happened, so a pack whose rows all
   // lack a download source reported "Installed 0/166 mods" in a green toast.
   //
-  // Derived from the same `serverModTotal` the progress count above used, so the response
-  // status, the operation's final step and the per-mod bar cannot disagree about whether
-  // the same apply finished.
-  const { complete, failed } = applyVerdict({
+  // Every sentence and every count below comes out of this one call — see `applyReport`.
+  // The HTTP status, the response `error`, the operation's final step and the per-mod
+  // progress bar were four readers of the same arithmetic with nothing stopping them
+  // disagreeing.
+  const report = applyReport({
     packSize: modpack.mods.length,
-    skipped: skipped.length,
     installed,
+    skipped,
+    errors,
+    warnings,
+    unverified,
   });
-
-  if (unverified.length > 0) {
-    warnings.push(
-      `${unverified.length} mod${unverified.length === 1 ? " was" : "s were"} installed without a ` +
-        `checksum to verify against (${unverified.slice(0, 5).join(", ")}` +
-        `${unverified.length > 5 ? `, +${unverified.length - 5} more` : ""}). ` +
-        `Modrinth publishes one for every file, so this means the mod came from a direct ` +
-        `download source.`
-    );
-  }
+  const { complete } = report;
 
   // The count IS the verdict. `concludeOperation` reads this step: 0-of-a-real-total
   // is `nothing`, short-of-total is `partial`, and neither can render green however
   // the response below is worded.
-  op.settle(
-    installed === 0
-      ? `Installed 0 of ${total} mods — no download source recorded`
-      : complete
-      ? `Installed ${installed} of ${total} mods`
-      : `Installed ${installed} of ${total} mods — ${failed} failed`,
-    {
-      kind: complete ? "done" : "noop",
-      count: { done: installed, total, noun: "mods" },
-    }
-  );
+  op.settle(report.stepLabel, {
+    kind: complete ? "done" : "noop",
+    count: { done: installed, total, noun: "mods" },
+  });
   op.progress({ kind: "count", done: installed, total, noun: "mods" });
 
   return {
@@ -626,19 +589,12 @@ async function applyModpack(
       // exact failure the suite already pins for backups ("part of it is missing. This is
       // not a restore point." on a flawless archive). The names are still recorded, so
       // the decision is auditable from the ledger long after the HTTP response is gone.
+      //
+      // `skippedSentence` writes it, which is also the only remaining caller of that
+      // helper now that the amber duplicate in `warnings` is gone — one definition of the
+      // sentence, in the module that knows what a skip means.
       ...(skipped.length
-        ? [
-            {
-              label: "Skipped as client-only",
-              value:
-                `${skipped.length} — ` +
-                skipped
-                  .slice(0, 5)
-                  .map((s) => s.name)
-                  .join(", ") +
-                (skipped.length > 5 ? `, +${skipped.length - 5} more` : ""),
-            },
-          ]
+        ? [{ label: "Skipped as client-only", value: skippedSentence(skipped, 5) }]
         : []),
       // NAMES, not just a count. This fact used to read "3 mods reported a problem",
       // and the summary `concludeOperation` builds from it said "Open the report for
@@ -674,20 +630,15 @@ async function applyModpack(
         success: complete,
         installed,
         total,
-        errors,
-        warnings,
+        errors: report.errors,
+        // The amber channel, and the client-only skips are deliberately not in it — see
+        // `ApplyReport.warnings` and the note next to the plan step above.
+        warnings: report.warnings,
         // `[{name, reason}]`, not a count: the report dialog names them, because a user
         // who cannot see *which* mods were held back cannot tell a correct filter from a
         // broken one — and the reason string says which signal decided.
-        skipped,
-        ...(complete
-          ? {}
-          : {
-              error:
-                installed === 0
-                  ? `No mods were installed (0 of ${total}). The server's mods are now empty.`
-                  : `Only ${installed} of ${total} mods were installed.`,
-            }),
+        skipped: report.skipped,
+        ...(report.error ? { error: report.error } : {}),
       },
       { status: complete ? 200 : 500 }
     ),

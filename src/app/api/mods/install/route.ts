@@ -113,6 +113,14 @@ export async function POST(request: NextRequest) {
       `Mod installed` +
       (check.checked === null ? ` (no checksum was published, so it could not be verified)` : ``) +
       `. Restart server to activate.` +
-      (!side.install ? ` It is client-only — it will not do anything on a server.` : ``),
+      // The same consequence the 409 above states, not a softer one. This used to read
+      // "it will not do anything on a server" — reassuring, and contradicted by the refusal
+      // in this very file, which says a client-only jar may "stop the server from
+      // starting". The forced path is exactly where the warning has to be the honest one:
+      // whoever sent `allowClientOnly` is the person who needs to know that the next boot
+      // may be the symptom.
+      (!side.install
+        ? ` It is client-only — on a server it does nothing at best, and can stop the server from starting.`
+        : ``),
   });
 }

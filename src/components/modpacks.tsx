@@ -592,11 +592,16 @@ export function Modpacks() {
               </div>
             ))}
 
-            {/* Skipped client-only mods, in the world's own accent rather than the amber
-                `chart-5` the warnings use. The colour is the claim: nothing went wrong
-                here, and dressing a correct decision as a warning is how a report teaches
-                people to ignore it. Named one per row with the reason, because a count
-                alone cannot be checked. */}
+            {/* Skipped client-only mods, bordered in the world's own accent
+                (`--tint`) rather than the amber `chart-5` the warning blocks above use.
+                The colour is the claim: nothing went wrong here, and dressing a correct
+                decision as a warning is how a report teaches people to ignore it.
+
+                That claim was false when it was written — the route also pushed the skip
+                sentence into `warnings`, so the same decision rendered twice, once amber
+                two blocks up. The amber copy is gone (see `ApplyReport.warnings`); the
+                skips arrive only in `skipped` and only this block shows them. Named one
+                per row with the reason, because a count alone cannot be checked. */}
             {installReport && installReport.skipped.length > 0 && (
               <div className="space-y-1">
                 <p className="text-sm font-medium">

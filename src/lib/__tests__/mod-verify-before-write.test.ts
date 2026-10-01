@@ -87,12 +87,16 @@ describe("a corrupt jar is never written to the mods directory", () => {
 
   /**
    * The modpack installer's direct-download (Technic/Solder) branch does not go through
-   * `installMod`, so it is a third writer and needs the same order. It publishes no
-   * checksum today, so the check currently answers "nothing to compare against" — the
-   * branch exists so that the day a direct source does publish one, a bad file is refused
-   * rather than written.
+   * `installMod`, so it is a third writer and needs the same order.
+   *
+   * It must also check against something **real**. It used to pass a literal `{}` to
+   * `checkIntegrity`, which can only answer `{ok: true}` — so the refusal below it was
+   * unreachable code, on the one path with no registry hashes at all, carrying a comment
+   * claiming it was "unreachable today, live tomorrow". `declaredFromHeaders` reads the
+   * response's `Content-Length`, which is the declaration that was available the whole
+   * time; `mod-admission.test.ts` drives that comparison end to end.
    */
-  it("checks the direct-download branch before writing it too", async () => {
+  it("checks the direct-download branch against the response, before writing it", async () => {
     const source = await text("app/api/mods/install-modpack/route.ts");
 
     const gotBytes = source.indexOf("arrayBuffer()");
@@ -102,6 +106,11 @@ describe("a corrupt jar is never written to the mods directory", () => {
     expect([gotBytes, checked, wrote].every((i) => i >= 0)).toBe(true);
     expect(checked).toBeGreaterThan(gotBytes);
     expect(wrote).toBeGreaterThan(checked);
+
+    // The declaration comes off the response, not from a literal. `checkIntegrity({}, …)`
+    // is the dead-guard shape and must not come back.
+    expect(source).toMatch(/checkIntegrity\(declaredFromHeaders\(response\.headers\)/);
+    expect(source).not.toMatch(/checkIntegrity\(\{\}/);
 
     // There is exactly one place in this route that writes into the mods directory. A
     // second one would not be covered by the ordering asserted above.
@@ -156,19 +165,62 @@ describe("a corrupt jar is never written to the mods directory", () => {
    * The client/server filter must be one decision shared by both installers, for the same
    * reason as the download: the single-mod route and the 166-mod route deciding
    * differently about the same jar is the drift this codebase keeps paying for.
+   *
+   * `/api/mods/install` calls `serverSideFor` directly; `install-modpack` hands it to
+   * `planModpackInstall` as the `sideFor` dependency. Either way the decision is the one in
+   * `mod-manager.ts`, and neither route may reimplement the enum.
    */
   it("routes both installers through the one server-side decision", async () => {
     for (const rel of ["app/api/mods/install/route.ts", "app/api/mods/install-modpack/route.ts"]) {
       const source = await text(rel);
-      expect(source, rel).toMatch(/serverSideFor\(/);
-      // Neither route may reimplement the enum. Matched on the COMPARISON, not on the
-      // token: a comment that mentions `client_only` is fine and useful, while
-      // `version.environment === "client_only"` in a route is a second copy of the
-      // mapping — which is how `client_only_server_optional`, the value that reads like a
-      // skip and is not one, gets "simplified" into one.
+      expect(source, rel).toMatch(/\bserverSideFor\b/);
+      // Matched on the COMPARISON, not on the token: a comment that mentions `client_only`
+      // is fine and useful, while `version.environment === "client_only"` in a route is a
+      // second copy of the mapping — which is how `client_only_server_optional`, the value
+      // that reads like a skip and is not one, gets "simplified" into one.
       expect(source, rel).not.toMatch(/environment\s*[=!]==/);
       expect(source, rel).not.toMatch(/[=!]==\s*["']client_/);
       expect(source, rel).not.toMatch(/["']client_[a-z_]*["']\s*\.includes|includes\(\s*["']client/);
     }
+  });
+
+  /**
+   * **The plan pass lives in a module a test can reach, and the route must keep using it.**
+   *
+   * These decisions were inline in the route, where nothing could execute them, and an
+   * adversarial review turned that into two surviving mutants in minutes: `if (false &&
+   * !side.install)` deleted the whole client-only filter and `serverModTotal(…)` →
+   * `plan.length` substituted the denominator the route's own comment calls the one that
+   * "hides failures". Both passed 762 tests. `src/lib/__tests__/mod-plan.test.ts` asserts
+   * the behaviour; this asserts the route has not grown a second copy of it, because a test
+   * on an extracted module is worth nothing if the caller stops calling it.
+   */
+  it("keeps the modpack installer's plan in the module the tests can drive", async () => {
+    const source = await text("app/api/mods/install-modpack/route.ts");
+    expect(source).toMatch(/await planModpackInstall\(\{/);
+    // The denominator comes off the plan, not recomputed here — one definition, and the
+    // plan's own tests pin it.
+    expect(source).toMatch(/const total = plan\.total;/);
+    expect(source).not.toMatch(/serverModTotal\(/);
+    // And the route does not re-derive a total from the plan's length, which is the
+    // substitution that reads "163 of 163 — complete" with three failures beside it.
+    expect(source).not.toMatch(/total\s*=\s*plan\.items\.length/);
+  });
+
+  /**
+   * **Client-only skips must not enter the amber warning channel.**
+   *
+   * They did, *and* they were returned in `skipped`, so the same correct decision rendered
+   * twice in `modpacks.tsx` — once in `chart-5` (the warning colour) and once in the world's
+   * accent under a heading saying nothing went wrong. The colour is a claim.
+   * `mod-admission.test.ts` pins that `applyReport` leaves `warnings` empty for a
+   * skip-only shortfall; this pins that the route does not go around it.
+   */
+  it("does not push the skip sentence into the route's warnings", async () => {
+    const source = await text("app/api/mods/install-modpack/route.ts");
+    expect(source).not.toMatch(/warnings\.push\(\s*skippedSentence/);
+    // The helper is still used — as the operation fact, which is plain-toned. A guard that
+    // only forbade the push would also pass if the skips stopped being reported at all.
+    expect(source).toMatch(/skippedSentence\(skipped, 5\)/);
   });
 });

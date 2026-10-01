@@ -90,11 +90,12 @@ export async function downloadVerifiedJar(file: ModrinthFile): Promise<VerifiedD
  * repo drifted into three copies and two of them missed a fix, which is the standing
  * argument against a second copy of a decision like this.
  *
- * The project fetch is **conditional**: a version's own `environment` decides 156 of 160
- * sampled versions, so fetching the project for every mod would add ~160 round trips to
- * a 166-mod apply to change about four answers. It is still worth making for those four
- * — see `serverSideVerdict`, where `unknown` versions were measured against decided
- * projects.
+ * The project fetch is **conditional**: a version's own `environment` decides 2,396 of the
+ * 2,751 versions measured (87%), so fetching the project for every mod would add one round
+ * trip per mod to a 166-mod apply to change at most 13% of the answers. It is still worth
+ * making for those — see `serverSideVerdict`, where the `unknown` versions were measured
+ * against decided projects. (An earlier draft said 156 of 160, i.e. a 2.5% fallback rate;
+ * that was the top 40 mods only, and the wider sample puts it at 13%.)
  */
 export async function serverSideFor(
   version: Pick<ModrinthVersion, "environment">,
