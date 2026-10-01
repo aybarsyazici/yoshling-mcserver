@@ -3,7 +3,7 @@ import path from "path";
 import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld, sdtdSessionIsGameReady, telnetSession } from "@/lib/telnet";
-import { getPzStatus, pzConsole, pzSave, readModState } from "@/lib/zomboid";
+import { getPzStatus, pzConsole, pzConsoleLong, pzSave, readModState } from "@/lib/zomboid";
 import {
   parseGamePrefs,
   parseMcDifficulty,
@@ -935,7 +935,10 @@ const zomboidDriver: GameDriver = {
    * something.
    */
   async readLive() {
-    const values = parsePzOptions(await pzConsole("showoptions", 9000));
+    // `pzConsoleLong`, not `pzConsole`: this reply is 6,789 bytes and the cached
+    // `rcon-client` socket returns only the first packet, which silently cut 137 settings
+    // to 79 on production. See `src/lib/rcon-frame.ts`.
+    const values = parsePzOptions(await pzConsoleLong("showoptions", 9000));
     if (Object.keys(values).length === 0) {
       throw new Error("showoptions returned nothing readable");
     }

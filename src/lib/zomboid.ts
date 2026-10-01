@@ -1,6 +1,7 @@
 import { readdir, readFile, stat, writeFile } from "fs/promises";
 import path from "path";
 import { rconCommand, type RconTarget } from "@/lib/rcon";
+import { rconCommandLong } from "@/lib/rcon-long";
 import {
   classifyLiveOptions,
   parseShowOptions,
@@ -376,6 +377,22 @@ export async function pzConsole(command: string, timeoutMs = 8000): Promise<stri
   return rconCommand(pzTarget(), command, timeoutMs);
 }
 
+/**
+ * The same thing, for commands whose reply exceeds one 4096-byte RCON packet.
+ *
+ * `showoptions` is 6,789 bytes on this server and `rconCommand` returned the first 4,102 of
+ * it — 79 of 137 settings, silently, with `available: true` and the chips rendering. See
+ * `src/lib/rcon-frame.ts` for the measurement and why the shared cached socket is
+ * deliberately not used here.
+ *
+ * Use this for any reply that can be long: `showoptions`, and anything that enumerates.
+ * Short control commands (`save`, `quit`, `players`) stay on the cached socket, which is
+ * the right transport for a poll that runs every few seconds.
+ */
+export async function pzConsoleLong(command: string, timeoutMs = 9000): Promise<string> {
+  return rconCommandLong(pzTarget(), command, { timeoutMs });
+}
+
 /** Flush the world to disk. Used before stopping so nothing is lost. */
 export async function pzSave(): Promise<void> {
   await pzConsole("save");
@@ -419,7 +436,10 @@ export async function reloadLiveOptions(
 
   let live: Map<string, string>;
   try {
-    live = parseShowOptions(await pzConsole("showoptions", timeoutMs));
+    // Must be the draining reader. This is the save *report* — the thing that tells the
+    // user whether the game took the value — so a truncated reply would make the last 58
+    // settings unverifiable while reporting the first 79 as checked.
+    live = parseShowOptions(await pzConsoleLong("showoptions", timeoutMs));
   } catch {
     // The reload was acknowledged but the read-back failed, so nothing is proven.
     return { reloaded, verified: [], unverified: Object.keys(expect), stale: [] };
