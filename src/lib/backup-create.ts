@@ -47,7 +47,48 @@ import { recordBackupEvent } from "@/lib/backup-log";
 import { copyTreeCounting, countTree } from "@/lib/backup-copy";
 
 const execFileAsync = promisify(execFile);
-const TAR_TIMEOUT_MS = 300_000;
+
+/**
+ * No wall-clock cap on the archive step.
+ *
+ * It was 300 s, and that was 13% away from breaking Project Zomboid's backups for good.
+ * Measured 2026-09-30 on a real create: the `tar` alone took **261,370 ms — 87% of the
+ * budget** — for a 1.9 GB / 442,065-file world, and the first *automatic* run had already
+ * failed on it. The save only grows.
+ *
+ * A timeout here cannot make a slow archive faster; it can only convert "slow" into "no
+ * restore point", which is the worse of the two outcomes by a wide margin. And the thing
+ * a timeout usually protects — an operation hanging invisibly forever — is already
+ * handled better one layer up: `runOperation` narrates the step, heartbeats it, and the
+ * ledger shows elapsed time, so a genuinely stuck tar is visible rather than silent.
+ *
+ * `undefined` rather than a bigger number on purpose. Any number is a guess about disk
+ * speed and world size, and the next person to hit it will be debugging a bare
+ * `Command failed: tar …` at 3am — see `tarFailure` for why that message was so unhelpful.
+ */
+const TAR_TIMEOUT_MS: number | undefined = undefined;
+
+/**
+ * Turn an `execFile` rejection into a sentence that names the cause.
+ *
+ * The real failure recorded on 2026-09-30 read, in full:
+ * `Command failed: tar -czf …/zomboid-….tar.gz -C …/.work-… . ` — Node's timeout
+ * signature is exactly `Command failed: <cmd>` with **empty stderr**, so the one fact that
+ * explained it (it was killed at the deadline, not broken) appeared nowhere. That is the
+ * failure-path twin of this project's documented defect: not claiming false success, but
+ * reporting a failure whose reason is unrecoverable from the record.
+ */
+function tarFailure(e: unknown): Error {
+  const err = e as NodeJS.ErrnoException & { killed?: boolean; signal?: string; stderr?: string };
+  const stderr = (err.stderr || "").trim();
+  if (err.killed || err.signal) {
+    return new Error(
+      `the archive was killed by ${err.signal ?? "a signal"} before it finished` +
+        (stderr ? `: ${stderr}` : " (no output — usually a timeout, not a broken archive)")
+    );
+  }
+  return new Error(stderr || err.message || "tar failed with no output");
+}
 
 /**
  * The live game directories a backup reads from and a restore writes back into.
@@ -435,9 +476,13 @@ async function createMinecraft(
       refuseIfPreemptedEarly(op, "this backup");
 
       op.step("Compressing the archive");
-      await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
-        timeout: TAR_TIMEOUT_MS,
-      });
+      try {
+        await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
+          timeout: TAR_TIMEOUT_MS,
+        });
+      } catch (e) {
+        throw tarFailure(e);
+      }
     } finally {
       // In a `finally`, and that is the load-bearing part: a failed `tar` that left
       // autosave switched off would lose every minute of play since the backup — strictly
@@ -620,7 +665,11 @@ async function createSevenDays(
     refuseIfPreemptedEarly(op, "this backup");
 
     op.step("Compressing the archive");
-    await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
+    try {
+      await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
+    } catch (e) {
+      throw tarFailure(e);
+    }
 
     const sealed = await sealArchive(op, { game: "7dtd", target, filename, manifest });
 
@@ -844,7 +893,11 @@ async function createZomboid(
     refuseIfPreemptedEarly(op, "this backup");
 
     op.step("Compressing the archive");
-    await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
+    try {
+      await execFileAsync("tar", ["-czf", target, "-C", work, "."], { timeout: TAR_TIMEOUT_MS });
+    } catch (e) {
+      throw tarFailure(e);
+    }
 
     const sealed = await sealArchive(op, { game: "zomboid", target, filename, manifest });
 

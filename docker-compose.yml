@@ -1,5 +1,20 @@
 services:
   minecraft:
+    # Behind a profile so a bare `docker compose up -d` cannot start it.
+    #
+    # Verified on the box 2026-10-01: with no profiles, `docker compose up --dry-run -d`
+    # printed `yoshling-mc Started` AND `yoshling-7dtd Started` while Project Zomboid was
+    # Running -- all three worlds, ~22 GB of configured heap on a 15.6 GB box. That is the
+    # 2026-09-26 co-residency incident with a one-command trigger, and nothing in the repo
+    # or the docs named it. `scripts/deploy.sh` was always safe (`up -d --no-deps web`);
+    # the danger was the obvious command typed by hand.
+    #
+    # Explicit service names still work, which is what matters for the app:
+    # `docker compose create --force-recreate minecraft` (what `recreateService` runs) was
+    # tested against a profiled service and creates it normally. The app never shells out
+    # to `docker compose config`, so losing that for profiled services costs it nothing --
+    # but a human verifying by hand needs `--profile games`.
+    profiles: ["games"]
     image: itzg/minecraft-server
     container_name: yoshling-mc
     ports:
@@ -70,6 +85,21 @@ services:
   # is the same mistake one migration later.
   # NOTE: do not use restart:unless-stopped with START_MODE 0/2/4.
   sevendtd:
+    # Behind a profile so a bare `docker compose up -d` cannot start it.
+    #
+    # Verified on the box 2026-10-01: with no profiles, `docker compose up --dry-run -d`
+    # printed `yoshling-mc Started` AND `yoshling-7dtd Started` while Project Zomboid was
+    # Running -- all three worlds, ~22 GB of configured heap on a 15.6 GB box. That is the
+    # 2026-09-26 co-residency incident with a one-command trigger, and nothing in the repo
+    # or the docs named it. `scripts/deploy.sh` was always safe (`up -d --no-deps web`);
+    # the danger was the obvious command typed by hand.
+    #
+    # Explicit service names still work, which is what matters for the app:
+    # `docker compose create --force-recreate minecraft` (what `recreateService` runs) was
+    # tested against a profiled service and creates it normally. The app never shells out
+    # to `docker compose config`, so losing that for profiled services costs it nothing --
+    # but a human verifying by hand needs `--profile games`.
+    profiles: ["games"]
     image: vinanrra/7dtd-server
     container_name: yoshling-7dtd
     ports:
@@ -94,7 +124,14 @@ services:
       # stays a literal.
       VERSION: "latest_experimental"
       TimeZone: "Europe/London"
-      TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
+      # NO default for a secret. `${VAR:?...}` makes compose refuse rather than
+      # substitute: if `.env` is ever lost, a silent fallback would have the web container
+      # authenticate with `yoshlingcontrol` against configs holding the real rotated
+      # values, and telnet/RCON control would break with no obvious cause -- the dashboard
+      # would simply report the world offline. Failing to start is the loud, diagnosable
+      # outcome. (The `${VAR:-default}` pattern is right for MC_MEMORY and friends, which
+      # are not secrets and whose compose literal IS the intended value.)
+      TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:?set it in .env — see docs/7-DAYS-TO-DIE.md}"
     volumes:
       - sdtd-server:/home/sdtdserver/serverfiles
       - sdtd-saves:/home/sdtdserver/.local/share/7DaysToDie
@@ -128,6 +165,21 @@ services:
   # the entrypoint only rewrites those keys when the env var exists, and the
   # Settings page is where they're meant to be edited.
   zomboid:
+    # Behind a profile so a bare `docker compose up -d` cannot start it.
+    #
+    # Verified on the box 2026-10-01: with no profiles, `docker compose up --dry-run -d`
+    # printed `yoshling-mc Started` AND `yoshling-7dtd Started` while Project Zomboid was
+    # Running -- all three worlds, ~22 GB of configured heap on a 15.6 GB box. That is the
+    # 2026-09-26 co-residency incident with a one-command trigger, and nothing in the repo
+    # or the docs named it. `scripts/deploy.sh` was always safe (`up -d --no-deps web`);
+    # the danger was the obvious command typed by hand.
+    #
+    # Explicit service names still work, which is what matters for the app:
+    # `docker compose create --force-recreate minecraft` (what `recreateService` runs) was
+    # tested against a profiled service and creates it normally. The app never shells out
+    # to `docker compose config`, so losing that for profiled services costs it nothing --
+    # but a human verifying by hand needs `--profile games`.
+    profiles: ["games"]
     # Upstream image plus a corrected map scanner — see pz/Dockerfile for why.
     build:
       context: ./pz
@@ -143,7 +195,14 @@ services:
       ADMINUSERNAME: "admin"
       ADMINPASSWORD: "${PZ_ADMIN_PASSWORD:-changemeplease}"
       # Must match PZ_RCON_PASSWORD below; the app controls the server over RCON.
-      RCONPASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
+      # NO default for a secret. `${VAR:?...}` makes compose refuse rather than
+      # substitute: if `.env` is ever lost, a silent fallback would have the web container
+      # authenticate with `yoshlingcontrol` against configs holding the real rotated
+      # values, and telnet/RCON control would break with no obvious cause -- the dashboard
+      # would simply report the world offline. Failing to start is the loud, diagnosable
+      # outcome. (The `${VAR:-default}` pattern is right for MC_MEMORY and friends, which
+      # are not secrets and whose compose literal IS the intended value.)
+      RCONPASSWORD: "${PZ_RCON_PASSWORD:?set it in .env — must match PZ_RCON_PASSWORD}"
       SELF_MANAGED_MODS: "true"
       # -Xms. Measured on production 2026-09-30 from the container's own log:
       # `-Xms2048m -Xmx12288m`, i.e. these two lines land on the JVM verbatim. NOT
@@ -259,14 +318,14 @@ services:
       RCON_PORT: "25575"
       SDTD_TELNET_HOST: "sevendtd"
       SDTD_TELNET_PORT: "8081"
-      SDTD_TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:-yoshlingcontrol}"
+      SDTD_TELNET_PASSWORD: "${SDTD_TELNET_PASSWORD:?set it in .env — must match TelnetPassword in sdtdserver.xml}"
       PZ_SERVER_DIR: "/zomboid"
       PZ_WORKSHOP_DIR: "/zomboid-workshop"
       PZ_SERVER_NAME: "yoshling"
       # RCON isn't published to the host; reached over the compose network.
       PZ_RCON_HOST: "zomboid"
       PZ_RCON_PORT: "27015"
-      PZ_RCON_PASSWORD: "${PZ_RCON_PASSWORD:-yoshlingcontrol}"
+      PZ_RCON_PASSWORD: "${PZ_RCON_PASSWORD:?set it in .env — must match RCONPASSWORD in yoshling.ini}"
       # Watch Steam for Workshop mod updates. A republished mod locks out anyone
       # who logs off, so this checks every 5 min, announces in game while people
       # are playing, and applies the update only once the server is empty.
@@ -295,8 +354,13 @@ services:
       - ./:/opt/yoshling
       - web-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - minecraft
+    # No `depends_on: minecraft`.
+    #
+    # It was vestigial and actively harmful: the web app reaches Minecraft by DNS name on
+    # the compose network, which resolves whether or not the container is running -- and
+    # Minecraft is deliberately stopped most of the time. All `depends_on` did was make
+    # `docker compose up -d web` start a world nobody asked for. `--no-deps` in deploy.sh
+    # was compensating for this.
     # Run tini as PID 1 so orphaned children get reaped.
     #
     # Without it `next-server` is PID 1, and PID 1 in a container inherits orphans
