@@ -44,6 +44,18 @@ as this feature existed — the first 4,102 of 6,789 bytes — with no error, `a
 and the chips rendering. See `src/lib/rcon-frame.ts`. This applies to Minecraft too:
 `banlist` and a busy `list` pass 4096 just as easily.
 
+**Verified end to end against production 2026-10-01**, by running the real
+`compareSettings` over the real `/api/*/config` and `?live=` responses:
+
+| Game | Shown | Agree | Not reported | Next world | **Disagree** | Tone |
+|------|-------|-------|--------------|-----------|-------------|------|
+| 7 Days to Die | 64 | 59 | 3 | 2 | **0** | muted |
+| Project Zomboid | 137 | 131 | 5 | 1 | **0** | muted |
+
+Zero disagreements on either, so the resting state is quiet — which is the property that
+makes an amber chip mean something. PZ's 137 = 131 agreeing + 5 unreported + 1 creation-only,
+i.e. exactly the **132 checkable** the derivation predicts.
+
 Three verdicts, and the third one matters: a setting the game **does not report** reads
 "not reported", never amber. An unanswered question is not a disagreement, and rendering it
 as one would train everybody to ignore the chips. `NOT_REPORTED_REASON` is the sentence.
