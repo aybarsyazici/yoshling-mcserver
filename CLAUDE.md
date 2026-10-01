@@ -43,7 +43,7 @@ then they stop being true.** Keep this one short enough to re-read.
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
 | A broken/misbehaving PZ **mod** | [`docs/PZ-MOD-BACKLOG.md`](docs/PZ-MOD-BACKLOG.md) — open defect list; check its harmless list before investigating |
 | **7 Days to Die** — telnet, the config wipe, builds, worlds, resets | **[`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md)** |
-| Minecraft | this file; MC has no separate doc |
+| **Minecraft** — modpacks, game rules, bans, the offline-UUID trap, the version guard | **[`docs/MINECRAFT.md`](docs/MINECRAFT.md)** |
 | Moving hosts | [`MIGRATION.md`](MIGRATION.md) |
 
 **Do not guess PZ behaviour from this file's summary.** Several of its traps we got
