@@ -63,6 +63,25 @@ interface InstallReport {
   total: number;
   errors: string[];
   warnings: string[];
+  /**
+   * Mods the installer declined to put on the server because they are client-only.
+   *
+   * Separate from `errors` on purpose: a skip is the installer working, and listing it
+   * among the failures would make every correct apply of a real pack look broken (a large
+   * pack is 30-50% client mods). Separate from `warnings` too, because these have names
+   * worth showing one per row rather than a sentence with "+34 more".
+   */
+  skipped: { name: string; reason: string }[];
+  /**
+   * The route's headline sentence, when it has one.
+   *
+   * Needed because a refusal can now arrive *with* a list worth showing. The all-mods-are-
+   * client-only 409 answers `installed: 0, total: 0` plus the named skips, which is enough
+   * for the shape check below to open the dialog — and without this field the one sentence
+   * saying why nothing happened ("this is a client-side pack, use Export") would be the
+   * part that got dropped.
+   */
+  error?: string;
 }
 
 export function Modpacks() {
@@ -271,17 +290,25 @@ export function Modpacks() {
 
       const failures: string[] = data.errors ?? [];
       const warnings: string[] = data.warnings ?? [];
+      const skipped: { name: string; reason: string }[] = data.skipped ?? [];
       const missing = data.total - data.installed;
 
       // 166 failures concatenated into one toast is unreadable and gone in seconds,
       // so the list lives in a dialog you can scroll and the toast only counts.
-      if (missing > 0 || failures.length > 0 || warnings.length > 0) {
+      //
+      // `skipped.length` opens it too. A clean apply of a real pack is now exactly the
+      // case where `missing`, `failures` and `warnings` are all empty and 40 mods were
+      // nonetheless held back — without this the one outcome the filter was built to
+      // report would be the one outcome that reports nothing.
+      if (missing > 0 || failures.length > 0 || warnings.length > 0 || skipped.length > 0) {
         setInstallReport({
           packName,
           installed: data.installed,
           total: data.total,
           errors: failures,
           warnings,
+          skipped,
+          error: typeof data.error === "string" ? data.error : undefined,
         });
       }
 
@@ -309,6 +336,7 @@ export function Modpacks() {
             "server — watch the strip at the top of the page for the per-mod result, and don't " +
             "start it again.",
         ],
+        skipped: [],
       });
       toast.info(
         `Still installing ${packName}. The connection timed out before it finished, which is ` +
@@ -552,11 +580,47 @@ export function Modpacks() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
+            {installReport?.error && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                <p className="text-xs text-destructive">{installReport.error}</p>
+              </div>
+            )}
+
             {installReport?.warnings.map((w, i) => (
               <div key={i} className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-3">
                 <p className="text-xs text-chart-5">{w}</p>
               </div>
             ))}
+
+            {/* Skipped client-only mods, in the world's own accent rather than the amber
+                `chart-5` the warnings use. The colour is the claim: nothing went wrong
+                here, and dressing a correct decision as a warning is how a report teaches
+                people to ignore it. Named one per row with the reason, because a count
+                alone cannot be checked. */}
+            {installReport && installReport.skipped.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm font-medium">
+                  {installReport.skipped.length} client-only mod
+                  {installReport.skipped.length === 1 ? "" : "s"} skipped
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  These do not run on a dedicated server, so they were left out instead of
+                  being copied into the server&apos;s mods folder. Install them in your own
+                  launcher.
+                </p>
+                <div className="max-h-[30vh] overflow-y-auto rounded-lg border border-[var(--tint)]/30">
+                  {installReport.skipped.map((s, i) => (
+                    <p
+                      key={i}
+                      className="px-3 py-1.5 text-xs border-b border-border/40 last:border-0 break-words"
+                    >
+                      <span className="font-mono">{s.name}</span>
+                      <span className="text-muted-foreground"> — {s.reason}</span>
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {installReport && installReport.errors.length > 0 && (
               <div className="space-y-1">

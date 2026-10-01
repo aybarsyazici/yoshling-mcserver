@@ -1,8 +1,16 @@
 import { writeFile, unlink } from "fs/promises";
 import path from "path";
 import { db } from "./db";
-import { getProjectVersions, type ModrinthVersion } from "./modrinth";
+import { getProject, getProjectVersions, type ModrinthFile, type ModrinthVersion } from "./modrinth";
 import { getModsDir } from "./server-manager";
+import {
+  checkIntegrity,
+  digestsOf,
+  needsProjectFallback,
+  serverSideVerdict,
+  type IntegrityCheck,
+  type ServerSideVerdict,
+} from "./mod-admission";
 
 /**
  * Every Activity row this module writes carries `game: "minecraft"` in its `details`
@@ -22,23 +30,105 @@ import { getModsDir } from "./server-manager";
  */
 const GAME = "minecraft";
 
+/**
+ * Thrown when a download does not match the checksum the registry published.
+ *
+ * Its own class so a caller can tell corruption from a 404 or a dead socket without
+ * matching on message text — `install-modpack` reports each mod's failure reason to the
+ * user and "this file is not what Modrinth says it is" needs to read differently from
+ * "Modrinth was unreachable". Carries the filename because the loop's error line is
+ * `"<mod name>: <message>"` and the jar's name is the thing you would go looking for.
+ */
+export class ModIntegrityError extends Error {
+  constructor(
+    readonly fileName: string,
+    readonly check: IntegrityCheck
+  ) {
+    super(check.reason);
+    this.name = "ModIntegrityError";
+  }
+}
+
+export interface VerifiedDownload {
+  buffer: Buffer;
+  /** Pass-through of the integrity verdict so a caller can report `checked: null`
+   * ("nothing was published to compare against") instead of implying it verified. */
+  check: IntegrityCheck;
+}
+
+/**
+ * Download a jar and prove it is the file the registry described — **before** it exists
+ * anywhere on disk.
+ *
+ * The one copy of this. `installMod` and `updateMod` both used to do
+ * `fetch` → `arrayBuffer` → `writeFile` with nothing in between, so a truncated response
+ * wrote a corrupt jar into the live mods directory and the route above it answered 200.
+ *
+ * **Verify-then-write, never write-then-verify**, and the shape of this function is the
+ * guarantee: the bytes are hashed in memory and the caller only receives a buffer if the
+ * comparison passed, so there is no window in which a bad jar is on disk and no cleanup
+ * path that has to run to remove one. The buffer was already being held in full before
+ * this change (`Buffer.from(await response.arrayBuffer())`), so this adds a hash pass
+ * over memory that was allocated anyway — not a second copy of the file.
+ */
+export async function downloadVerifiedJar(file: ModrinthFile): Promise<VerifiedDownload> {
+  const response = await fetch(file.url);
+  if (!response.ok) throw new Error(`Failed to download mod: ${response.status}`);
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const check = checkIntegrity({ hashes: file.hashes, size: file.size }, digestsOf(buffer));
+  if (!check.ok) throw new ModIntegrityError(file.filename, check);
+
+  return { buffer, check };
+}
+
+/**
+ * Does this version run on a dedicated server?
+ *
+ * Shared by `/api/mods/install` and `/api/mods/install-modpack` so the single-mod and
+ * the 166-mod path can never disagree about the same jar — the power control in this
+ * repo drifted into three copies and two of them missed a fix, which is the standing
+ * argument against a second copy of a decision like this.
+ *
+ * The project fetch is **conditional**: a version's own `environment` decides 156 of 160
+ * sampled versions, so fetching the project for every mod would add ~160 round trips to
+ * a 166-mod apply to change about four answers. It is still worth making for those four
+ * — see `serverSideVerdict`, where `unknown` versions were measured against decided
+ * projects.
+ */
+export async function serverSideFor(
+  version: Pick<ModrinthVersion, "environment">,
+  modrinthId: string
+): Promise<ServerSideVerdict> {
+  const signals = { environment: version.environment };
+  if (!needsProjectFallback(signals)) return serverSideVerdict(signals);
+
+  try {
+    const project = await getProject(modrinthId);
+    return serverSideVerdict({ ...signals, serverSide: project.server_side });
+  } catch {
+    // A failed fallback must not become a skip. Nothing is declared, so the undeclared
+    // verdict — install, and say it was not checked — is the honest answer; dropping the
+    // mod because Modrinth was briefly unreachable is the wrong-skip failure this whole
+    // feature is ordered to avoid.
+    return serverSideVerdict(signals);
+  }
+}
+
 export async function installMod(params: {
   modrinthId: string;
   slug: string;
   name: string;
   version: ModrinthVersion;
   userId: string;
-}): Promise<void> {
+}): Promise<IntegrityCheck> {
   const { modrinthId, slug, name, version, userId } = params;
   const modsDir = getModsDir();
 
   const file = version.files.find((f) => f.primary) || version.files[0];
   if (!file) throw new Error("No file found for this version");
 
-  const response = await fetch(file.url);
-  if (!response.ok) throw new Error(`Failed to download mod: ${response.status}`);
-
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const { buffer, check } = await downloadVerifiedJar(file);
   const filePath = path.join(modsDir, file.filename);
   await writeFile(filePath, buffer);
 
@@ -62,6 +152,11 @@ export async function installMod(params: {
       details: JSON.stringify({ game: GAME, modName: name, version: version.version_number }),
     },
   });
+
+  // Returned, not discarded: `checked: null` means the jar is on disk and nothing was
+  // published to compare it against, and a caller that wants to say "installed, not
+  // verified" can only do that if this function hands the verdict back.
+  return check;
 }
 
 export async function removeMod(modId: string, userId: string): Promise<void> {
@@ -137,11 +232,25 @@ export async function checkForUpdates(): Promise<
   return results;
 }
 
+/**
+ * **No route calls this yet** — the mods page offers install and remove, not update.
+ * Kept and fixed rather than deleted because the hole it had is the one this pass is
+ * closing and leaving one unverified writer behind would re-seed it the moment an
+ * update button appears.
+ *
+ * The download order below matters and is now correct for the first time: it deletes the
+ * installed jar *before* fetching the replacement, so a corrupt download used to leave
+ * the mod gone and the bad bytes written. `downloadVerifiedJar` throws before any write,
+ * so a mismatch now leaves the old jar deleted and nothing in its place — still not
+ * ideal, but a missing mod is a loader error that names itself, where a silently corrupt
+ * one is not. Reordering the unlink after the download is the real fix and belongs with
+ * whichever route first needs this.
+ */
 export async function updateMod(
   modId: string,
   newVersion: ModrinthVersion,
   userId: string
-): Promise<void> {
+): Promise<IntegrityCheck> {
   const mod = await db.installedMod.findUnique({ where: { id: modId } });
   if (!mod) throw new Error("Mod not found");
 
@@ -158,10 +267,7 @@ export async function updateMod(
   const file = newVersion.files.find((f) => f.primary) || newVersion.files[0];
   if (!file) throw new Error("No file found for this version");
 
-  const response = await fetch(file.url);
-  if (!response.ok) throw new Error(`Failed to download mod: ${response.status}`);
-
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const { buffer, check } = await downloadVerifiedJar(file);
   await writeFile(path.join(modsDir, file.filename), buffer);
 
   await db.installedMod.update({
@@ -186,4 +292,6 @@ export async function updateMod(
       }),
     },
   });
+
+  return check;
 }

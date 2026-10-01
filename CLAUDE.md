@@ -611,6 +611,27 @@ connect **directly to the box IP `89.58.50.155`**:
   yourself locked *everyone* out with a green success toast. `src/lib/mc-identity.ts`
   now derives the offline UUID the way the server does
   (`md5("OfflinePlayer:" + name)`, v3). The MC layer is still the oldest code here.
+- **The mod installers now filter by side and verify downloads** (2026-10-01,
+  `src/lib/mod-admission.ts`, tested). Two holes, both the house defect class. Every pack
+  mod went into the *server's* mods dir regardless of side — a large pack is 30–50%
+  client-only (Sodium, Iris), where the good case is wasted disk and the bad case is Fabric
+  Loader aborting on a jar with no server entrypoint, i.e. a permanent "Starting…" with the
+  cause nowhere on screen. And `ModrinthFile.hashes` had been typed since the file was
+  written with nothing reading it, so a truncated download wrote a bad jar and the route
+  answered `{success:true}`. Now: **skip only on a positive `unsupported`** (measured over
+  160 live versions — `environment` is a *string* on the API, not the `env:{client,server}`
+  object the `.mrpack` format uses, and the two signals never disagree on a skip, only on an
+  install, which the ordering resolves toward installing), skips are **named** in the
+  response and the ledger, and `downloadVerifiedJar` hashes in memory and throws
+  `ModIntegrityError` **before** any write, so a bad jar never exists in the mods directory.
+  One helper for both `/api/mods/install` and `install-modpack`. **The denominator changed
+  and that is the load-bearing part:** "installed n of m" counts *mods that belong on this
+  server* (pack rows − client-only), because counting the skips would make every correct
+  apply settle `noop` → outcome `partial` → amber, which is the backup-`noop` regression the
+  test suite exists for. See `serverModTotal`. **Not yet run against a live pack** — the enum
+  and the hashes were measured against the real Modrinth API, and the logic is unit-tested
+  and mutation-checked, but no modpack has actually been applied through it. The three saved
+  packs that could exercise it are the ones a version guard refuses anyway (below).
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
