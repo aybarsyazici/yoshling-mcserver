@@ -4,6 +4,7 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { installMod, serverSideFor } from "@/lib/mod-manager";
 import { getProjectVersions } from "@/lib/modrinth";
+import { CLIENT_ONLY_CONSEQUENCE } from "@/lib/mod-admission";
 import { db } from "@/lib/db";
 
 export async function POST(request: NextRequest) {
@@ -83,9 +84,8 @@ export async function POST(request: NextRequest) {
       {
         error: "client-only",
         message:
-          `${name} is ${side.reason}, so it would sit in the server's mods folder doing ` +
-          `nothing — or stop the server from starting. Nothing was installed. Send ` +
-          `allowClientOnly to install it anyway.`,
+          `${name} is ${side.reason}, and ${CLIENT_ONLY_CONSEQUENCE}. Nothing was ` +
+          `installed. Send allowClientOnly to install it anyway.`,
         serverSide: side.declared,
         decidedBy: side.basis,
       },
@@ -113,14 +113,9 @@ export async function POST(request: NextRequest) {
       `Mod installed` +
       (check.checked === null ? ` (no checksum was published, so it could not be verified)` : ``) +
       `. Restart server to activate.` +
-      // The same consequence the 409 above states, not a softer one. This used to read
-      // "it will not do anything on a server" — reassuring, and contradicted by the refusal
-      // in this very file, which says a client-only jar may "stop the server from
-      // starting". The forced path is exactly where the warning has to be the honest one:
-      // whoever sent `allowClientOnly` is the person who needs to know that the next boot
-      // may be the symptom.
-      (!side.install
-        ? ` It is client-only — on a server it does nothing at best, and can stop the server from starting.`
-        : ``),
+      // The same sentence the 409 above uses, from the same constant — not a softer
+      // paraphrase. This used to read "it will not do anything on a server", which the
+      // refusal in this very file contradicted. See `CLIENT_ONLY_CONSEQUENCE`.
+      (!side.install ? ` It is client-only — ${CLIENT_ONLY_CONSEQUENCE}.` : ``),
   });
 }

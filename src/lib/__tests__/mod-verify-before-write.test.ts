@@ -33,6 +33,16 @@ async function text(rel: string): Promise<string> {
  * rather than anywhere in the file. Sliced from the declaration to the next top-level
  * `export`, which is enough for these files and does not need a brace matcher.
  */
+/**
+ * Line and block comments removed, so a guard can forbid a phrase that the *explanation* of
+ * the fix legitimately quotes. Several comments in these files quote the wrong sentence they
+ * replaced — which is the most useful thing a comment can do here and must not be what makes
+ * a guard red on correct code.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
 function functionBody(source: string, name: string): string {
   const start = source.search(new RegExp(`^export (?:async )?(?:function|class) ${name}\\b`, "m"));
   if (start < 0) throw new Error(`no top-level export named ${name} — the guard is pointing at nothing`);
@@ -222,5 +232,35 @@ describe("a corrupt jar is never written to the mods directory", () => {
     // The helper is still used — as the operation fact, which is plain-toned. A guard that
     // only forbade the push would also pass if the skips stopped being reported at all.
     expect(source).toMatch(/skippedSentence\(skipped, 5\)/);
+  });
+
+  /**
+   * **`/api/mods/install` answers twice about a client-only mod, and the two answers must
+   * say the same thing.**
+   *
+   * They did not. The 409 refusal warned that such a jar may "stop the server from starting";
+   * the success message returned when `allowClientOnly` forces it through said it "will not
+   * do anything on a server" — the reassuring version, on the one path where the warning
+   * matters, since that caller has just overridden the refusal.
+   *
+   * Both now read `CLIENT_ONLY_CONSEQUENCE`. The guard is that the route never spells the
+   * consequence out for itself, so the two cannot drift apart again: a softer paraphrase in
+   * either place either drops a use of the constant or reintroduces the literal.
+   */
+  it("gives the same client-only consequence in both of its answers", async () => {
+    const source = await text("app/api/mods/install/route.ts");
+    // The import plus one use in the refusal and one in the success message.
+    expect((source.match(/CLIENT_ONLY_CONSEQUENCE/g) ?? []).length).toBeGreaterThanOrEqual(3);
+
+    // Comments stripped before the negative assertions, because the comment on the fixed
+    // line *quotes the old wrong sentence* — which is worth keeping and would otherwise make
+    // this guard fail on the correct code. Same reason the plan-step guard above strips
+    // them: a guard that cannot pass gets deleted rather than fixed.
+    const code = stripComments(source);
+    // The wording lives in the constant, not here — the only way the two can be guaranteed
+    // identical. A literal copy is drift waiting to happen even when it starts out correct.
+    expect(code).not.toMatch(/stop the server from starting/);
+    // And the sentence that was wrong cannot come back under any phrasing of the branch.
+    expect(code).not.toMatch(/will not do anything on a server/);
   });
 });

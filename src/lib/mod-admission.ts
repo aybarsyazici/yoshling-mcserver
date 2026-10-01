@@ -495,6 +495,24 @@ export interface SkippedMod {
 }
 
 /**
+ * **What a client-only jar does on a dedicated server, in one sentence, in one place.**
+ *
+ * `/api/mods/install` said this twice and the two copies disagreed. Its 409 refusal warned
+ * that such a jar may "stop the server from starting"; the success message it returns when
+ * the caller forces it through with `allowClientOnly` said it "will not do anything on a
+ * server". The reassuring version was on the path where the warning actually matters —
+ * whoever overrode the refusal is the one person who needs to know the next boot may be the
+ * symptom, and a Fabric Loader abort renders on this box as a permanent "Starting…" with the
+ * cause nowhere on screen.
+ *
+ * Both halves of the claim are kept, in that order, because both are true and which one you
+ * get depends on the mod: at best it is a jar sitting unused in the mods folder, at worst
+ * the loader refuses to boot. One constant so there is nothing left to drift.
+ */
+export const CLIENT_ONLY_CONSEQUENCE =
+  "on a server it does nothing at best, and can stop the server from starting";
+
+/**
  * **The denominator**, and the one judgement call in the filtering change.
  *
  * Once an installer is allowed to leave mods out, "installed 126 of 166" stops meaning

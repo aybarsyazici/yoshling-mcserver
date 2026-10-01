@@ -3,6 +3,7 @@ import {
   applyReport,
   applyVerdict,
   checkIntegrity,
+  CLIENT_ONLY_CONSEQUENCE,
   declaredFromHeaders,
   digestsOf,
   needsProjectFallback,
@@ -738,6 +739,22 @@ describe("the sentence the report leads with", () => {
    * reads "0 mods skipped" on the normal path is noise, and noise gets ignored. */
   it("says nothing when nothing was skipped", () => {
     expect(skippedSentence([])).toBe("");
+  });
+});
+
+describe("what a client-only mod does on a server, said once", () => {
+  /**
+   * The sentence `/api/mods/install` uses in both of its answers. Both halves are asserted,
+   * because the bug was a copy that kept only the first one ("will not do anything on a
+   * server") and dropped the consequence that matters — on the path where the user has just
+   * overridden the refusal.
+   */
+  it("states both halves: useless at best, unbootable at worst", () => {
+    expect(CLIENT_ONLY_CONSEQUENCE).toMatch(/does nothing at best/);
+    expect(CLIENT_ONLY_CONSEQUENCE).toMatch(/can stop the server from starting/);
+    // Reads as a clause, so it can be dropped into either sentence without punctuation
+    // surgery — which is what makes one definition practical rather than two near-copies.
+    expect(CLIENT_ONLY_CONSEQUENCE).not.toMatch(/^[A-Z]|[.]$/);
   });
 });
 
