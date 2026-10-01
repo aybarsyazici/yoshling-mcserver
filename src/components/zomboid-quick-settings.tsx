@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Reveal } from "@/components/motion";
 import { useOperations } from "@/components/operations-provider";
 import { blockedReason, powerBlocker } from "@/lib/operation-ui";
+import { describeIniSave, type PzIniSaveReport } from "@/lib/zomboid-ini-contract";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -85,12 +86,46 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
         body: JSON.stringify({ updates }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setValues((prev) => ({ ...(prev ?? {}), ...updates }));
-        toast.success("Settings saved. Restart Project Zomboid to apply.");
-      } else {
+      if (!res.ok) {
         toast.error(data.error || "Couldn't save");
+        return;
       }
+
+      // The old line was `toast.success("Settings saved. Restart Project Zomboid to
+      // apply.")` — unconditional, and wrong twice over. It claimed a save for keys the
+      // route had refused, and it demanded a restart for settings the running server
+      // picks up from `reloadoptions` (none of the six fields here is in
+      // `RESTART_KEYS`). Changing the player cap cost a restart that kicked everyone.
+      //
+      // So the sentence now comes from what the route reports it did, and only the keys
+      // it lists are written back into the displayed values — a field the server refused
+      // must snap back to the real value rather than keep showing the edit.
+      const report: PzIniSaveReport = {
+        applied: Array.isArray(data.applied) ? data.applied : [],
+        ignored: Array.isArray(data.ignored) ? data.ignored : [],
+        locked: Array.isArray(data.locked) ? data.locked : [],
+        restartNeeded: Array.isArray(data.restartNeeded) ? data.restartNeeded : [],
+        live: data.live ?? null,
+      };
+      const accepted = Object.fromEntries(
+        Object.entries(updates).filter(([key]) => report.applied.includes(key))
+      );
+      setValues((prev) => ({ ...(prev ?? {}), ...accepted }));
+      setDraft((d) => {
+        const next = { ...d };
+        // `?? ""` and not `?? next[f.key]`: a field the .ini has no key for has no value to
+        // restore, and leaving the typed one in place keeps the form dirty forever — the
+        // Save button stays live and every press is refused again.
+        for (const f of FIELDS) {
+          if (!report.applied.includes(f.key)) next[f.key] = values?.[f.key] ?? "";
+        }
+        return next;
+      });
+
+      const { tone, message } = describeIniSave(report);
+      if (tone === "success") toast.success(message);
+      else if (tone === "warning") toast.warning(message);
+      else toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -150,13 +185,20 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
             {saving ? "Saving…" : "Save settings"}
           </Button>
           {/* The reason ships with the disable. A control that goes dead without saying
-              why is the same failure as a silent operation. */}
+              why is the same failure as a silent operation.
+
+              This used to end "applies on the next restart", for all six fields. None of
+              them is in `RESTART_KEYS`: a running server picks every one of them up from
+              `reloadoptions`, which the save now calls and then verifies with
+              `showoptions`. The caption no longer promises either outcome — the toast
+              reports whichever actually happened, because whether the server is up is
+              not something this card knows. */}
           <p className="text-xs text-muted-foreground">
             {blocker
               ? blockedReason(blocker, elapsedMs(blocker))
               : dirty.length > 0
-              ? `${dirty.length} changed · applies on the next restart`
-              : "Changes apply on the next server restart."}
+              ? `${dirty.length} changed · saving asks the server to reload them`
+              : "Saved settings are reloaded by the server straight away, if it's running."}
           </p>
         </div>
       </div>

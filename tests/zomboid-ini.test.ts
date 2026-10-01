@@ -140,8 +140,16 @@ describe("setIniValues", () => {
   });
 
   it("appends a key that is not in the file yet", () => {
-    const { text, applied } = setIniValues("Foo=1", { Bar: "2" });
-    expect(applied).toEqual(["Bar"]);
+    // Still appends, and that is still required — the config import has to be able to put
+    // `RCONPassword` into an uploaded .ini that lacks one. What changed (2026-10-01) is
+    // that an appended key is reported as `appended` rather than folded into `applied`:
+    // the settings editor could not otherwise tell "rewrote the line you asked about"
+    // from "invented a line the game will ignore", and it reported the second as the
+    // first for every unmatched key. The behaviour this asserts is unchanged; only the
+    // field it is read from is more specific.
+    const { text, applied, appended } = setIniValues("Foo=1", { Bar: "2" });
+    expect(applied).toEqual([]);
+    expect(appended).toEqual(["Bar"]);
     expect(text).toBe("Foo=1\nBar=2");
   });
 
