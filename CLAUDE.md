@@ -197,8 +197,8 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
 - `/users` (Crew), `/whitelist`, `/activity` — shared, and they wear the accent of
   the first world the viewer can see. `/whitelist` is the **app sign-in** list
   (`ALLOWED_DISCORD_USERS` / `whitelist.json`), which was never Minecraft-specific;
-  `/minecraft/whitelist` 301s to it. Minecraft's *in-game* whitelist and ops live
-  on the MC settings page (`/api/server/{mc-whitelist,ops}`). The activity log
+  `/minecraft/whitelist` 301s to it. Minecraft's *in-game* whitelist, ops **and bans**
+  live on the MC settings page (`/api/server/{mc-whitelist,ops,bans}`). The activity log
   hides entries for worlds the viewer can't see.
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
@@ -611,6 +611,23 @@ connect **directly to the box IP `89.58.50.155`**:
   yourself locked *everyone* out with a green success toast. `src/lib/mc-identity.ts`
   now derives the offline UUID the way the server does
   (`md5("OfflinePlayer:" + name)`, v3). The MC layer is still the oldest code here.
+  **Ban management was added 2026-10-01** and closes the whitelist/ops/bans set:
+  `/api/server/bans` (GET list, POST add, DELETE remove) plus a card on the MC settings
+  page. Three things about it are load-bearing, all in `src/lib/mc-bans.ts`:
+  - **The path is chosen on a live RCON socket, not on `docker inspect`.** The game holds
+    both ban lists in memory and rewrites the json from that memory, so a file edit made
+    while it is up is an edit with a delete scheduled behind it. `containerState` answers
+    `"missing"` for *any* inspect failure, so its "stopped" is not evidence — only
+    "docker says stopped **and** RCON silent" writes a file. Container up + game silent is
+    **refused (503)**, never a fall-back.
+  - **The outcome is read back** (`banlist` over RCON, or the file off disk) and anything
+    unconfirmed answers non-2xx, so `res.ok` alone cannot report a ban that didn't happen.
+    The command's reply only picks the wording — those are translation strings.
+  - **A ban entry needs a real UUID**, same reason as ops/whitelist, so
+    `serializePlayerBans` *refuses* a blank one rather than relying on a caller to resolve
+    it first. **Nothing here has been run against the live server** — the reply formats come
+    from vanilla's command feedback, which is why the read-back outranks them. IPv6 is
+    refused with a stated reason rather than written as an entry nobody has shown is enforced.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
