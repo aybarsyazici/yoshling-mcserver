@@ -15,10 +15,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { AlertTriangle } from "lucide-react";
 import { SectionHeading } from "@/components/ui-bits";
 import { PhotoFooter } from "@/components/photo-footer";
 import { MemoryCard } from "@/components/memory-card";
 import { GAMES } from "@/lib/games";
+import {
+  MC_INERT_HERE,
+  MC_SELECTS,
+  MC_TEXT_KEYS,
+  gameRuleReplacing,
+  groupMcProperties,
+  mcCouplingNote,
+  mcSelectOptions,
+} from "@/lib/mc-properties";
 
 interface ServerConfig {
   mcVersion: string;
@@ -48,16 +58,20 @@ interface WhitelistEntry {
   name: string;
 }
 
-// Known select options for specific keys
-const KNOWN_SELECTS: Record<string, string[]> = {
-  "difficulty": ["peaceful", "easy", "normal", "hard"],
-  "gamemode": ["survival", "creative", "adventure", "spectator"],
-  "level-type": ["minecraft:normal", "minecraft:flat", "minecraft:large_biomes", "minecraft:amplified", "minecraft:single_biome_surface"],
-};
-
+/**
+ * The dropdown lists, the "this key is inert" notes and the grouping all come from
+ * `@/lib/mc-properties`, which the API route shares. They used to be a `KNOWN_SELECTS`
+ * literal in this file, and one of its three entries never matched a value: the file
+ * holds `level-type=minecraft\:normal` (java.util.Properties escapes `:`) against the
+ * list's `minecraft:normal`, so that select rendered empty on every load.
+ */
 function inferType(key: string, value: string): "boolean" | "select" | "number" | "text" {
-  if (key in KNOWN_SELECTS) return "select";
+  if (key in MC_SELECTS) return "select";
   if (value === "true" || value === "false") return "boolean";
+  // `level-seed` is the reason this is not purely value-shaped: a seed is an opaque
+  // 64-bit token that may be negative or a word, and a number input both rejects the
+  // minus sign and offers a spinner that can silently nudge a 19-digit seed by one.
+  if (MC_TEXT_KEYS.has(key)) return "text";
   if (/^\d+$/.test(value)) return "number";
   return "text";
 }
@@ -74,7 +88,22 @@ export default function SettingsPage() {
   const [savedConfig, setSavedConfig] = useState<ServerConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [mcVersions, setMcVersions] = useState<string[]>([]);
+  // What `world/level.dat` says, i.e. what the game itself last wrote. Shown next to the
+  // dropdown so the consequence of changing it is visible before the save, not only in
+  // the refusal afterwards.
+  const [worldVersion, setWorldVersion] = useState<string | null>(null);
+  // The route's refusal, held so the user can read it and then explicitly override. Not a
+  // toast: a toast lives 4 s and this sentence is several lines of consequence.
+  const [versionBlock, setVersionBlock] = useState<string | null>(null);
   const [properties, setProperties] = useState<Record<string, string>>({});
+  /**
+   * Which keys the user actually touched. The save used to PUT all ~58 properties every
+   * time, so the activity log recorded "58 settings edited" for a one-switch change and
+   * the route could not tell a real edit from a re-send — which matters now that it
+   * reports the keys this Minecraft version ignores: re-sending `pvp` untouched would
+   * warn about it on every save and train everyone to ignore the warning.
+   */
+  const [dirtyProps, setDirtyProps] = useState<Set<string>>(new Set());
   const [propsSaving, setPropsSaving] = useState(false);
   const [ops, setOps] = useState<OpEntry[]>([]);
   const [opsSaving, setOpsSaving] = useState(false);
@@ -93,6 +122,7 @@ export default function SettingsPage() {
           // that were already there" — the two produce completely different server
           // behaviour and used to produce the same green toast.
           setSavedConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader });
+          if (typeof data.worldVersion === "string") setWorldVersion(data.worldVersion);
         }
       })
       .catch(() => {});
@@ -118,7 +148,13 @@ export default function SettingsPage() {
       .catch(() => {});
   }, []);
 
-  async function handleSaveConfig() {
+  /**
+   * `confirm` is the explicit override of the version guard, and it is only ever sent
+   * from the second button — the one that appears *after* the route has refused and
+   * explained why. Sending it by default would turn the guard back into the unguarded
+   * control it replaced.
+   */
+  async function handleSaveConfig(confirm = false) {
     setSaving(true);
     const changed =
       !savedConfig ||
@@ -128,10 +164,17 @@ export default function SettingsPage() {
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify(confirm ? { ...config, confirm: true } : config),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // A refusal the user can act on, kept on screen rather than toasted: it names the
+        // world's version and every mod that disagrees, and the only way past it is the
+        // button it reveals.
+        if (data.needsConfirm) {
+          setVersionBlock(data.error || "That version doesn't match what's on disk.");
+          return;
+        }
         // This used to be `toast.error("Failed to save")`, which **discarded
         // `data.error`** — throwing away both the 409 busy message and the route's
         // deliberately-worded "Saved … to settings, but applying it to the container
@@ -144,6 +187,7 @@ export default function SettingsPage() {
       // uses `create` never `up`, so a stopped world stays stopped. When something did
       // change it is a tracked operation, and its completion toast carries the
       // container's read-back version.
+      setVersionBlock(null);
       if (!changed) toast.info("Nothing changed — the version and loader are already set to that.");
       else setSavedConfig({ ...config });
     } catch {
@@ -159,12 +203,19 @@ export default function SettingsPage() {
   }
 
   async function handleSaveProperties() {
+    // Only what was touched. An untouched key resent is indistinguishable from an edit at
+    // the route, and it is what made every save log "58 settings edited".
+    const changedKeys = [...dirtyProps].filter((k) => k in properties);
+    if (changedKeys.length === 0) {
+      toast.info("Nothing changed — edit a setting first.");
+      return;
+    }
     setPropsSaving(true);
     try {
       const res = await fetch("/api/server/properties", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(properties),
+        body: JSON.stringify(Object.fromEntries(changedKeys.map((k) => [k, properties[k]]))),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -177,7 +228,19 @@ export default function SettingsPage() {
       if (Array.isArray(data.ignored) && data.ignored.length > 0) {
         toast.warning(`Not in server.properties, so not written: ${data.ignored.join(", ")}`);
       }
-      toast.success("server.properties saved. Restart server to apply.");
+      // `noEffect` is the keys this Minecraft version reads as game rules instead. The
+      // fields are read-only, so this should only ever fire for a tab that was open
+      // before a version change — but it is the one warning that must not be swallowed,
+      // because its whole history is a green toast over a setting that never applied.
+      if (Array.isArray(data.noEffect) && data.noEffect.length > 0) {
+        toast.warning(data.warning || "Some settings were not written.");
+      }
+      const applied = Array.isArray(data.applied) ? data.applied.length : changedKeys.length;
+      toast.success(
+        `server.properties saved (${applied} ${applied === 1 ? "setting" : "settings"}). ` +
+          `Restart server to apply.`
+      );
+      setDirtyProps(new Set());
     } catch {
       toast.error("Failed to save");
     } finally {
@@ -225,6 +288,7 @@ export default function SettingsPage() {
 
   function updateProp(key: string, value: string) {
     setProperties((prev) => ({ ...prev, [key]: value }));
+    setDirtyProps((prev) => new Set(prev).add(key));
   }
 
   return (
@@ -245,11 +309,27 @@ export default function SettingsPage() {
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-2">
               <Label>Minecraft Version</Label>
-              <Select value={config.mcVersion} onValueChange={(v) => setConfig((p) => ({ ...p, mcVersion: v ?? p.mcVersion }))}>
+              {/* Changing the selection invalidates the refusal that was on screen — a
+                  "Change anyway" button left over from a different version would apply
+                  something the user was never warned about. */}
+              <Select
+                value={config.mcVersion}
+                onValueChange={(v) => {
+                  setVersionBlock(null);
+                  setConfig((p) => ({ ...p, mcVersion: v ?? p.mcVersion }));
+                }}
+              >
                 <SelectTrigger><SelectValue placeholder="Select version" /></SelectTrigger>
                 <SelectContent>
+                  {/*
+                    Mark the one the world records. The list is 30 Modrinth release
+                    versions and exactly one of them can open the save, so saying which
+                    inside the dropdown is where the information is actually needed.
+                  */}
                   {mcVersions.length > 0 ? mcVersions.map((v) => (
-                    <SelectItem key={v} value={v}>{v}</SelectItem>
+                    <SelectItem key={v} value={v}>
+                      {v === worldVersion ? `${v} — the world's version` : v}
+                    </SelectItem>
                   )) : (
                     <SelectItem value={config.mcVersion}>{config.mcVersion}</SelectItem>
                   )}
@@ -258,7 +338,13 @@ export default function SettingsPage() {
             </div>
             <div className="space-y-2">
               <Label>Mod Loader</Label>
-              <Select value={config.modLoader} onValueChange={(v) => setConfig((p) => ({ ...p, modLoader: v ?? p.modLoader }))}>
+              <Select
+                value={config.modLoader}
+                onValueChange={(v) => {
+                  setVersionBlock(null);
+                  setConfig((p) => ({ ...p, modLoader: v ?? p.modLoader }));
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="fabric">Fabric</SelectItem>
@@ -269,7 +355,51 @@ export default function SettingsPage() {
               </Select>
             </div>
           </div>
-          <Button onClick={handleSaveConfig} disabled={saving}>
+          {/*
+            What the world itself says, next to the dropdown that can make it unopenable.
+            The dropdown lists 30 Modrinth release versions down to 1.18.2; only the one
+            the world records can open the 215 MB save, and a mod loader additionally
+            refuses to start when a mod's dependency is unmet. Stating it here is cheaper
+            than only refusing later.
+          */}
+          {worldVersion && (
+            <p className="text-xs text-muted-foreground">
+              The world on disk was last opened by Minecraft{" "}
+              <strong className="text-foreground">{worldVersion}</strong>
+              {worldVersion !== config.mcVersion
+                ? " — a different version is selected above."
+                : "."}{" "}
+              Installed mods have to match the version too.
+            </p>
+          )}
+
+          {versionBlock && (
+            <div className="flex items-start gap-2 rounded-xl bg-chart-5/10 p-3 ring-1 ring-chart-5/30">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-chart-5" />
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">{versionBlock}</p>
+                <div className="flex flex-wrap gap-2">
+                  {/* The only place `confirm` is sent. */}
+                  <Button size="sm" variant="outline" onClick={() => handleSaveConfig(true)} disabled={saving}>
+                    {saving ? "Applying..." : "Change anyway"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setVersionBlock(null);
+                      if (savedConfig) setConfig({ ...savedConfig });
+                    }}
+                    disabled={saving}
+                  >
+                    Keep {savedConfig?.mcVersion ?? "the current version"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <Button onClick={() => handleSaveConfig()} disabled={saving}>
             {saving ? "Saving..." : "Save & Restart Server"}
           </Button>
         </CardContent>
@@ -299,48 +429,86 @@ export default function SettingsPage() {
                 reason nobody checks.
               */}
               <p className="text-xs text-muted-foreground">
-                RCON, the management server, the server port and the level name aren&apos;t listed
-                here — they&apos;re the dashboard&apos;s own control channel.
+                RCON, the management server, the server port, the bind address and the level
+                name aren&apos;t listed here — they&apos;re the dashboard&apos;s own control
+                channel, and pointing the bind address at loopback takes the game port and
+                RCON down together.
               </p>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {Object.entries(properties).map(([key, value]) => {
-                  const type = inferType(key, value);
-                  return (
-                    <div key={key} className="space-y-1.5">
-                      <Label className="text-xs font-mono">{formatLabel(key)}</Label>
-                      {type === "boolean" ? (
-                        <div className="flex items-center gap-2 pt-1">
-                          <Switch
-                            checked={value === "true"}
-                            onCheckedChange={(v) => updateProp(key, v ? "true" : "false")}
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            {value === "true" ? "Enabled" : "Disabled"}
-                          </span>
+              {/*
+                Grouped, because this was a flat alphabetical grid of 58 bare labels and
+                server.properties — unlike 7DTD's XML and PZ's .ini — carries no comments to
+                render help from. Unknown keys land in an "Other" group rather than being
+                dropped, so a version that adds a key cannot hide it here.
+              */}
+              {groupMcProperties(properties).map((group) => (
+                <div key={group.title} className="space-y-2">
+                  <p className="eyebrow text-muted-foreground">{group.title}</p>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {group.keys.map((key) => {
+                      const value = properties[key];
+                      const type = inferType(key, value);
+                      // The one note that disables the control: this version does not read
+                      // the key at all, so an editable field could only ever report a
+                      // success that never happened.
+                      const gameRule = gameRuleReplacing(key, config.mcVersion);
+                      const note = gameRule
+                        ? `Minecraft ${config.mcVersion} takes this from the game rule ` +
+                          `${gameRule}, not from this file. Set it in the console: ` +
+                          `gamerule ${gameRule} ${value === "true" ? "false" : "true"}`
+                        : mcCouplingNote(key, properties) ?? MC_INERT_HERE[key] ?? null;
+                      return (
+                        <div key={key} className="space-y-1.5">
+                          <Label className="text-xs font-mono">{formatLabel(key)}</Label>
+                          {type === "boolean" ? (
+                            <div className="flex items-center gap-2 pt-1">
+                              <Switch
+                                checked={value === "true"}
+                                disabled={!!gameRule}
+                                onCheckedChange={(v) => updateProp(key, v ? "true" : "false")}
+                              />
+                              <span className="text-xs text-muted-foreground">
+                                {value === "true" ? "Enabled" : "Disabled"}
+                              </span>
+                            </div>
+                          ) : type === "select" ? (
+                            <Select
+                              value={value}
+                              disabled={!!gameRule}
+                              onValueChange={(v) => { if (v) updateProp(key, v); }}
+                            >
+                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {mcSelectOptions(key, value).map((o) => (
+                                  <SelectItem key={o} value={o}>{o}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Input
+                              className="h-8 text-xs"
+                              type={type === "number" ? "number" : "text"}
+                              value={value}
+                              readOnly={!!gameRule}
+                              onChange={(e) => updateProp(key, e.target.value)}
+                            />
+                          )}
+                          {note && (
+                            <p className={`text-[11px] leading-snug ${gameRule ? "op-warn" : "text-muted-foreground"}`}>
+                              {note}
+                            </p>
+                          )}
                         </div>
-                      ) : type === "select" ? (
-                        <Select value={value} onValueChange={(v) => { if (v) updateProp(key, v); }}>
-                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {KNOWN_SELECTS[key].map((o) => (
-                              <SelectItem key={o} value={o}>{o}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          className="h-8 text-xs"
-                          type={type === "number" ? "number" : "text"}
-                          value={value}
-                          onChange={(e) => updateProp(key, e.target.value)}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              <Button onClick={handleSaveProperties} disabled={propsSaving}>
-                {propsSaving ? "Saving..." : "Save Properties"}
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <Button onClick={handleSaveProperties} disabled={propsSaving || dirtyProps.size === 0}>
+                {propsSaving
+                  ? "Saving..."
+                  : dirtyProps.size === 0
+                    ? "Save Properties"
+                    : `Save ${dirtyProps.size} ${dirtyProps.size === 1 ? "change" : "changes"}`}
               </Button>
             </>
           )}
@@ -353,6 +521,21 @@ export default function SettingsPage() {
           <CardTitle>Operators (ops.json)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/*
+            Point at this card rather than at the console, because `/op` in the console
+            has a failure mode nobody can read: the server resolves the name through its
+            profile cache and falls back to a Mojang lookup even with online-mode=false
+            (the boot log reports `profilesHost=https://api.mojang.com` regardless), that
+            lookup happens on the server thread, and RCON gives up after 3 s — so the
+            console answers "The Minecraft server isn't reachable — it may be powered off"
+            about a server that is fine and is still working on the command. This card
+            never asks Mojang on an offline-mode server: it derives the UUID locally with
+            md5("OfflinePlayer:" + name), the same way the game does.
+          */}
+          <p className="text-xs text-muted-foreground">
+            Add operators here rather than with <code>/op</code> in the console. Usernames
+            are resolved to the UUID Minecraft matches on when you save.
+          </p>
           <div className="flex flex-wrap gap-2">
             {ops.map((op) => (
               <Badge key={op.uuid || op.name} variant="secondary" className="gap-1.5 py-1.5 px-3">
