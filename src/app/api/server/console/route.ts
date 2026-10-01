@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { tailContainerLog } from "@/lib/game-manager";
+import { containerIsRunning, tailContainerLog } from "@/lib/game-manager";
+import { classifyRconFailure, rconFailureMessage } from "@/lib/rcon-failure";
 
 /**
  * "The server isn't running" is the most ordinary reason a console command fails, and
@@ -11,17 +12,14 @@ import { tailContainerLog } from "@/lib/game-manager";
  * The GET above already has a comment about not rendering docker's error text as if the
  * game had said it; the POST never got the same treatment.
  *
- * Matched on both `code` and the message, because `src/lib/rcon.ts` raises its own
- * `new Error("timeout")` with no code at all, while the socket errors carry one.
+ * The classification moved to `src/lib/rcon-failure.ts`, because the single sentence it
+ * used to produce was wrong for one of the two failures it matched: `/timeout/i` caught
+ * `rcon.ts`'s own `new Error("timeout")`, which means the socket **opened** and the game
+ * did not answer — a server that is demonstrably present being told to press Power on, on
+ * an already-running container, which is a documented no-op that toasts success. That
+ * module splits the two and the handler below asks `containerIsRunning` so the sentence
+ * can be true in all four combinations.
  */
-function isUnreachable(e: unknown): boolean {
-  const code = (e as { code?: unknown })?.code;
-  const msg = e instanceof Error ? e.message : String(e ?? "");
-  return (
-    (typeof code === "string" && ["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ETIMEDOUT"].includes(code)) ||
-    /ENOTFOUND|ECONNREFUSED|EHOSTUNREACH|ETIMEDOUT|timeout/i.test(msg)
-  );
-}
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -77,14 +75,16 @@ export async function POST(request: NextRequest) {
     const response = await sendCommand(command);
     return NextResponse.json({ response });
   } catch (e: any) {
-    // 503, not 500: nothing is broken, the server is simply not there to ask.
-    if (isUnreachable(e)) {
+    const failure = classifyRconFailure(e);
+    // 503, not 500: nothing is broken, the server is simply not there to ask — or is there
+    // and busy. Either way the command did not run and retrying is the right next move.
+    if (failure !== "game-error") {
+      // One docker inspect, only on the failure path, so the happy path pays nothing for
+      // it. `null` on failure rather than a guess: a message that says "powered off"
+      // because the docker call broke would be the same false certainty this replaced.
+      const running = await containerIsRunning("minecraft").catch(() => null);
       return NextResponse.json(
-        {
-          error:
-            "The Minecraft server isn't reachable — it may be powered off. " +
-            "Start it, then try again.",
-        },
+        { error: rconFailureMessage(failure, running, "Minecraft") },
         { status: 503 }
       );
     }
