@@ -110,13 +110,22 @@ makes. So it carries guards nothing else needs:
   404 for a genuinely absent file, 409 for the structural guard (nothing was written, say
   so), 500 naming the real errno and pointing at the `.bak`.
 
-**Verified against the live file 2026-10-01**, which it had never run against before:
-GET parsed 335 options out of the real 74,711 bytes; a write produced a **new inode** with
-the original's `node:node 664`; the `.bak` kept the **original inode** and md5; a real
-`DayLength 4 → 5 → 4` round trip landed on disk both ways and returned the file to its
-exact starting md5; no orphaned temp files after four writes. Three full rewrites producing
-a byte-identical 74,711-byte file is the strongest available evidence that the
-parse → serialise round trip is lossless.
+**Verified against the live file 2026-10-01**, which it had never run against before. Three
+writes:
+
+1. `DayLength=4` when it was already `4` — a semantic no-op, but a full parse → serialise →
+   rename. It produced a **new inode** carrying the original's `node:node 664`, a `.bak` on
+   the **original inode** with the original mtime, and a file whose md5 was **unchanged**.
+   That last fact is the important one: a complete rewrite of all 1,804 lines and 335
+   options reproducing the file byte for byte is the strongest available evidence that the
+   round trip is lossless. Had the writer dropped, reordered or reformatted anything, the
+   md5 would have moved.
+2. `DayLength=5` — landed on disk (`DayLength = 5,` at line 53), confirming the mutation
+   path, not just the identity path.
+3. `DayLength=4` — returned the file to its **exact starting md5**.
+
+No orphaned `.tmp` or `.bak.<uuid>` files after any of the three; both renames consume their
+temps.
 
 ## Coverage — what is exposed vs. what each game supports
 

@@ -680,8 +680,11 @@ Genuinely open:
   can be torn. The automatic ones refuse while anyone is connected; a manual one is the
   operator's call.
 - **Two out-of-band safety sets are on the box** and nothing prunes them:
-  `/root/pre-fix-backup-2026-09-28/` and `/root/safety-backup-2026-09-29/`. Delete when
-  you are confident; retention does not reach outside `/app/data`.
+  `/root/pre-fix-backup-2026-09-28/` (1.1 GB) and `/root/safety-backup-2026-09-29/`
+  (1015 MB), both finished writing on the dates in their names. Retention does not reach
+  outside `/app/data`, so they stay until somebody deletes them — but measured 2026-10-01
+  the box is at **34 % of 314 GB with 201 GB free**, so this is tidiness, not pressure. It
+  read like it needed action; it does not.
 - **`/api/7dtd/update` is the last compose writer** (a transient `START_MODE` flip inside
   one operation). Deliberate — see the deployment section.
 - **Needs a human, not code:**
