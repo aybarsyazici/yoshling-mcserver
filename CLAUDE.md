@@ -203,6 +203,20 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
   `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
+- **Minecraft game rules are `/api/server/gamerules`** (the Game rules panel on MC
+  settings). It is the only config surface in the app that reads and writes the **running
+  game** rather than a file: `gamerule <x>` queries, `gamerule <x> <v>` writes, both over
+  the shared RCON transport. Two properties to keep. **The rule ids are discovered with
+  `help gamerule`, never hardcoded** — 26.1 renamed every rule and not mechanically
+  (`enable-command-block` → `command_blocks_work`), while 1.21.4 is still on the volume and
+  still selectable, so a fixed list would be wrong for one of the two builds and would fail
+  by rendering an empty panel. And **a write is followed by a fresh query**, so what the UI
+  shows is what the game read back, not what was typed; a disagreement is a 502. The table
+  in `src/lib/mc-gamerules.ts` only adds help text and defaults, joined to a discovered id
+  by a case/separator-insensitive canonical form so one entry covers both spellings.
+  `/api/server/properties` still **refuses** the four keys 26.x moved — it now names this
+  panel instead of a `gamerule` command to type, through the shared
+  `gameRuleControlHint()`.
 - `src/components/file-browser.tsx` is shared: MC uses the default
   `/api/server/files`; 7DTD and PZ pass their own endpoint + `roots` from
   `GAMES[game].fileRoots` (7DTD: Config = `/sevendtd-config`, Saves =
@@ -345,6 +359,12 @@ npm run lint     # eslint (not run during build; pre-existing `any` warnings exi
 npx tsc --noEmit # typecheck
 npm test         # vitest, 731 tests, ~2s, no Docker/network/server needed
 ```
+
+This line used to carry an exact test count. It said 549 while the suite was at 721, which is
+the decaying-measurement trap `vitest.config.mts` already records a version of ("the first
+version said 281 tests, which was already wrong by one when it was written"). The count is
+whatever `npm test` prints; the properties worth stating here are the ones that do not
+change — it needs no Docker, no network and no running server.
 
 **Run `npm test` before you ship.** It exists because the same classes of defect kept
 coming back: the power control drifted into three copies where two missed a fix, and a
@@ -611,6 +631,16 @@ connect **directly to the box IP `89.58.50.155`**:
   yourself locked *everyone* out with a green success toast. `src/lib/mc-identity.ts`
   now derives the offline UUID the way the server does
   (`md5("OfflinePlayer:" + name)`, v3). The MC layer is still the oldest code here.
+  **Game rules became reachable 2026-10-01** (`/api/server/gamerules` + the Game rules
+  panel) — see Routes. Before that the dashboard could *detect* that a `server.properties`
+  key had moved to a game rule, refuse the write, and then only tell you to type the command
+  yourself, for 48-odd rules none of which it listed. Someone was doing exactly that:
+  production has `enable-command-block=false` in the file against
+  `command_blocks_work = true` in the world, and `mob_griefing` is false with nothing in
+  this app having set it. **Not yet exercised against the live container** — it is written
+  and tested but no `help gamerule` reply from the real 26.1.2 server has been parsed, so
+  the first thing to check on deploy is that the panel lists rules rather than reporting the
+  reply as unreadable.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the

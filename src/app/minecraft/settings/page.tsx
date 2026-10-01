@@ -19,7 +19,9 @@ import { AlertTriangle } from "lucide-react";
 import { SectionHeading } from "@/components/ui-bits";
 import { PhotoFooter } from "@/components/photo-footer";
 import { MemoryCard } from "@/components/memory-card";
+import { McGameRules } from "@/components/mc-game-rules";
 import { GAMES } from "@/lib/games";
+import { gameRuleControlHint } from "@/lib/mc-gamerules";
 import {
   MC_INERT_HERE,
   MC_SELECTS,
@@ -451,10 +453,13 @@ export default function SettingsPage() {
                       // the key at all, so an editable field could only ever report a
                       // success that never happened.
                       const gameRule = gameRuleReplacing(key, config.mcVersion);
+                      // The field stays read-only — this version really does not read the
+                      // key — but the note now points at a control instead of at a command
+                      // to type. `gameRuleControlHint` is shared with the properties route's
+                      // refusal so the two cannot word it differently.
                       const note = gameRule
                         ? `Minecraft ${config.mcVersion} takes this from the game rule ` +
-                          `${gameRule}, not from this file. Set it in the console: ` +
-                          `gamerule ${gameRule} ${value === "true" ? "false" : "true"}`
+                          `${gameRule}, not from this file. ${gameRuleControlHint([gameRule])}`
                         : mcCouplingNote(key, properties) ?? MC_INERT_HERE[key] ?? null;
                       return (
                         <div key={key} className="space-y-1.5">
@@ -514,6 +519,14 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/*
+        Directly under the properties editor, because that editor's read-only fields point
+        here by name: on 26.x four of its keys moved into game rules, and until this panel
+        existed the only thing it could say was "go type `gamerule pvp false` in the
+        console".
+      */}
+      <McGameRules tint={GAMES.minecraft.tint} />
 
       {/* Ops */}
       <Card className="border-border/50 shadow-sm">

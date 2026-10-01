@@ -516,6 +516,10 @@ function formatAction(action: string): string {
     server_stop: "powered off the server",
     server_restart: "restarted the server",
     edit_file: "edited a config file",
+    // Added in the same change that started writing the row. The fallback below renders an
+    // unhandled action as bare underscored words, which this map has twice been fixed for.
+    // No rule name here: unlike /activity's renderer this one gets only the action string.
+    set_gamerule: "changed a game rule",
     delete_file: "deleted a file",
     // This card is already per-world, so no world suffix here (unlike /activity's).
     backup_create: "made a backup",
