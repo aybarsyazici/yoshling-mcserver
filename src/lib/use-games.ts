@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameId, ServerStatus } from "@/lib/games";
 import { runningWorlds } from "@/lib/coresidency";
+import type { LiveSettings } from "@/lib/live-settings";
 
 export interface GameSnapshot {
   game: GameId;
@@ -112,6 +113,37 @@ export interface GamesState {
   clockSkewMs: number;
   loading: boolean;
   refresh: () => Promise<void>;
+}
+
+/**
+ * One read of what a world is **actually running**, for the configured-versus-live
+ * comparison on a settings page.
+ *
+ * Deliberately a plain function and not a hook: it is fetched when a settings panel opens
+ * and again after a save, never on a timer. The values it returns only change when the
+ * game restarts, and the probe costs a telnet session or an RCON round trip — so a second
+ * poller next to `useGames`' 4 s one would be pure cost. It rides `/api/games/status` with
+ * `?live=` rather than a new endpoint, and the server does the work only when asked.
+ *
+ * Returns `null` when the request itself failed (offline, 401, a deploy mid-flight). The
+ * caller must render that as "not compared", never as a mismatch — `compareSetting()`
+ * takes `null` and answers `unknown` for exactly this reason.
+ */
+export async function fetchLiveSettings(game: GameId): Promise<LiveSettings | null> {
+  try {
+    const res = await fetch(`/api/games/status?live=${encodeURIComponent(game)}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    // Shape-checked rather than cast: a browser can hold a page across a deploy, and an
+    // older build answers this request with no `live` field at all.
+    const live = data?.live;
+    if (!live || typeof live !== "object" || typeof live.available !== "boolean") return null;
+    return live as LiveSettings;
+  } catch {
+    return null;
+  }
 }
 
 /** Polls /api/games/status. `interval` in ms; pass 0 to disable polling. */

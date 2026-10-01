@@ -5,12 +5,14 @@ import {
   currentControlLock,
   configuredMemoryGb,
   hostTotalGb,
+  liveSettings,
   maxGameGb,
 } from "@/lib/game-manager";
 import { GAME_LIST, type GameId } from "@/lib/games";
+import type { LiveSettings } from "@/lib/live-settings";
 import { hasPermission } from "@/lib/permissions";
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -75,6 +77,40 @@ export async function GET() {
     maxGameGb(),
   ]);
 
+  // What one world is *actually running*, on request only.
+  //
+  // **Opt-in, and that is the whole design.** This endpoint is polled every 4 s by up to
+  // six `useGames` instances per page; asking the game what it is running costs a telnet
+  // session or an RCON round trip (measured: ~100 ms for Project Zomboid, ~60 ms for
+  // 7 Days to Die) and nothing on a status poll needs it. So the default response keeps
+  // exactly the fields it had, and the settings panel — which needs this once when it opens
+  // and again after a save — asks for it with `?live=<game>`. No second endpoint, no second
+  // poller. `liveSettings()` is itself cached 10 s and single-flighted.
+  //
+  // Gated like the config GETs it accompanies: world access AND `settings.read`. The two
+  // probes measurably return no secret-named key today, and `redactSecretKeys()` drops any
+  // that appear later — but a live settings dump is still the same class of data as the
+  // file it is compared against, so it gets the same gate rather than session-only.
+  const wanted = new URL(request.url).searchParams.get("live");
+  const wantedGame = GAME_LIST.find((g) => g.id === wanted)?.id;
+  let live: LiveSettings | undefined;
+  if (wantedGame) {
+    const allowed = access.includes(wantedGame) && hasPermission(session.user.role, "settings.read");
+    live = allowed
+      ? await liveSettings(wantedGame)
+      : {
+          game: wantedGame,
+          available: false,
+          // Said rather than silently omitted: a missing comparison that looks like a
+          // working one is how someone concludes the settings they see are the live ones.
+          // Covers both halves of the gate (world access, and the settings role), so it
+          // does not name a cause it cannot distinguish.
+          reason: "This account can't read the running server's settings, so nothing was compared.",
+          values: {},
+          readAt: Date.now(),
+        };
+  }
+
   return NextResponse.json({
     games,
     activeGame,
@@ -97,6 +133,9 @@ export async function GET() {
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,
     maxGb,
+    // Absent unless `?live=` asked for it, so `busy`, `games`, `can` and every other
+    // field keep the exact shape `useGames` (and three power surfaces) read today.
+    ...(live ? { live } : {}),
     // So elapsed times are measured against the server's clock rather than the
     // browser's. `Date.now() - busy.since` mixed the two.
     serverNow: Date.now(),
