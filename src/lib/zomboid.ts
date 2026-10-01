@@ -1,6 +1,11 @@
 import { readdir, readFile, stat, writeFile } from "fs/promises";
 import path from "path";
 import { rconCommand, type RconTarget } from "@/lib/rcon";
+import {
+  classifyLiveOptions,
+  parseShowOptions,
+  type PzLiveReload,
+} from "@/lib/zomboid-ini-contract";
 
 /**
  * Project Zomboid control + config.
@@ -83,15 +88,16 @@ export interface PzProperty {
  * settings editor and preserved when a config is imported — taking someone
  * else's RCON password or port numbers would cut the server off from the app or
  * make it listen where nothing is forwarded.
+ *
+ * This list used to end with `SteamPort1` and `SteamPort2`, and **Build 42 has no
+ * such server options** — the live .ini holds 144 keys and neither is among them
+ * (checked on production 2026-10-01), nor does `showoptions` report them. So two of
+ * the six entries locked and preserved nothing, which matters beyond the dead code: a
+ * lock list that is a third fiction invites trusting the rest of it, and this one is
+ * also what the import route promises to carry across. The Steam query ports are
+ * published by docker-compose (`8766-8767/udp`) and are not in the .ini at all.
  */
-export const INFRA_KEYS = [
-  "RCONPassword",
-  "RCONPort",
-  "DefaultPort",
-  "UDPPort",
-  "SteamPort1",
-  "SteamPort2",
-] as const;
+export const INFRA_KEYS = ["RCONPassword", "RCONPort", "DefaultPort", "UDPPort"] as const;
 
 /**
  * Parse `# help` + `Key=Value` blocks. PZ writes its own comments as literal
@@ -127,18 +133,43 @@ export function parseIni(text: string): PzProperty[] {
 
 const KEY_RE = /^([A-Za-z0-9_]+)=/;
 
+export interface SetIniResult {
+  text: string;
+  /** Keys the file already had, rewritten in place. */
+  applied: string[];
+  /** Keys added to the end of the file (only when `append` is on). */
+  appended: string[];
+  /** Keys the file does not have, left alone because `append` is off. */
+  ignored: string[];
+}
+
 /**
- * Rewrite the given keys in place, appending any that aren't in the file yet.
- * Line-based so every comment, blank line and untouched key survives verbatim.
+ * Rewrite the given keys in place. Line-based so every comment, blank line and
+ * untouched key survives verbatim.
+ *
+ * `append` decides what happens to a key the file does not have, and the two callers
+ * want opposite things — which is why it is a parameter rather than a policy baked in
+ * here. **It defaults to the old behaviour on purpose**: the config *import* has to be
+ * able to add `RCONPassword` to an uploaded .ini that lacks it (otherwise the import
+ * hands the box a config with no control channel), and `writeMapOrder` /
+ * `writeModState` must be able to create `Map=` / `Mods=` in a file the game has not
+ * finished filling in. Both discard the result, so a default of `false` would have made
+ * them silently no-op — the exact failure this change exists to remove.
+ *
+ * The generic settings editor is the caller that passes `append: false`, because there
+ * every unmatched key is a typo or a stale field and appending it produced a line the
+ * game ignores while the response claimed it was applied.
  */
 export function setIniValues(
   text: string,
-  updates: Record<string, string>
-): { text: string; applied: string[] } {
+  updates: Record<string, string>,
+  { append = true }: { append?: boolean } = {}
+): SetIniResult {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
   const pending = new Map(Object.entries(updates));
   const applied: string[] = [];
+  const appended: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const m = KEY_RE.exec(lines[i]);
@@ -148,12 +179,17 @@ export function setIniValues(
     applied.push(m[1]);
     pending.delete(m[1]);
   }
+  const ignored: string[] = [];
   for (const [key, value] of pending) {
+    if (!append) {
+      ignored.push(key);
+      continue;
+    }
     lines.push(`${key}=${sanitizeValue(value)}`);
-    applied.push(key);
+    appended.push(key);
   }
 
-  return { text: lines.join(eol), applied };
+  return { text: lines.join(eol), applied, appended, ignored };
 }
 
 /** A newline in a value would split the key across lines and corrupt the file. */
@@ -170,13 +206,22 @@ export async function readIniProperties(): Promise<PzProperty[]> {
   return parseIni(await readIni());
 }
 
-/** Apply a subset of settings to the .ini on disk. */
-export async function updateIni(updates: Record<string, string>): Promise<string[]> {
+/**
+ * Apply a subset of settings to the .ini on disk.
+ *
+ * Returns the full `setIniValues` verdict rather than one `applied` array, because the
+ * caller is the only one who can say whether a key it did not match is fine (the mod
+ * and map writers create theirs) or a mistake worth reporting (the settings editor).
+ */
+export async function updateIni(
+  updates: Record<string, string>,
+  opts?: { append?: boolean }
+): Promise<Omit<SetIniResult, "text">> {
   const file = await iniPath();
   const current = await readFile(file, "utf-8");
-  const { text, applied } = setIniValues(current, updates);
+  const { text, ...result } = setIniValues(current, updates, opts);
   await writeFile(file, text, "utf-8");
-  return applied;
+  return result;
 }
 
 function valueOf(props: PzProperty[], name: string): string {
@@ -334,6 +379,52 @@ export async function pzConsole(command: string, timeoutMs = 8000): Promise<stri
 /** Flush the world to disk. Used before stopping so nothing is lost. */
 export async function pzSave(): Promise<void> {
   await pzConsole("save");
+}
+
+/**
+ * Ask a running server to re-read its .ini, then ask it what it now believes.
+ *
+ * Both commands were run against the live server before this was written, because
+ * shipping a call nobody has seen answer is how this codebase keeps acquiring success
+ * messages for work that did not happen. Measured 2026-10-01:
+ *
+ *   $ help           → `* reloadoptions : Reload server options (ServerOptions.ini) and send to clients`
+ *   $ reloadoptions  → `Options reloaded`
+ *   $ showoptions    → `List of Server Options:` then `* Key=Value`, 137 lines
+ *
+ * `showoptions` is what turns "saved" into something checkable: all 137 values it
+ * reported matched the .ini on disk byte for byte, so it is reading the same
+ * `<servername>.ini` this app writes — which is the part a comment in the game's help
+ * text could not have told us. The seven keys it withholds are the secrets and the
+ * Discord channels, so an absent key means *unverifiable*, never *rejected*.
+ *
+ * `null` means RCON did not answer at all: the world is down or wedged, there is
+ * nothing to reload, and the caller must say so rather than imply a live change.
+ *
+ * The timeout is short on purpose. This runs inside a sub-second config PUT, so a
+ * wedged server must cost the request a few seconds, not the 8 s the status probe can
+ * afford.
+ */
+export async function reloadLiveOptions(
+  expect: Record<string, string>,
+  timeoutMs = 4000
+): Promise<PzLiveReload | null> {
+  let reply: string;
+  try {
+    reply = await pzConsole("reloadoptions", timeoutMs);
+  } catch {
+    return null;
+  }
+  const reloaded = /options\s+reloaded/i.test(reply);
+
+  let live: Map<string, string>;
+  try {
+    live = parseShowOptions(await pzConsole("showoptions", timeoutMs));
+  } catch {
+    // The reload was acknowledged but the read-back failed, so nothing is proven.
+    return { reloaded, verified: [], unverified: Object.keys(expect), stale: [] };
+  }
+  return { reloaded, ...classifyLiveOptions(expect, live) };
 }
 
 export interface PzStatus {

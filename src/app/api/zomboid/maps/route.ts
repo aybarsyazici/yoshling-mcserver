@@ -77,6 +77,15 @@ export async function GET() {
 /**
  * Reorder `Map=`. The first entry wins where two maps claim the same cell.
  *
+ * **This is the only writer of `Map=`, and that is now enforced.** `Map` is in
+ * `CARD_OWNED_KEYS` (`lib/zomboid-ini-contract.ts`), so `/api/zomboid/config` hides it
+ * from "All settings" and refuses it with a message naming this card. It had to be,
+ * because the generic editor could not have made the change stick: `search_folder.sh`
+ * regenerates the line from the maps found under the workshop mount, keeping the saved
+ * order but silently dropping any name it cannot find there. A stock or mistyped name
+ * typed into the editor was written, reported saved, told to restart — and deleted by
+ * that restart. Only this route sees the installed set, which is what makes it the owner.
+ *
  * What is saved here now **survives a restart**, and until 2026-09-29 it did not:
  * the container's `entry.sh` (line 234) unconditionally `sed`s the whole `Map=` line
  * to `${map_list}Muldraugh, KY` about 3 s before the world loads, from whatever

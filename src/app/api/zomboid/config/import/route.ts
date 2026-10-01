@@ -23,6 +23,11 @@ import {
  * that does NOT come across is INFRA_KEYS (RCON + the published ports), which
  * stay at this box's values so control and connectivity survive the import.
  *
+ * INFRA_KEYS is four keys, not six: it used to end with `SteamPort1` and `SteamPort2`,
+ * which are not Build 42 server options at all (checked on production 2026-10-01 — the
+ * live .ini's 144 keys contain neither), so this loop silently preserved nothing for a
+ * third of the list it promised to carry across.
+ *
  * POST { content }              → a preview of what would change
  * POST { content, apply: true } → writes it, after backing up the current file
  */
@@ -101,6 +106,22 @@ export async function POST(request: NextRequest) {
   const effective = (key: string): string | undefined =>
     preservedByName.get(key) ?? incomingByName.get(key);
 
+  /**
+   * Keys whose *value* must never leave the box, even to an audience allowed to change
+   * them. `preserved` was stripped of its `value` field for this reason (see below);
+   * `changed` is the same payload one key over — the join `Password` and `DiscordToken`
+   * would otherwise ship their live value as `from`, in cleartext, into whatever proxy
+   * or request log sits on the way. `RCONPassword` cannot appear here (it is preserved,
+   * so `from === to` and the entry is never pushed), which is exactly why the other two
+   * were easy to miss. The consumer renders `changed.length` and nothing else, so the
+   * masking costs the UI nothing, and the field stays a string rather than being dropped
+   * — a previous round noted that removing it would have the component render
+   * "undefined" while still typechecking.
+   */
+  const SECRET_KEYS = new Set(["Password", "DiscordToken"]);
+  const show = (key: string, value: string): string =>
+    SECRET_KEYS.has(key) && value !== "" ? "(hidden)" : value;
+
   const changed: { name: string; from: string; to: string }[] = [];
   const added: string[] = [];
   // Keys, not entries: the uploaded value is deliberately not what we compare
@@ -114,7 +135,7 @@ export async function POST(request: NextRequest) {
       continue;
     }
     const from = currentByName.get(key)!;
-    if (from !== to) changed.push({ name: key, from, to });
+    if (from !== to) changed.push({ name: key, from: show(key, from), to: show(key, to) });
   }
   // Keys we have that the upload doesn't: replacing the file drops them, and the
   // game fills them back in with its defaults on the next boot.
