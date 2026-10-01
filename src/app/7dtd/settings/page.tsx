@@ -27,14 +27,21 @@ import { GAMES } from "@/lib/games";
  * value it had not applied. The API has reported them as `skipped` for a while; the
  * controls simply never read it.
  *
- * The DB columns and the route's `XML_KEYS` entries **stay** on purpose: the
- * `SevenDaysConfig` row is the only config that survives a fresh SteamCMD install, and
- * the route still writes those keys whenever the property does turn out to exist.
+ * **Correction, 2026-10-01.** This used to say the DB columns and the route's `XML_KEYS`
+ * entries for them "stay on purpose", because the route "still writes those keys whenever
+ * the property does turn out to exist". Both halves are gone now. Nothing can change
+ * `gameDifficulty` or `dayLength` any more, so the only thing that mapping could do was
+ * write a frozen default nobody chose into a future game version's property — which is the
+ * same defect as writing a property that does not exist, one version later. The four dead
+ * columns (`gameDifficulty`, `dayLength`, `version`, `maxMemory`) are no longer written at
+ * all; dropping them needs a hand-applied production migration.
  *
- * `version` and `maxMemory` are also gone from this interface. They were clamped,
- * stored and read by nothing — `/api/7dtd/update` reads the Steam branch off compose,
- * not off this row, and 7DTD is a native server with no JVM heap to set. The four DB
- * columns stay (dropping them needs a hand-applied production migration).
+ * `version` and `maxMemory` were never read either: `/api/7dtd/update` reads the Steam
+ * branch off compose, and 7DTD is a native server with no JVM heap to set.
+ *
+ * `sandboxCode` is the one field here that is **not** read out of the DB row — the GET
+ * reads it from `sdtdserver.xml`, because the file has a second writer ("All settings")
+ * and the row went stale behind it. See the GET in `/api/7dtd/config`.
  */
 interface SdtdConfig {
   serverName: string;
@@ -51,6 +58,10 @@ export default function SevenDtdSettings() {
     maxPlayers: 8,
     sandboxCode: "",
   });
+  // Whether the sandbox code on screen came from `sdtdserver.xml` or from the stored
+  // recovery copy, which is only the case before 7DTD's first install has produced the
+  // file. A blank box with no explanation reads as "no code set".
+  const [sandboxFromFile, setSandboxFromFile] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -65,6 +76,7 @@ export default function SevenDtdSettings() {
             maxPlayers: data.maxPlayers ?? 8,
             sandboxCode: data.sandboxCode ?? "",
           });
+          setSandboxFromFile(data.sandboxCodeSource !== "db");
         }
       })
       .catch(() => {})
@@ -80,18 +92,40 @@ export default function SevenDtdSettings() {
         body: JSON.stringify(config),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) toast.error(data.error || "Failed to save");
+      if (!res.ok) {
+        toast.error(data.error || "Failed to save");
+        return;
+      }
+      // Redisplay what the server stored, not what was typed. `maxPlayers` is clamped to
+      // 1–16, so asking for 99 stored 16 and left "99" in the box — the UI manufacturing a
+      // confirmation the server had not given, which is this project's house defect.
+      if (data.stored) {
+        setConfig((p) => ({
+          serverName: data.stored.serverName ?? p.serverName,
+          password: data.stored.password ?? p.password,
+          maxPlayers: data.stored.maxPlayers ?? p.maxPlayers,
+          sandboxCode: data.stored.sandboxCode ?? p.sandboxCode,
+        }));
+      }
       // `data.warning` is the route being honest and this line used to paint it green.
       // The strings it can hold include "Saved here, but writing the server config
-      // failed, so nothing changed on the server: …" and "…the server config has no
-      // Difficulty (GameDifficulty) property, so that setting had no effect in-game."
+      // failed, so nothing changed on the server: …", "Max players was set to 16, not
+      // 99 …" and the sandbox code's "only applies to a new world".
       // A warning rendered as a success is the defect class this whole change is about.
-      else if (data.warning) toast.warning(data.warning);
+      if (data.warning) toast.warning(data.warning);
       else toast.success("Settings saved. Restart 7DTD to apply.");
     } finally {
       setSaving(false);
     }
   }
+
+  // Shape check, mirrored from `sandboxCodeIssue` in `lib/sdtd-settings.ts`: the textarea
+  // only accepts A-Z (so there is nothing for the character check to catch here), and the
+  // length rule is a **warning**, not a refusal — one of 23 boot logs on the box printed a
+  // code one character short of the rule and nothing explains it, so refusing on length
+  // could reject something the game itself emitted. See that file for the measurements.
+  const sandboxLooksIncomplete =
+    config.sandboxCode.length > 0 && (config.sandboxCode.length - 1) % 3 !== 0;
 
   function set<K extends keyof SdtdConfig>(key: K, value: SdtdConfig[K]) {
     setConfig((p) => ({ ...p, [key]: value }));
@@ -144,16 +178,54 @@ export default function SevenDtdSettings() {
                 <Label className="text-sm">Sandbox code</Label>
                 <textarea
                   value={config.sandboxCode}
-                  onChange={(e) => set("sandboxCode", e.target.value.replace(/[^A-Za-z0-9]/g, ""))}
+                  /* A-Z only, uppercased. The old filter was `[^A-Za-z0-9]`, which let
+                     digits through — no sandbox code anywhere on this box contains one
+                     (the live 94-character preset, the 19-character fresh-install default
+                     and the game's own example preset are all A-Z), so a digit is a
+                     mis-paste that would be stored and written to the file as-is. */
+                  onChange={(e) => set("sandboxCode", e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
                   placeholder="Paste a sandbox code, or leave blank for defaults"
                   spellCheck={false}
                   rows={2}
                   className="w-full resize-y break-all rounded-lg border border-input bg-transparent px-3 py-2 font-mono text-xs outline-none focus:ring-2"
                   style={{ ["--tw-ring-color" as string]: `color-mix(in oklab, ${tint} 45%, transparent)` }}
                 />
+                {/* The one thing this card has to say, and did not.
+                    Measured live on 2026-10-01 while Reveo Valley / Fresh2 was running:
+                    `getgamepref` over telnet reported `SandboxCode` as exactly the
+                    94-character string in sdtdserver.xml — so the file does reach the game
+                    — while `BloodMoonEnemyCount` was 8 where that code decodes to
+                    `5/16 Enemies`, `ZombieMove` 0 (Walk) where it says `1/Jog`, and
+                    `ZombieFeralMove` 3 (Sprint) where it says `4/Nightmare`. The save wins.
+                    The previous copy said this was "the only place difficulty and day
+                    length can be set", which is true and reads as "so set it here and the
+                    server changes" — which is false for the world that exists. */}
                 <p className="text-xs text-muted-foreground">
-                  The game&rsquo;s difficulty/loot/XP preset, and <span className="text-foreground">the only place difficulty and day length can be set</span> — current 7DTD versions fold both into this code rather than exposing them as server properties. In 7DTD: <span className="text-foreground">New Game → Sandbox Options</span>, adjust settings, then <span className="text-foreground">Copy Code</span> and paste it here.
+                  <span className="text-foreground">Applies to a new world only.</span> A 7DTD save
+                  keeps the sandbox settings it was created with, so pasting a code here does not change
+                  the world that is running — checked against the live server, which reports this exact
+                  code and still runs the old zombie speeds and blood-moon count. Starting a fresh save
+                  (Server maintenance → Reset world, below) is what applies it.
                 </p>
+                <p className="text-xs text-muted-foreground">
+                  It is still the only place difficulty, loot and XP can be set — current 7DTD versions
+                  fold them into this code rather than exposing them as server properties. In 7DTD:{" "}
+                  <span className="text-foreground">New Game → Sandbox Options</span>, adjust settings,
+                  then <span className="text-foreground">Copy Code</span> and paste it here.
+                </p>
+                {sandboxLooksIncomplete && (
+                  <p className="op-warn text-xs">
+                    That looks like a partial code — every code on this server is one letter followed by
+                    groups of three, and this one is {config.sandboxCode.length} letters. Saving is
+                    allowed; re-copy the whole code if the game ignores it.
+                  </p>
+                )}
+                {!sandboxFromFile && (
+                  <p className="op-warn text-xs">
+                    Showing the stored copy: the server config file isn&rsquo;t present yet, so this is
+                    what will be written once 7DTD finishes its first install.
+                  </p>
+                )}
               </div>
             </div>
 
