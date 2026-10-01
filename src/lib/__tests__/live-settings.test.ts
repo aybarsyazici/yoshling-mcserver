@@ -1,3 +1,4 @@
+import { parseShowOptions } from "@/lib/zomboid-ini-contract";
 import { describe, expect, it } from "vitest";
 import {
   NEXT_WORLD_LABEL,
@@ -287,6 +288,23 @@ const PZ_SAMPLE = [
 ].join("\n");
 
 describe("parsePzOptions — Project Zomboid showoptions", () => {
+  // Pins the single-parser property. `parsePzOptions` used to carry its own copy of the
+  // regex that did NOT tolerate a space before the `=`, so one wire format was parsed two
+  // ways and the two views could disagree about whether a key existed at all. Mutation-
+  // checked: re-inlining the old regex turns this red.
+  it("agrees with the contract parser, including the forms only it tolerated", () => {
+    const text = [
+      "List of Server Options:",
+      "* PVP=true",
+      "* SpeedLimit =70.0",
+      "* ServerWelcomeMessage=hello = world",
+      "not a starred line",
+    ].join("\n");
+    expect(parsePzOptions(text)).toEqual(Object.fromEntries(parseShowOptions(text)));
+    // and the space-before-= form is actually read, not merely "read the same way twice"
+    expect(parsePzOptions(text).SpeedLimit).toBe("70.0");
+  });
+
   it("skips the header and reads every starred line", () => {
     const v = parsePzOptions(PZ_SAMPLE);
     expect(Object.keys(v)).toHaveLength(7);
@@ -408,5 +426,24 @@ describe("end to end against the measured production state", () => {
     props.find((p) => p.name === "ServerMaxPlayerCount")!.value = "16";
     const cmp = compareSettings("7dtd", props, live(values, { game: "7dtd" }));
     expect(cmp.disagreeing).toEqual(["ServerMaxPlayerCount"]);
+  });
+});
+
+describe("the PZ sandbox is never compared against the .ini", () => {
+  // The blocker found in integration: two correct branches merged cleanly and wired the
+  // configured-vs-live comparison onto Project Zomboid's sandbox panels, which compared
+  // `SandboxVars.lua` against the `.ini`'s `showoptions`. 737 of 742 options rendered a
+  // false "not reported" chip, and `BloodSplatLifespanDays` — present in both files — showed
+  // a permanent amber disagreement nothing could clear.
+  it("returns null for the sandbox endpoint, at every scope", () => {
+    expect(gameFromConfigEndpoint("/api/zomboid/sandbox")).toBeNull();
+    expect(gameFromConfigEndpoint("/api/zomboid/sandbox?scope=world")).toBeNull();
+    expect(gameFromConfigEndpoint("/api/zomboid/sandbox?scope=mods")).toBeNull();
+  });
+
+  it("still infers zomboid for the .ini endpoints it should compare", () => {
+    // The opt-out must be narrow: the `.ini` really is reported by `showoptions`.
+    expect(gameFromConfigEndpoint("/api/zomboid/config")).toBe("zomboid");
+    expect(gameFromConfigEndpoint("/api/zomboid/config/import")).toBe("zomboid");
   });
 });

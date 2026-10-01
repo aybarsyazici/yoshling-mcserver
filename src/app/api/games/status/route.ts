@@ -91,13 +91,18 @@ export async function GET(request: Request) {
   // probes measurably return no secret-named key today, and `redactSecretKeys()` drops any
   // that appear later — but a live settings dump is still the same class of data as the
   // file it is compared against, so it gets the same gate rather than session-only.
-  const wanted = new URL(request.url).searchParams.get("live");
+  const params = new URL(request.url).searchParams;
+  const wanted = params.get("live");
   const wantedGame = GAME_LIST.find((g) => g.id === wanted)?.id;
+  // `?fresh=1` skips the 10 s cache, and only the post-write re-read asks for it. Without it
+  // a save inside ten seconds of the panel loading got the pre-write snapshot back and
+  // rendered amber "running: <old value>" for the write it had just applied.
+  const fresh = params.get("fresh") === "1";
   let live: LiveSettings | undefined;
   if (wantedGame) {
     const allowed = access.includes(wantedGame) && hasPermission(session.user.role, "settings.read");
     live = allowed
-      ? await liveSettings(wantedGame)
+      ? await liveSettings(wantedGame, { fresh })
       : {
           game: wantedGame,
           available: false,

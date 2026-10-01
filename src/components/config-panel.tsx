@@ -76,7 +76,13 @@ export function ConfigPanel({
   endpoint: string;
   subtitle: string;
   /** What the user has to do for the change to take effect. */
-  restartNote: string;
+  /**
+   * Appended to the save toast. **Optional**, and the optionality is load-bearing: a panel
+   * whose route reports per-key `restartNeeded` must not also print a blanket "restart to
+   * apply", because for Project Zomboid's `.ini` that is now true of 8 of 144 keys and the
+   * blanket version told the operator to kick everyone for nothing.
+   */
+  restartNote?: string;
   groupOrder: string[];
   groupOf: (name: string) => string;
   selects?: Record<string, SelectOption[]>;
@@ -210,10 +216,17 @@ export function ConfigPanel({
         toast.warning(
           `Saved ${n} of ${n + ignored.length} settings. ${ignored.join(", ")} ${
             ignored.length === 1 ? "isn't a setting" : "aren't settings"
-          } this server has, so ${ignored.length === 1 ? "it was" : "they were"} not written. ${restartNote}`
+          } this server has, so ${ignored.length === 1 ? "it was" : "they were"} not written.${
+            restartNote ? ` ${restartNote}` : ""
+          }`
         );
       } else {
-        toast.success(`Saved ${n} setting${n === 1 ? "" : "s"}. ${restartNote}`);
+        // The conditional, not `${restartNote}`: an absent note must not render the string
+        // "undefined" into a success toast. Same shape as the `preserved` field a previous
+        // round nearly flattened into "undefined, undefined" while typechecking cleanly.
+        toast.success(
+          `Saved ${n} setting${n === 1 ? "" : "s"}.${restartNote ? ` ${restartNote}` : ""}`
+        );
       }
 
       // Re-read the live side after a write, because that is the moment the question
@@ -221,7 +234,9 @@ export function ConfigPanel({
       // value is the normal state until a restart, and saying so is the point: the toast
       // can only report what the route wrote, which is exactly the evidence that has been
       // mistaken for success here for months.
-      if (gameId) setLive(await fetchLiveSettings(gameId));
+      // `true`: this is the post-write re-read, the one caller that must not be served a
+      // cached pre-write snapshot.
+      if (gameId) setLive(await fetchLiveSettings(gameId, true));
     } catch {
       toast.error("Couldn't save");
     } finally {
@@ -344,7 +359,7 @@ export function ConfigPanel({
                       }
                     >
                       {summary.text}
-                      {summary.tone === "warn" ? ` ${restartNote}` : ""}
+                      {summary.tone === "warn" && restartNote ? ` ${restartNote}` : ""}
                     </p>
                   )}
 

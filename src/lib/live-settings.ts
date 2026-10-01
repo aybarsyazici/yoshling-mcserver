@@ -1,4 +1,5 @@
 import type { GameId } from "@/lib/games";
+import { parseShowOptions } from "@/lib/zomboid-ini-contract";
 
 /**
  * Configured-versus-live, generalised.
@@ -297,14 +298,17 @@ export function parseGamePrefs(out: string): Record<string, string> {
  * Captured from production 2026-10-01: a `List of Server Options:` header then 137 lines
  * of `* Key=Value`, 6,774 bytes. The split is on the FIRST `=` — `ServerWelcomeMessage`
  * and `ClientCommandFilter` both carry further characters that must stay in the value.
+ *
+ * **Delegates rather than re-parsing.** This file briefly had its own copy of the regex,
+ * and the two were not the same: `parseShowOptions` tolerates `* Key =Value` and this one
+ * did not. One wire format parsed two ways means the save report and the live-settings
+ * chip could disagree about whether a key *exists*, which is worse than either being
+ * wrong — a missing key reads as "not reported" in one view and as a value in the other.
+ * `zomboid-ini-contract.ts` owns the format (it has the measurements and the 137/144
+ * accounting); this is the `Record` shape the generic live-settings layer wants.
  */
 export function parsePzOptions(out: string): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const line of out.split(/\r?\n/)) {
-    const m = /^\s*\*\s*([A-Za-z0-9_]+)=(.*)$/.exec(line);
-    if (m) values[m[1]] = m[2].trim();
-  }
-  return values;
+  return Object.fromEntries(parseShowOptions(out));
 }
 
 /**
@@ -343,6 +347,23 @@ export function parseMcMaxPlayers(out: string): string | null {
  * confident-wrong-answer failure again.
  */
 export function gameFromConfigEndpoint(endpoint: string): GameId | null {
+  // Project Zomboid's SANDBOX is a different config surface from its `.ini`, and there is
+  // nothing live to compare it against — so it must not be compared at all.
+  //
+  // Caught in integration, as a clean merge of two correct branches. `ZomboidSandbox` passes
+  // no `game`, so this function inferred `zomboid` from the path and ConfigPanel compared
+  // `SandboxVars.lua` option names against PZ's RCON `showoptions`, which reports the `.ini`.
+  // Measured over the real production files: of 742 sandbox options, 737 rendered a false
+  // "the server doesn't report this" chip, the summary asserted a sandbox option was
+  // "running", and `BloodSplatLifespanDays` — the one name that exists in BOTH files — got a
+  // permanent amber "saved here but not running on the server" that no restart could clear.
+  // All of it under the card's own correct heading that nothing there applies while the
+  // server is running.
+  //
+  // A brand-new honesty feature making a false claim about 742 settings is the exact defect
+  // class this run set out to close, so the opt-out is explicit rather than a `game` prop
+  // someone has to remember to omit.
+  if (endpoint.startsWith("/api/zomboid/sandbox")) return null;
   if (endpoint.startsWith("/api/7dtd/")) return "7dtd";
   if (endpoint.startsWith("/api/zomboid/")) return "zomboid";
   // The Minecraft routes predate the per-game namespace and are still `/api/server/*`.

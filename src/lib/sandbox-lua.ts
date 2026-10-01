@@ -352,11 +352,69 @@ export interface SandboxWriteResult {
  * panel's "saved N of M" copy says the refused ones "aren't settings this server has",
  * which for an out-of-range value would be a lie.
  */
+/**
+ * The structural shape a whole SandboxVars.lua must have before we rewrite it.
+ *
+ * Reproduced on the real file before this existed: truncate the production
+ * `yoshling_SandboxVars.lua` to 140 lines — which is what a read landing inside the game's
+ * own once-per-boot truncate-and-rewrite looks like — and `setSandboxValues` happily
+ * returned `rejected: []`, `applied: ["Distribution"]`, and wrote back **140 lines holding
+ * 22 of 742 options**. The per-option read-back passes because it only re-checks the option
+ * it edited, and the `.bak` is taken from a second `readFile` so it can catch the same
+ * window. One boot later the world's other 720 options are silently back to defaults.
+ *
+ * So: refuse to write unless the text we parsed looks like a complete file. Cheap, and the
+ * only thing standing between a badly-timed read and a reset world.
+ */
+function assertWholeFile(text: string, optionCount: number, minOptions: number): void {
+  const lines = text.split("\n");
+  const first = lines.find((l) => l.trim().length > 0)?.trim() ?? "";
+  const last = [...lines].reverse().find((l) => l.trim().length > 0)?.trim() ?? "";
+  if (!/^SandboxVars\s*=\s*\{$/.test(first)) {
+    throw new SandboxStructureError(
+      `the file does not start with "SandboxVars = {" (found ${JSON.stringify(first.slice(0, 40))}) — ` +
+        `refusing to write in case this is a partial read`
+    );
+  }
+  if (!/^\}?,?$/.test(last) && last !== "}") {
+    throw new SandboxStructureError(
+      `the file does not end with "}" (found ${JSON.stringify(last.slice(0, 40))}) — ` +
+        `refusing to write in case this is a partial read`
+    );
+  }
+  // A floor, not an exact count: the game adds options between builds, and a legitimate
+  // file has never had anything like this few. The real one parses to 742.
+  if (optionCount < minOptions) {
+    throw new SandboxStructureError(
+      `only ${optionCount} options parsed, fewer than the ${minOptions} a real ` +
+        `file has — refusing to write in case this is a partial read`
+    );
+  }
+}
+
+/** Raised when the text to be rewritten does not look like a whole SandboxVars.lua. */
+export class SandboxStructureError extends Error {}
+
+/**
+ * Well below the 742 the live file parses to, and far above anything a truncated read would
+ * yield. A floor rather than an equality so a build that adds or removes options does not
+ * start refusing every save.
+ *
+ * Overridable **only so the tests can work against a verbatim 38-option excerpt** of the
+ * real file rather than committing 1,803 lines. The route must never lower it: the delimiter
+ * checks above are the primary guard and this is the backstop for a read that is somehow
+ * well-formed and nearly empty. A test asserts the real-shaped truncation is refused at the
+ * default.
+ */
+export const MIN_PLAUSIBLE_OPTIONS = 200;
+
 export function setSandboxValues(
   text: string,
-  updates: Record<string, string>
+  updates: Record<string, string>,
+  opts: { minOptions?: number } = {}
 ): SandboxWriteResult {
   const options = parseSandboxLua(text);
+  assertWholeFile(text, options.length, opts.minOptions ?? MIN_PLAUSIBLE_OPTIONS);
   const byName = new Map(options.map((o) => [o.name, o]));
   const rejected: SandboxRejection[] = [];
   const edits: { option: SandboxOption; literal: string }[] = [];

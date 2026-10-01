@@ -10,6 +10,7 @@ import {
   sandboxGroupOf,
   scopeOf,
   setSandboxValues,
+  SandboxStructureError,
 } from "@/lib/sandbox-lua";
 
 /**
@@ -42,6 +43,20 @@ import {
  *   with `:` and `;` in it; and `VERSION = 6` at the top.
  */
 const LUA = readFileSync(path.join(__dirname, "fixtures/pz-sandboxvars.lua"), "utf-8");
+
+/**
+ * The fixture is a verbatim 38-option excerpt, and `setSandboxValues` refuses to write a
+ * file holding fewer than `MIN_PLAUSIBLE_OPTIONS` (200) because that is the signature of a
+ * partial read — see `assertWholeFile`. Committing all 1,803 real lines to satisfy a floor
+ * would be the wrong trade, so the excerpt tests lower it explicitly.
+ *
+ * The floor itself is not left untested: `refuses a truncated file at the production floor`
+ * below exercises the default.
+ */
+const EXCERPT = { minOptions: 20 } as const;
+function write(text: string, updates: Record<string, string>) {
+  return setSandboxValues(text, updates, EXCERPT);
+}
 
 function byName(name: string) {
   const found = parseSandboxLua(LUA).find((o) => o.name === name);
@@ -125,7 +140,7 @@ describe("parseSandboxLua", () => {
 
 describe("setSandboxValues", () => {
   it("rewrites one line and leaves the rest of the file byte-identical", () => {
-    const { text, applied } = setSandboxValues(LUA, { "ZombieConfig.PopulationMultiplier": "1.2" });
+    const { text, applied } = write(LUA, { "ZombieConfig.PopulationMultiplier": "1.2" });
     expect(applied).toEqual(["ZombieConfig.PopulationMultiplier"]);
     const before = LUA.split("\n");
     const after = text.split("\n");
@@ -139,7 +154,7 @@ describe("setSandboxValues", () => {
     // The property: a write is scoped to one block. `MultiplierConfig.Strength` is an XP
     // multiplier; `ZombieLore.Strength` is how hard zombies hit. Writing 2.5 into the
     // wrong one makes the world unrecognisable and reports success.
-    const { text } = setSandboxValues(LUA, { "MultiplierConfig.Strength": "2.5" });
+    const { text } = write(LUA, { "MultiplierConfig.Strength": "2.5" });
     const after = parseSandboxLua(text);
     expect(after.find((o) => o.name === "MultiplierConfig.Strength")?.value).toBe("2.5");
     expect(after.find((o) => o.name === "ZombieLore.Strength")?.value).toBe("2");
@@ -148,7 +163,7 @@ describe("setSandboxValues", () => {
   });
 
   it("writes a top-level option, not the same-named one inside a table", () => {
-    const { text } = setSandboxValues(LUA, { Farming: "5" });
+    const { text } = write(LUA, { Farming: "5" });
     const after = parseSandboxLua(text);
     expect(after.find((o) => o.name === "Farming")?.value).toBe("5");
     expect(after.find((o) => o.name === "MultiplierConfig.Farming")?.value).toBe("1.0");
@@ -161,7 +176,7 @@ describe("setSandboxValues", () => {
       "Map.AllowMiniMap": "false",
       LootItemRemovalList: "Base.Hat, Base.Glasses",
     };
-    const { text, applied, written } = setSandboxValues(LUA, updates);
+    const { text, applied, written } = write(LUA, updates);
     expect(applied.sort()).toEqual(Object.keys(updates).sort());
     const after = new Map(parseSandboxLua(text).map((o) => [o.name, o.value]));
     for (const name of applied) expect(after.get(name)).toBe(written[name]);
@@ -171,7 +186,7 @@ describe("setSandboxValues", () => {
     // PZ's own serialiser writes `1.0`, and the loader parses a double. `Global = 2`
     // still loads, but the file stops matching what the game would write, so the next
     // startup rewrite silently reformats it and a diff of the file is noise.
-    const { text } = setSandboxValues(LUA, { "MultiplierConfig.Global": "2" });
+    const { text } = write(LUA, { "MultiplierConfig.Global": "2" });
     expect(text).toContain("        Global = 2.0,");
   });
 
@@ -179,7 +194,7 @@ describe("setSandboxValues", () => {
     // VERSION is the game's own format version — `zombie/SandboxOptions` stamps it and
     // `upgradeLuaTable` migrates from it. Writing it tells the loader to migrate a file
     // that was never migrated.
-    const result = setSandboxValues(LUA, { VERSION: "7" });
+    const result = write(LUA, { VERSION: "7" });
     expect(result.applied).toEqual([]);
     expect(result.text).toBe(LUA);
     expect(result.rejected[0].error).toContain("VERSION");
@@ -187,7 +202,7 @@ describe("setSandboxValues", () => {
 
   it("refuses the character-creation presets nothing in the game reads", () => {
     for (const name of PRESET_ONLY) {
-      const result = setSandboxValues(LUA, { [name]: "2" });
+      const result = write(LUA, { [name]: "2" });
       expect(result.applied).toEqual([]);
       expect(result.text).toBe(LUA);
     }
@@ -197,15 +212,15 @@ describe("setSandboxValues", () => {
     // `ZombiesCountBeforeDelete` is documented `Min: 0 Max: 5000`. The game clamps, so
     // writing 99999 would be accepted by the file, applied as 5000, and reported as
     // saved — the exact defect class this feature is most exposed to.
-    const result = setSandboxValues(LUA, { "ZombieConfig.ZombiesCountBeforeDelete": "99999" });
+    const result = write(LUA, { "ZombieConfig.ZombiesCountBeforeDelete": "99999" });
     expect(result.applied).toEqual([]);
     expect(result.text).toBe(LUA);
     expect(result.rejected[0].error).toContain("between 0 and 5000");
   });
 
   it("allows the exact Min and Max, since the comment includes them", () => {
-    const low = setSandboxValues(LUA, { FoodLootNew: "0" });
-    const high = setSandboxValues(LUA, { FoodLootNew: "4" });
+    const low = write(LUA, { FoodLootNew: "0" });
+    const high = write(LUA, { FoodLootNew: "4" });
     expect(low.rejected).toEqual([]);
     expect(high.rejected).toEqual([]);
     expect(low.text).toContain("    FoodLootNew = 0.0,");
@@ -213,16 +228,16 @@ describe("setSandboxValues", () => {
 
   it("refuses a value an enum does not list", () => {
     // ZombieLore.Speed documents 1-4. 7 is not clamped to anything meaningful.
-    const result = setSandboxValues(LUA, { "ZombieLore.Speed": "7" });
+    const result = write(LUA, { "ZombieLore.Speed": "7" });
     expect(result.rejected[0].error).toContain("1, 2, 3, 4");
     expect(result.text).toBe(LUA);
   });
 
   it("refuses a type change", () => {
-    expect(setSandboxValues(LUA, { "Map.AllowMiniMap": "3" }).rejected).toHaveLength(1);
-    expect(setSandboxValues(LUA, { MuscleStrainFactor: "true" }).rejected).toHaveLength(1);
+    expect(write(LUA, { "Map.AllowMiniMap": "3" }).rejected).toHaveLength(1);
+    expect(write(LUA, { MuscleStrainFactor: "true" }).rejected).toHaveLength(1);
     // A whole-number option given a fraction: the loader truncates it.
-    expect(setSandboxValues(LUA, { ElecShutModifier: "14.5" }).rejected[0].error).toContain(
+    expect(write(LUA, { ElecShutModifier: "14.5" }).rejected[0].error).toContain(
       "whole number"
     );
   });
@@ -231,14 +246,14 @@ describe("setSandboxValues", () => {
     // A renamed or mod-removed option must not be appended. The .ini writer appends
     // unknown keys on purpose; Lua cannot — a key the loader does not know is dropped on
     // the next startup rewrite, so appending it would look like it saved and then vanish.
-    const result = setSandboxValues(LUA, { NoSuchOption: "1" });
+    const result = write(LUA, { NoSuchOption: "1" });
     expect(result.rejected[0].error).toContain("not an option");
     expect(result.text).toBe(LUA);
   });
 
   it("writes nothing at all when any one value is refused", () => {
     // All-or-nothing: a half-applied batch cannot be described honestly by one toast.
-    const result = setSandboxValues(LUA, {
+    const result = write(LUA, {
       FoodLootNew: "1.5",
       "ZombieConfig.ZombiesCountBeforeDelete": "99999",
     });
@@ -249,7 +264,7 @@ describe("setSandboxValues", () => {
 
   it("refuses a string that would break the file", () => {
     for (const bad of ['a"b', "a\\b", "a\nb"]) {
-      const result = setSandboxValues(LUA, { LootItemRemovalList: bad });
+      const result = write(LUA, { LootItemRemovalList: bad });
       expect(result.applied).toEqual([]);
       expect(result.text).toBe(LUA);
     }
@@ -268,7 +283,7 @@ describe("setSandboxValues", () => {
     const writable = parseSandboxLua(LUA).filter(
       (o) => o.name !== "VERSION" && !PRESET_ONLY.includes(o.name as (typeof PRESET_ONLY)[number])
     );
-    const result = setSandboxValues(
+    const result = write(
       LUA,
       Object.fromEntries(writable.map((o) => [o.name, o.value]))
     );
@@ -278,7 +293,7 @@ describe("setSandboxValues", () => {
   });
 
   it("keeps the file parseable after a string write", () => {
-    const { text } = setSandboxValues(LUA, { LootItemRemovalList: "Base.Hat;Base.Glasses" });
+    const { text } = write(LUA, { LootItemRemovalList: "Base.Hat;Base.Glasses" });
     expect(text).toContain('    LootItemRemovalList = "Base.Hat;Base.Glasses",');
     expect(parseSandboxLua(text)).toHaveLength(parseSandboxLua(LUA).length);
   });
@@ -318,5 +333,47 @@ describe("scope and grouping", () => {
     // the jar and is also what loads the save's own clock from `map_t.bin`.
     for (const name of CREATION_ONLY) expect(() => byName(name)).not.toThrow();
     expect(CREATION_ONLY).toEqual(["StartYear", "StartMonth", "StartDay", "StartTime"]);
+  });
+});
+
+describe("setSandboxValues refuses to write something that is not a whole file", () => {
+  // This is the scenario that was REPRODUCED against the real production file before the
+  // guard existed: truncate `yoshling_SandboxVars.lua` to 140 of its 1,803 lines — which is
+  // what a read landing inside the game's own once-per-boot truncate-and-rewrite looks like
+  // — and the writer returned `rejected: []`, `applied: ["Distribution"]`, and wrote back
+  // 140 lines holding 22 of 742 options. The per-option read-back passed because it only
+  // re-checks the option it edited, and the `.bak` is taken from a second read so it can
+  // catch the same window. One boot later the world's other 720 options are defaults.
+  const head = LUA.split("\n").slice(0, 20).join("\n");
+
+  it("refuses a file that does not end with the closing brace", () => {
+    expect(() => write(head, { Zombies: "3" })).toThrow(SandboxStructureError);
+    expect(() => write(head, { Zombies: "3" })).toThrow(/does not end with/i);
+  });
+
+  it("refuses a file that does not start with the opening declaration", () => {
+    const noHead = LUA.split("\n").slice(3).join("\n");
+    expect(() => write(noHead, { Zombies: "3" })).toThrow(SandboxStructureError);
+    expect(() => write(noHead, { Zombies: "3" })).toThrow(/does not start with/i);
+  });
+
+  it("refuses a truncated file at the PRODUCTION floor, not just the excerpt's", () => {
+    // The default `minOptions` is what protects the live world, and every other test in this
+    // file lowers it for the excerpt — so without this, the floor would ship unexercised.
+    expect(() => setSandboxValues(LUA, { Zombies: "3" })).toThrow(SandboxStructureError);
+    expect(() => setSandboxValues(LUA, { Zombies: "3" })).toThrow(/only 38 options parsed/);
+  });
+
+  it("still writes normally when the file is whole", () => {
+    // The guard must not refuse the happy path — a structural check that rejects real files
+    // would be worse than none, because the first thing anyone does is remove it.
+    // NOT `Zombies` — that is preset-only and correctly refused, which would make this
+    // test pass for the wrong reason.
+    const name = parseSandboxLua(LUA).find(
+      (o) => !PRESET_ONLY.includes(o.name as never) && o.name !== "VERSION"
+    )!.name;
+    const r = write(LUA, { [name]: "1" });
+    expect(r.rejected).toEqual([]);
+    expect(Object.keys(r.written)).toContain(name);
   });
 });

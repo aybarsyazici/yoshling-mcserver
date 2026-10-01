@@ -921,10 +921,17 @@ const zomboidDriver: GameDriver = {
    * lines, 6,774 bytes, reply 101.4 / 101.5 / 101.4 ms on three consecutive reads — the
    * same ~100 ms round trip the `save` command measures. Those 137 are **all 144 `.ini`
    * keys except** `Password`, `RCONPassword`, `RCONPort`, `DiscordToken` and the three
-   * Discord channel names; two of those seven are hidden from the panel anyway, so **133 of
-   * the 138 settings it shows are checkable** and five read "not reported". And all 137
-   * agreed with the file character for character at the time of measurement — so on this box
-   * the comparison's resting state is quiet, which is what makes an amber chip mean
+   * Discord channel names.
+   *
+   * What that leaves checkable is **derived, not a constant** — recompute it rather than
+   * trusting a number here, because an earlier version of this comment said "133 of the
+   * 138" and was made wrong by `Map` joining `CARD_OWNED_KEYS` one commit away. The panel
+   * hides `INFRA_KEYS` (4) + `CARD_OWNED_KEYS` (3) = 7 of the 144, so it shows **137**;
+   * `RCONPassword`/`RCONPort` are in both the hidden set and the unreported set, so the
+   * overlap costs nothing and **5** of what it shows read "not reported" (`Password`,
+   * `DiscordToken`, the three channels) — **132 checkable**. And all 137 agreed with the
+   * file character for character at the time of measurement, so on this box the
+   * comparison's resting state is quiet, which is what makes an amber chip mean
    * something.
    */
   async readLive() {
@@ -1049,7 +1056,25 @@ const cachedLive: Record<GameId, () => Promise<LiveSettings>> = {
  * one thing a caller must not be able to do by accident is treat "I don't know" as "these
  * disagree".
  */
-export async function liveSettings(game: GameId): Promise<LiveSettings> {
+export async function liveSettings(
+  game: GameId,
+  /**
+   * Bypass the cache. Used only immediately after a write.
+   *
+   * `cachedProbe` is a hard 10 s TTL with no background refresh, and `config-panel.tsx`
+   * re-reads the live side the instant a PUT succeeds — so within 10 s of the panel's own
+   * load it got the **pre-write** snapshot and rendered amber "running: <old value>" for a
+   * setting the route had just applied with `reloadoptions`. Guaranteed on any second save
+   * inside ten seconds of the first.
+   *
+   * That is worse than having no signal: the whole value of this chip is that it is rare, so
+   * crying wolf on the write it just proved live trains everyone to ignore it. The cache is
+   * right for the polling path (every open tab, every 4 s) and wrong for exactly this one
+   * caller, which is why it is a parameter rather than a shorter TTL.
+   */
+  opts: { fresh?: boolean } = {}
+): Promise<LiveSettings> {
+  if (opts.fresh) return readLiveSettings(game);
   return cachedLive[game]();
 }
 

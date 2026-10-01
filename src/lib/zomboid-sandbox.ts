@@ -1,4 +1,5 @@
-import { chmod, chown, readFile, rename, stat, unlink, writeFile } from "fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, chown, link, readFile, rename, stat, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { PZ_DIR, serverName } from "@/lib/zomboid";
 import {
@@ -49,7 +50,11 @@ export async function readSandboxOptions(): Promise<SandboxOption[]> {
  * - **no deletion of the temp file on success.** `rename` consumes it.
  */
 async function replaceFile(file: string, text: string): Promise<void> {
-  const tmp = `${file}.tmp`;
+  // Unique per write, not a fixed `.tmp`. The settings page renders TWO sandbox panels
+  // (world scope and mods scope) and both Save buttons PUT this same route, so a shared temp
+  // path meant two concurrent writes could rename each other's half-written file over the
+  // live one.
+  const tmp = `${file}.${randomUUID()}.tmp`;
   let mode = 0o664;
   let uid: number | null = null;
   let gid: number | null = null;
@@ -58,8 +63,27 @@ async function replaceFile(file: string, text: string): Promise<void> {
     mode = st.mode & 0o777;
     uid = st.uid;
     gid = st.gid;
-    // Best-effort: a missing backup must not stop the write it protects.
-    await writeFile(`${file}.bak`, await readFile(file, "utf-8"), "utf-8").catch(() => {});
+    // **A hard link, not a copy.** `writeFile(bak, await readFile(file))` had three
+    // faults at once: it read the whole file into the web container and wrote it back, so
+    // a crash between the two left a truncated `.bak`; the new file landed root:root 0644
+    // beside a 1000:1000 664 original, which is the ownership trap this same function
+    // exists to avoid two lines down; and it was the *only* copy of a file with no other
+    // backup. `link` publishes the existing inode under a second name, so the backup is
+    // byte-identical and carries the original's owner and mode by construction — there is
+    // no window in which it is partly written. Linked to a unique name then renamed,
+    // because `link` fails EEXIST on the second save.
+    //
+    // Best-effort: a missing backup must not stop the write it protects. It is logged
+    // rather than swallowed — the whole point of the `.bak` is to exist on the one day
+    // somebody needs it, so silently not having one is worth a line in the console.
+    const bakTmp = `${file}.bak.${randomUUID()}`;
+    try {
+      await link(file, bakTmp);
+      await rename(bakTmp, `${file}.bak`);
+    } catch (e) {
+      await unlink(bakTmp).catch(() => {});
+      console.warn(`[sandbox] could not keep a .bak of ${file}: ${(e as Error).message}`);
+    }
   } catch {
     // No existing file: there is nothing to back up and nothing to match.
   }
@@ -96,11 +120,19 @@ export interface SandboxWriteOutcome {
  * Nothing is written at all if any value is refused — see `setSandboxValues`.
  */
 export async function updateSandbox(
-  updates: Record<string, string>
+  updates: Record<string, string>,
+  /**
+   * Test seam only. `setSandboxValues` refuses to write a file holding fewer options than a
+   * real one has, because that is the signature of a read landing inside the game's own
+   * truncate-and-rewrite — the scenario that silently reset 720 of 742 options in testing.
+   * The tests work against a verbatim 38-option excerpt rather than committing 1,803 lines,
+   * so they lower it. **The route must never pass this.**
+   */
+  opts: { minOptions?: number } = {}
 ): Promise<SandboxWriteOutcome> {
   const file = await sandboxPath();
   const current = await readFile(file, "utf-8");
-  const result = setSandboxValues(current, updates);
+  const result = setSandboxValues(current, updates, opts);
   if (result.rejected.length > 0) {
     return { applied: [], rejected: result.rejected, unlanded: [] };
   }

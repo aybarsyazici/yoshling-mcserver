@@ -4,6 +4,7 @@ import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import {
+  SandboxStructureError,
   CREATION_ONLY_NOTE,
   VERSION_KEY,
   isCreationOnly,
@@ -116,10 +117,39 @@ export async function PUT(request: NextRequest) {
   let outcome;
   try {
     outcome = await updateSandbox(updates);
-  } catch {
+  } catch (e) {
+    // Three different failures used to collapse into one sentence that was false in both
+    // halves. `updateSandbox` reads, validates, writes a temp file, renames, and reads back —
+    // so a bare catch answered "Couldn't read the sandbox file — start Project Zomboid once
+    // first." for an ENOSPC on the temp write, an EXDEV on the rename, or a failed read-back
+    // **after the file had already been replaced**, with no activity row. Telling someone to
+    // start the server when the real problem is a full disk, and implying nothing was
+    // written when it was, is the defect class with the sign flipped.
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      return NextResponse.json(
+        { error: "There is no sandbox file yet — start Project Zomboid once so it writes one." },
+        { status: 404 }
+      );
+    }
+    if (err instanceof SandboxStructureError) {
+      // The guard that refuses to rewrite a partial read. Nothing was written.
+      return NextResponse.json(
+        {
+          error:
+            `The sandbox file did not look complete, so nothing was written (${err.message}). ` +
+            `This usually means the server was rewriting it at that moment — try again.`,
+        },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
-      { error: "Couldn't read the sandbox file — start Project Zomboid once first." },
-      { status: 400 }
+      {
+        error:
+          `Saving the sandbox file failed: ${err.message}. The file may be unchanged or ` +
+          `partly written — check Server/ in the file browser, and the .bak beside it.`,
+      },
+      { status: 500 }
     );
   }
 

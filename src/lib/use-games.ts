@@ -129,11 +129,21 @@ export interface GamesState {
  * caller must render that as "not compared", never as a mismatch — `compareSetting()`
  * takes `null` and answers `unknown` for exactly this reason.
  */
-export async function fetchLiveSettings(game: GameId): Promise<LiveSettings | null> {
+export async function fetchLiveSettings(
+  game: GameId,
+  /**
+   * Pass `true` immediately after a write. It skips the server's 10 s cache, which otherwise
+   * answers with the pre-write snapshot and makes the chip claim a just-applied setting is
+   * not running. Leave it off for anything periodic — the cache exists because this endpoint
+   * is polled by every open tab.
+   */
+  fresh = false
+): Promise<LiveSettings | null> {
   try {
-    const res = await fetch(`/api/games/status?live=${encodeURIComponent(game)}`, {
-      cache: "no-store",
-    });
+    const res = await fetch(
+      `/api/games/status?live=${encodeURIComponent(game)}${fresh ? "&fresh=1" : ""}`,
+      { cache: "no-store" }
+    );
     if (!res.ok) return null;
     const data = await res.json();
     // Shape-checked rather than cast: a browser can hold a page across a deploy, and an

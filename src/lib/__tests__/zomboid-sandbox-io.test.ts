@@ -78,7 +78,7 @@ afterEach(() => {
 describe("updateSandbox", () => {
   it("writes the value and reports it as applied", async () => {
     const { updateSandbox } = await load();
-    const outcome = await updateSandbox({ "ZombieConfig.PopulationMultiplier": "1.2" });
+    const outcome = await updateSandbox({ "ZombieConfig.PopulationMultiplier": "1.2" }, { minOptions: 20 });
     expect(outcome).toEqual({
       applied: ["ZombieConfig.PopulationMultiplier"],
       rejected: [],
@@ -90,14 +90,14 @@ describe("updateSandbox", () => {
   it("keeps the previous file as .bak", async () => {
     const before = readFileSync(file, "utf-8");
     const { updateSandbox } = await load();
-    await updateSandbox({ FoodLootNew: "1.5" });
+    await updateSandbox({ FoodLootNew: "1.5" }, { minOptions: 20 });
     expect(readFileSync(`${file}.bak`, "utf-8")).toBe(before);
     expect(readFileSync(file, "utf-8")).not.toBe(before);
   });
 
   it("leaves no temp file behind", async () => {
     const { updateSandbox } = await load();
-    await updateSandbox({ FoodLootNew: "1.5" });
+    await updateSandbox({ FoodLootNew: "1.5" }, { minOptions: 20 });
     expect(() => statSync(`${file}.tmp`)).toThrow();
   });
 
@@ -107,7 +107,7 @@ describe("updateSandbox", () => {
     const { chmodSync } = await import("node:fs");
     chmodSync(file, 0o664);
     const { updateSandbox } = await load();
-    await updateSandbox({ FoodLootNew: "1.5" });
+    await updateSandbox({ FoodLootNew: "1.5" }, { minOptions: 20 });
     expect(statSync(file).mode & 0o777).toBe(0o664);
   });
 
@@ -117,7 +117,7 @@ describe("updateSandbox", () => {
     const outcome = await updateSandbox({
       FoodLootNew: "1.5",
       "ZombieConfig.ZombiesCountBeforeDelete": "99999",
-    });
+    }, { minOptions: 20 });
     expect(outcome.applied).toEqual([]);
     expect(outcome.rejected).toHaveLength(1);
     expect(readFileSync(file, "utf-8")).toBe(before);
@@ -131,10 +131,11 @@ describe("updateSandbox", () => {
     const { setSandboxValues } = await import("@/lib/sandbox-lua");
     hooks.decoy = {
       file,
-      text: setSandboxValues(readFileSync(FIXTURE, "utf-8"), { FoodLootNew: "2.0" }).text,
+      text: setSandboxValues(readFileSync(FIXTURE, "utf-8"), { FoodLootNew: "2.0" }, { minOptions: 20 })
+        .text,
     };
     const { updateSandbox } = await load();
-    const outcome = await updateSandbox({ FoodLootNew: "1.5" });
+    const outcome = await updateSandbox({ FoodLootNew: "1.5" }, { minOptions: 20 });
     expect(outcome.applied).toEqual([]);
     expect(outcome.unlanded).toEqual([{ name: "FoodLootNew", wanted: "1.5", found: "2.0" }]);
   });
@@ -144,6 +145,6 @@ describe("updateSandbox", () => {
     // mods add, and the server would load it as the whole truth.
     rmSync(file);
     const { updateSandbox } = await load();
-    await expect(updateSandbox({ FoodLootNew: "1.5" })).rejects.toThrow();
+    await expect(updateSandbox({ FoodLootNew: "1.5" }, { minOptions: 20 })).rejects.toThrow();
   });
 });

@@ -44,7 +44,14 @@ export function ZomboidAllSettings({ tint }: { tint: string }) {
       tint={tint}
       endpoint="/api/zomboid/config"
       subtitle="Every option in the server .ini — PVP, safehouses, loot respawn, saving, anti-cheat…"
-      restartNote="Restart Project Zomboid to apply."
+      // NOT "Restart Project Zomboid to apply." — that was true for all of these and is now
+      // true for 8 of 144. The route calls `reloadoptions` over RCON after a successful save
+      // (verified against the live server: `help` lists it, `showoptions` returns 137 lines)
+      // and reports per-key `restartNeeded`, so the panel renders that instead. Leaving the
+      // blanket note here would have told the operator to kick everyone connected, for
+      // nothing, in the same deploy that measured the real number — and the quick-settings
+      // card one panel up already says the honest thing.
+      restartNote={undefined}
       groupOrder={GROUP_ORDER}
       groupOf={groupOf}
     />

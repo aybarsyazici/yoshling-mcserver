@@ -205,14 +205,20 @@ can be asserted (`src/lib/__tests__/sdtd-settings.test.ts`, 27 tests).
   stored 16, answered `{success:true}` with no mention, and left `99` in the box. The route
   returns a `clamped` array and a note, and the page redisplays what the server stored
   rather than what was typed.
-- **`getgamepref` over telnet returns 153 live values** (measured, one session). It is
-  deliberately **not** wired into the page. The only value it has in common with this card
-  is `SandboxCode` itself, which reads back **identical** to the file on a world where the
-  code's options demonstrably are *not* in effect — so a configured-versus-live row would
-  be a green tick for exactly the thing that is false. Comparing the decoded options would
-  mean decoding the code, which this project chose not to do. `telnet.ts` is unchanged for
-  the same reason its own comment gives: a convenience wrapper with no caller is how the
-  connection-per-question pattern comes back.
+- **`getgamepref` over telnet returns 153 live values** (measured, one session) and is now
+  **wired into the page** as the configured-versus-live comparison — `readLive()` in
+  `game-manager.ts`, parsed by `parseGamePrefs` in `live-settings.ts`, one batched telnet
+  session like every other 7DTD read. This paragraph said it was "deliberately **not**
+  wired" for a day after it was; that sentence was true when written and the reason it gave
+  is still true, which is exactly how a doc goes wrong while every sentence in it once
+  passed review.
+  - The reason survives as a **per-row exception, not a reason to skip the feature**:
+    `SandboxCode` reads back **identical** to the file on a world where the code's options
+    demonstrably are *not* in effect, so a green tick on that one row means "the string
+    matches", not "the options are live". The card says so. Comparing the decoded options
+    would mean decoding the code, which this project still does not do.
+  - Eight keys are in the file but absent from `getgamepref` (measured 2026-10-01) and read
+    "not reported" rather than amber — an unanswered question is not a disagreement.
 - **No declarative settings schema**, by decision. 7DTD's XML and PZ's `.ini` both carry a
   comment per setting, which is why one generic `ConfigPanel` serves both; the only facts
   the file cannot know are what the *deployment* does to a setting (the pinned ports, the
