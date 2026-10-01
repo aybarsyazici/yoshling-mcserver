@@ -201,7 +201,9 @@ own response instead.
 
 # The test suite — added 2026-09-30
 
-`npm test` → **199 tests, ~430 ms, no Docker, no network, no running server.** That last
+`npm test` → **731 tests, ~2 s, no Docker, no network, no running server.** (This said 199 and
+the section below said 549 — one file holding two different counts, which is how a number
+stops being read.) That last
 constraint is the point: a suite that needs the box up is a suite nobody runs on a laptop,
 and every fix in this repo had until now been verified by hand against production exactly
 once and then never again.
@@ -269,7 +271,7 @@ instead — the sentence no longer depends on each route author choosing `done` 
 
 # Closing the last open items — 2026-09-30
 
-`npm test` is now **549 tests, ~1.6 s**, still with no Docker, network or server.
+`npm test` is now **731 tests, ~2 s**, still with no Docker, network or server.
 
 ## `game-manager.ts` is testable, and the seam is the point
 

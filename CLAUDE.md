@@ -39,6 +39,7 @@ then they stop being true.** Keep this one short enough to re-read.
 |------------|-----------|
 | **Adding anything that takes more than ~10s**, or touching banners/toasts | **[`docs/OPERATIONS.md`](docs/OPERATIONS.md)** — the operation registry. A route cannot state its own outcome, and that is enforced by the compiler |
 | **Any pre-existing bug, or "is this feature actually correct?"** | **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)** — 185 reviewed findings across every route. Check it before assuming a defect is new, and check its §5 before trusting any finding |
+| **Any settings page**, or "does this setting actually apply?" | **[`docs/SETTINGS.md`](docs/SETTINGS.md)** — the three-layer settings architecture, configured-vs-live, and the write discipline every settings route obeys |
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
 | A broken/misbehaving PZ **mod** | [`docs/PZ-MOD-BACKLOG.md`](docs/PZ-MOD-BACKLOG.md) — open defect list; check its harmless list before investigating |
 | **7 Days to Die** — telnet, the config wipe, builds, worlds, resets | **[`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md)** |
@@ -334,7 +335,7 @@ npm run dev      # dev server (needs .env — see below)
 npm run build    # production build (also the deploy build)
 npm run lint     # eslint (not run during build; pre-existing `any` warnings exist)
 npx tsc --noEmit # typecheck
-npm test         # vitest, 549 tests, ~1.6s, no Docker/network/server needed
+npm test         # vitest, 731 tests, ~2s, no Docker/network/server needed
 ```
 
 **Run `npm test` before you ship.** It exists because the same classes of defect kept
@@ -650,12 +651,25 @@ Still open — and the list is now short enough to state precisely.
 **Closed 2026-09-29/30, listed only so nobody re-reports them:** PZ's five-minute
 SIGKILL stop (now ~12 s, exit 0, via RCON `quit`); the app writing `docker-compose.yml`
 (now `.env`, gitignored, survives `git checkout -f` — compose hashes verified identical
-on deploy); no test suite (`npm test`, 549 tests); no co-residency detection; backups
+on deploy); no test suite (`npm test`, 731 tests); no co-residency detection; backups
 having no retention/pruning/checksums/download/schedule; Minecraft's in-game whitelist
 and ops writing `uuid: ""`; the 7DTD `TelnetPassword` (rotated and telnet control
 re-verified end to end); the 224 dead `ModpackMod` rows (re-imported). Details in
 [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and
 [`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
+
+**Closed 2026-10-01 — the settings revision.** Every settings page now shows **configured
+next to live**: the game is asked what it believes (`showoptions` over RCON for PZ,
+`getgamepref` over telnet for 7DTD, `difficulty`+`list` over RCON for Minecraft) and the
+answer is compared with the file, with "not reported" as a third verdict so an unanswered
+question never renders as a disagreement. Full architecture, coverage numbers and the write
+discipline: **[`docs/SETTINGS.md`](docs/SETTINGS.md)**. Also closed: the PZ sandbox options
+are editable from the dashboard and the writer is **verified against the live 74 KB /
+335-option file** (new inode, hard-linked `.bak`, a real value round-tripped and the file
+returned to its exact starting md5); the `server.properties` help layer; the 7DTD
+`ServerMaxPlayerCount` silent clamp; the XML entity-doubling round trip; and the console
+route calling a busy-but-running server "powered off" (see `src/lib/rcon-failure.ts` —
+`ETIMEDOUT` as a socket code and the bare message `"timeout"` mean opposite things).
 
 Genuinely open:
 
