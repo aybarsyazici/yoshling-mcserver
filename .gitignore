@@ -61,3 +61,6 @@ __pycache__/
 
 # Transient git worktrees created by background agents
 .claude/worktrees/
+
+# Scratch workflow scripts used during audits — not part of the app
+.claude/wf-*.js
