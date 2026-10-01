@@ -2,8 +2,16 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { sendCommand as rconSend } from "@/lib/rcon";
-import { getSdtdStatus, sdtdSaveWorld } from "@/lib/telnet";
+import { getSdtdStatus, sdtdSaveWorld, sdtdSessionIsGameReady, telnetSession } from "@/lib/telnet";
 import { getPzStatus, pzConsole, pzSave, readModState } from "@/lib/zomboid";
+import {
+  parseGamePrefs,
+  parseMcDifficulty,
+  parseMcMaxPlayers,
+  parsePzOptions,
+  redactSecretKeys,
+  type LiveSettings,
+} from "@/lib/live-settings";
 import {
   COMPOSE_FILE,
   ENV_FILE,
@@ -281,6 +289,22 @@ interface GameDriver {
    *   provably cannot complete.
    */
   stop(opts?: { narrate?: (detail: string) => void; answering?: boolean }): Promise<void>;
+  /**
+   * Ask the game what settings it is **currently running**, over the channel this module
+   * already holds open for status probes.
+   *
+   * This is the general form of the memory card's configured-versus-live comparison, and
+   * it exists because the one defect this codebase keeps shipping is a settings write that
+   * reports success without reaching the game. A dashboard that can only read the file it
+   * just wrote can never notice that.
+   *
+   * **Throwing is the contract for "no answer".** `liveSettings()` turns a throw into
+   * `available: false` with a reason, and `compareSetting()` turns that into `unknown` —
+   * never into a disagreement. Returning a partial map instead of throwing would be read
+   * as evidence, so a reader that cannot tell "the game said nothing" from "the game said
+   * this" must throw.
+   */
+  readLive(): Promise<Record<string, string>>;
 }
 
 function offlineStatus(game: GameId): GameStatus {
@@ -510,6 +534,31 @@ const minecraftDriver: GameDriver = {
   async stop() {
     await execAsync(`docker stop ${RUNTIME.minecraft.container}`);
   },
+  /**
+   * Two commands on the RCON socket this module already keeps authenticated, so a live
+   * read costs no new connection.
+   *
+   * **Two keys, out of everything the settings page exposes** — that is the honest size of
+   * it, because Minecraft has no "dump your properties" command and these are the two it
+   * will answer. They are also two worth having: `difficulty` and `max-players` are read at
+   * startup only,
+   * so an edit that is never applied leaves the file and the world disagreeing silently,
+   * which is this project's entire defect class.
+   *
+   * Measured on production 2026-10-01, three consecutive calls each: `difficulty` → `The
+   * difficulty is Hard` in 1.1-1.5 ms (22 bytes), `list` → `There are 0 of a max of 20
+   * players online: ` in the same (43 bytes). Sequential rather than `Promise.all`: one
+   * socket, and rcon-client correlates by request id — two in flight is a needless race
+   * for 1 ms.
+   */
+  async readLive() {
+    const difficulty = parseMcDifficulty(await rconSend("difficulty"));
+    const maxPlayers = parseMcMaxPlayers(await rconSend("list"));
+    const values: Record<string, string> = {};
+    if (difficulty) values["difficulty"] = difficulty;
+    if (maxPlayers) values["max-players"] = maxPlayers;
+    return values;
+  },
 };
 
 // ── 7 Days to Die driver ────────────────────────────────────────────────────
@@ -607,6 +656,34 @@ const sevenDtdDriver: GameDriver = {
   },
   async stop() {
     await execAsync(`docker stop ${RUNTIME["7dtd"].container}`);
+  },
+  /**
+   * `getgamepref` in ONE telnet session, the way every other 7DTD read is batched.
+   *
+   * Measured on production 2026-10-01: 153 `GamePref.` lines, 5,453 bytes, last byte 31 /
+   * 81 / 57 ms after the command on three consecutive runs. 61 of those names are also in
+   * `sdtdserver.xml`'s 69 properties, and the settings panel hides 5 of the 8 it does not
+   * report (`LOCKED` in `/api/7dtd/config/all`) — so **61 of the 64 settings the panel
+   * shows are checkable** and exactly three read "not reported": `ServerPassword`,
+   * `TelnetFailedLoginLimit`, `TelnetFailedLoginsBlocktime`. Unreported is not a mismatch,
+   * and these three are why: they are real properties the game simply does not print.
+   *
+   * The ready check matters: 7DTD binds telnet **minutes** before the world loads and
+   * answers every command with `*** ERROR: Command 'x' can only be executed when a game is
+   * started.` for ~40 s of each boot (see `sdtdSessionIsGameReady`). Parsing that output
+   * yields zero prefs, which would otherwise be published as "the server reports nothing"
+   * — a sentence about the game rather than about the probe.
+   */
+  async readLive() {
+    const out = await telnetSession(["getgamepref"], { timeoutMs: 9000, idleMs: 600 });
+    if (!sdtdSessionIsGameReady(out)) {
+      throw new Error("7 Days to Die has not started its world yet");
+    }
+    const values = parseGamePrefs(out);
+    if (Object.keys(values).length === 0) {
+      throw new Error("getgamepref returned nothing readable");
+    }
+    return values;
   },
 };
 
@@ -837,6 +914,26 @@ const zomboidDriver: GameDriver = {
     // returned success, which is the defect class this module exists to prevent.
     await execAsync(`docker stop -t ${PZ_STOP_TIMEOUT} ${container}`);
   },
+  /**
+   * One RCON `showoptions`, on the socket the status probe already holds.
+   *
+   * Measured on production 2026-10-01 against the live 89-mod world: 137 `* Key=Value`
+   * lines, 6,774 bytes, reply 101.4 / 101.5 / 101.4 ms on three consecutive reads — the
+   * same ~100 ms round trip the `save` command measures. Those 137 are **all 144 `.ini`
+   * keys except** `Password`, `RCONPassword`, `RCONPort`, `DiscordToken` and the three
+   * Discord channel names; two of those seven are hidden from the panel anyway, so **133 of
+   * the 138 settings it shows are checkable** and five read "not reported". And all 137
+   * agreed with the file character for character at the time of measurement — so on this box
+   * the comparison's resting state is quiet, which is what makes an amber chip mean
+   * something.
+   */
+  async readLive() {
+    const values = parsePzOptions(await pzConsole("showoptions", 9000));
+    if (Object.keys(values).length === 0) {
+      throw new Error("showoptions returned nothing readable");
+    }
+    return values;
+  },
 };
 
 const DRIVERS: Record<GameId, GameDriver> = {
@@ -871,6 +968,90 @@ export async function getAllStatus(): Promise<Record<GameId, GameStatus>> {
  * interval, so no consumer sees data older than it already tolerates.
  */
 export const cachedAllStatus = cachedProbe(3500, getAllStatus);
+
+/**
+ * How long a live-settings read is reused.
+ *
+ * These values only change when the game is restarted or told to change one at runtime
+ * (PZ's `changeoption`), so a short TTL buys nothing — and the read is the expensive half
+ * of the comparison (~100 ms for PZ, ~60 ms for 7DTD, ~3 ms for Minecraft, all measured).
+ * 10 s is long enough that opening a settings page and saving twice costs one probe, and
+ * short enough that the stalest a value can be after a restart is 10 s. It is NOT on the
+ * status poll's path: `/api/games/status` only reads this when asked with `?live=`, so the
+ * endpoint every tab polls every 4 s is exactly as expensive as it was.
+ */
+const LIVE_TTL = 10_000;
+
+/**
+ * What one game is actually running, or why that is unknown.
+ *
+ * Behind `cachedProbe` like every other live read in this file, so N tabs opening the
+ * settings page coalesce onto one telnet session / one RCON call instead of each opening
+ * their own — the same reason `cachedSdtdStatus` exists.
+ *
+ * **Reachability is decided before the socket is touched**, from the status snapshot this
+ * module already caches (3.5 s), and the three outcomes are worded differently on purpose.
+ * Two of the three worlds are stopped at any moment, so "stopped" is the *normal* answer
+ * here and it must read as an absence of evidence rather than as a finding — an amber
+ * "configured does not match live" on a stopped server would make this feature worse than
+ * nothing.
+ */
+async function readLiveSettings(game: GameId): Promise<LiveSettings> {
+  const name = GAMES[game].name;
+  const unavailable = (reason: string): LiveSettings => ({
+    game,
+    available: false,
+    reason,
+    values: {},
+    readAt: Date.now(),
+  });
+
+  let snap: GameStatus;
+  try {
+    snap = (await cachedAllStatus())[game];
+  } catch {
+    return unavailable(`Couldn't tell whether ${name} is running, so nothing was compared.`);
+  }
+
+  if (!snap.containerRunning) {
+    return unavailable(`${name} is stopped, so there is nothing to compare these against.`);
+  }
+  if (snap.status !== "online") {
+    // The `a7d76b8` split: the container is up but the game is not answering — either
+    // still booting or wedged. Either way it cannot say what it is running.
+    return unavailable(
+      `${name} is running but not answering yet, so there is nothing to compare these against.`
+    );
+  }
+
+  try {
+    const values = redactSecretKeys(await DRIVERS[game].readLive());
+    if (Object.keys(values).length === 0) {
+      return unavailable(`${name} answered but reported no settings, so nothing was compared.`);
+    }
+    return { game, available: true, values, readAt: Date.now() };
+  } catch {
+    return unavailable(`Couldn't read what ${name} is running, so nothing was compared.`);
+  }
+}
+
+const cachedLive: Record<GameId, () => Promise<LiveSettings>> = {
+  minecraft: cachedProbe(LIVE_TTL, () => readLiveSettings("minecraft")),
+  "7dtd": cachedProbe(LIVE_TTL, () => readLiveSettings("7dtd")),
+  zomboid: cachedProbe(LIVE_TTL, () => readLiveSettings("zomboid")),
+};
+
+/**
+ * The settings `game` is currently running — cached, single-flighted, and never throwing.
+ *
+ * A caller gets a `LiveSettings` either way: `available: false` with a reason is the answer
+ * for a stopped or silent server, not an error to handle. That is deliberate, because the
+ * one thing a caller must not be able to do by accident is treat "I don't know" as "these
+ * disagree".
+ */
+export async function liveSettings(game: GameId): Promise<LiveSettings> {
+  return cachedLive[game]();
+}
 
 export interface HandoffStep {
   step: string;

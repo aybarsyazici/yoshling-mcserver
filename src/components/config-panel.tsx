@@ -16,6 +16,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SlidersHorizontal, ChevronDown, Search } from "lucide-react";
+import type { GameId } from "@/lib/games";
+import { fetchLiveSettings } from "@/lib/use-games";
+import {
+  NEXT_WORLD_LABEL,
+  compareSetting,
+  compareSettings,
+  gameFromConfigEndpoint,
+  liveSummaryLine,
+  type LiveSettings,
+  type LiveVerdict,
+} from "@/lib/live-settings";
 
 /**
  * The "All settings" expander, shared by 7 Days to Die (sdtdserver.xml) and
@@ -25,6 +36,12 @@ import { SlidersHorizontal, ChevronDown, Search } from "lucide-react";
  *
  *   GET  <endpoint> → { properties: [{ name, value, help }], warning? }
  *   PUT  <endpoint> ← { updates: { name: value } } → { applied: string[] }
+ *
+ * It also shows **what the server is actually running** next to what the file says, which
+ * is the generalisation of the memory card's configured-versus-live warning — see
+ * `lib/live-settings.ts` for why that matters more than the settings themselves. Doing it
+ * here covers 7 Days to Die and Project Zomboid at once, because both already share this
+ * component.
  */
 export interface ConfigProperty {
   name: string;
@@ -53,6 +70,7 @@ export function ConfigPanel({
   groupOf,
   selects = {},
   loadDynamicSelects,
+  game,
 }: {
   tint: string;
   endpoint: string;
@@ -64,6 +82,12 @@ export function ConfigPanel({
   selects?: Record<string, SelectOption[]>;
   /** Options that can only be known at runtime (e.g. the installed world list). */
   loadDynamicSelects?: () => Promise<Record<string, SelectOption[]>>;
+  /**
+   * Which world these settings belong to, for the configured-versus-live comparison.
+   * Inferred from `endpoint` when not given, so the existing wrappers need no change;
+   * if neither resolves, the comparison is simply off rather than guessed.
+   */
+  game?: GameId;
 }) {
   const [open, setOpen] = useState(false);
   const [props, setProps] = useState<ConfigProperty[] | null>(null);
@@ -72,15 +96,26 @@ export function ConfigPanel({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
+  /**
+   * What the server says it is running. `null` means "not read", which renders as nothing
+   * at all — never as a mismatch. The whole feature is only worth having if that
+   * distinction holds, because most of the time two of the three worlds are stopped.
+   */
+  const [live, setLive] = useState<LiveSettings | null>(null);
+  const gameId = game ?? gameFromConfigEndpoint(endpoint);
 
   async function load() {
     setLoading(true);
     try {
-      const [res, extra] = await Promise.all([
+      const [res, extra, liveNow] = await Promise.all([
         fetch(endpoint),
         loadDynamicSelects?.().catch(() => ({})) ?? Promise.resolve({}),
+        // In parallel with the config read, so the comparison costs the user no extra
+        // wait. A failure answers `null` and the panel just doesn't compare.
+        gameId ? fetchLiveSettings(gameId) : Promise.resolve(null),
       ]);
       setDynamic(extra ?? {});
+      setLive(liveNow);
       const data = await res.json();
       if (data.properties) {
         setProps(data.properties);
@@ -180,12 +215,28 @@ export function ConfigPanel({
       } else {
         toast.success(`Saved ${n} setting${n === 1 ? "" : "s"}. ${restartNote}`);
       }
+
+      // Re-read the live side after a write, because that is the moment the question
+      // "did this reach the game?" has an answer worth showing. A saved-but-not-running
+      // value is the normal state until a restart, and saying so is the point: the toast
+      // can only report what the route wrote, which is exactly the evidence that has been
+      // mistaken for success here for months.
+      if (gameId) setLive(await fetchLiveSettings(gameId));
     } catch {
       toast.error("Couldn't save");
     } finally {
       setSaving(false);
     }
   }
+
+  // Verdicts come from the SAVED values (`p.value`), not the draft: the question is
+  // whether what is on disk reached the game, and an unsaved edit has not been claimed
+  // to reach anything yet.
+  // Nothing to compare before the settings themselves load — and a summary over an empty
+  // list would read "0 settings match what the server is running", which is a statement
+  // about the config read having failed, worded as a statement about the server.
+  const comparison = gameId && props && props.length > 0 ? compareSettings(gameId, props, live) : null;
+  const summary = comparison ? liveSummaryLine(comparison, live) : null;
 
   const q = query.trim().toLowerCase();
   const filtered = (props ?? []).filter(
@@ -266,6 +317,37 @@ export function ConfigPanel({
                     </div>
                   </div>
 
+                  {/* Configured versus live, in one sentence.
+                      Amber ONLY when something genuinely disagrees — a stopped or silent
+                      server reads as muted text saying so, because "I could not ask" and
+                      "the answer was different" are different facts and this project's
+                      defect class is stating the second when it means the first.
+                      No `role="status"`: persistent state, created with its content, which
+                      is the case screen readers do not announce anyway (same note as on the
+                      co-residency line in `mission-control.tsx`). */}
+                  {summary && (
+                    <p
+                      className={cn(
+                        "mb-4 rounded-xl px-4 py-2.5 text-xs",
+                        summary.tone === "warn"
+                          ? "op-warn ring-1"
+                          : "bg-muted/40 text-muted-foreground"
+                      )}
+                      style={
+                        summary.tone === "warn"
+                          ? {
+                              background: "color-mix(in oklab, var(--op-warn) 10%, transparent)",
+                              ["--tw-ring-color" as string]:
+                                "color-mix(in oklab, var(--op-warn) 35%, transparent)",
+                            }
+                          : undefined
+                      }
+                    >
+                      {summary.text}
+                      {summary.tone === "warn" ? ` ${restartNote}` : ""}
+                    </p>
+                  )}
+
                   <div className="space-y-6">
                     {groups.map(({ group, items }) => (
                       <div key={group}>
@@ -279,6 +361,7 @@ export function ConfigPanel({
                               changed={draft[p.name] !== p.value}
                               tint={tint}
                               select={optionsFor(p.name, draft[p.name] ?? p.value)}
+                              verdict={gameId ? compareSetting(gameId, p.name, p.value, live) : null}
                               onChange={(v) => setDraft((d) => ({ ...d, [p.name]: v }))}
                             />
                           ))}
@@ -309,6 +392,7 @@ function PropField({
   changed,
   tint,
   select,
+  verdict,
   onChange,
 }: {
   prop: ConfigProperty;
@@ -316,13 +400,15 @@ function PropField({
   changed: boolean;
   tint: string;
   select?: SelectOption[];
+  /** Configured versus live for this one key. `null` = no comparison for this game. */
+  verdict?: LiveVerdict | null;
   onChange: (v: string) => void;
 }) {
   const type = inferType(prop.value);
 
   return (
     <div className="space-y-1.5">
-      <Label className="flex items-center gap-1.5 text-sm">
+      <Label className="flex flex-wrap items-center gap-1.5 text-sm">
         <span className="font-mono text-[13px]">{humanize(prop.name)}</span>
         {changed && (
           <span
@@ -330,6 +416,38 @@ function PropField({
             style={{ background: tint }}
             title="changed"
           />
+        )}
+        {/* Three of the four verdicts are visible, and which three is the honest part.
+            `agrees` says nothing — on a 137-key page a tick per row is noise, and the
+            summary above already states the count. `unknown` is only shown for the key
+            the server does not report: the other `unknown` (nothing could be asked) is
+            stated once in the summary rather than 137 times. */}
+        {verdict?.kind === "disagrees" && (
+          <span
+            className="op-warn rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+            style={{ background: "color-mix(in oklab, var(--op-warn) 12%, transparent)" }}
+            title={`Saved as ${prop.value || "(empty)"}, but the server is running ${
+              verdict.live || "(empty)"
+            }.`}
+          >
+            running: {verdict.live || "(empty)"}
+          </span>
+        )}
+        {verdict?.kind === "next-world" && (
+          <span
+            className="rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            title="The game reads this when it creates a world, so the running server can't be compared against it."
+          >
+            {NEXT_WORLD_LABEL}
+          </span>
+        )}
+        {verdict?.kind === "unknown" && verdict.why === "not-reported" && (
+          <span
+            className="rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            title={verdict.reason}
+          >
+            not reported
+          </span>
         )}
       </Label>
 
