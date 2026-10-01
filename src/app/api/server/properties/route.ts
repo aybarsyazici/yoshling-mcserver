@@ -4,6 +4,13 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
+import {
+  escapeMcValue,
+  gameRuleReplacing,
+  isLockedMcProperty,
+  sanitizeMcValue,
+  unescapeMcValue,
+} from "@/lib/mc-properties";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
 
@@ -11,75 +18,11 @@ const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 const PROPS_FILE = path.join(MC_DIR, "server.properties");
 
 /**
- * Keys this editor must neither show nor write. 7DTD has the same set as `LOCKED`
- * and Project Zomboid as `INFRA_KEYS`; this is Minecraft's, and it exists for the
- * same two reasons.
- *
- * **Read:** the GET below is deliberately open to anyone with Minecraft access
- * (a MEMBER may browse settings), so every key it returns is a key every viewer
- * can read — and the page renders each one in a plain `<Input>`. Until this set
- * existed, `/minecraft/settings` printed the live RCON password
- * (`rcon.password`, verified present in the file on the box) into the browser of
- * anyone who could see the world.
- *
- * **Write:** `enable-rcon` / `rcon.password` / `rcon.port` are the dashboard's own
- * control channel, and it authenticates with `RCON_PASSWORD` from the container
- * env, so a value typed here can only ever *disagree* with the one in use — the
- * same trap already paid for with 7DTD's `TelnetPassword`. `server-port` is fixed
- * by the compose port mapping; moving it makes the server listen where nothing is
- * forwarded, which reads as "connect hangs, nothing in the logs".
- *
- * `level-name` is locked for a different reason: the backup route hardcodes the
- * `world/` directory (`tar -C /minecraft world`, `rm -rf /minecraft/world`).
- * Rename the level and backups quietly archive a directory the server no longer
- * writes, while a restore deletes nothing and unpacks over nothing — a backup
- * page that still looks like it works while protecting an empty folder.
+ * The lock set, the escaping and the "this key moved to a game rule" table all live in
+ * `@/lib/mc-properties` rather than here, for two reasons: the settings page needs the
+ * same knowledge to label the fields (and a second copy of it would be the thing that
+ * drifts), and none of it was testable while it was private to a route handler.
  */
-const LOCKED = new Set([
-  "enable-rcon",
-  "rcon.password",
-  "rcon.port",
-  "server-port",
-  "level-name",
-]);
-
-/**
- * Locked **by shape as well as by name**, so a version bump that adds a new
- * credential key is hidden by default rather than after somebody notices.
- *
- * The named set above predates Minecraft 26's Management Server API, and the gap
- * was real, not theoretical. Read live from the box: `server.properties` contains
- * `management-server-secret=vQIr…` (a 40-character bearer token) and
- * `management-server-tls-keystore-password`, and this editor printed both into the
- * browser of anyone with Minecraft access — the GET is deliberately open to a
- * MEMBER. `management-server-enabled` was writable too, so a read-only viewer could
- * be shown a switch that turns on a remote-admin HTTP API.
- *
- * The whole `management-server-` block is locked for the same reason `enable-rcon`
- * is: it is a second control channel, and none of it is the dashboard's to hand out.
- *
- * Checked against the live file (71 keys, of which the GET returned 66): this rule
- * newly hides exactly the eight `management-server-*` keys and nothing else, leaving
- * 58 editable and no key matching /password|secret|token/ visible.
- * `enforce-secure-profile` is the only near-miss and does not match ("secure", not
- * "secret").
- */
-function isLocked(key: string): boolean {
-  return (
-    LOCKED.has(key) ||
-    key.startsWith("management-server-") ||
-    /password|secret|token/.test(key)
-  );
-}
-
-/**
- * A newline in a value would end the line early and turn the rest into further
- * `key=value` pairs — which is how a locked key gets set through an unlocked one
- * (`motd=hi\nlevel-name=other`). Same guard as PZ's `sanitizeValue`.
- */
-function sanitizeValue(v: unknown): string {
-  return String(v).replace(/[\r\n]+/g, " ").trim();
-}
 
 export async function GET() {
   const session = await auth();
@@ -97,8 +40,12 @@ export async function GET() {
       if (line.startsWith("#") || !line.includes("=")) continue;
       const [key, ...valueParts] = line.split("=");
       const name = key.trim();
-      if (isLocked(name)) continue;
-      properties[name] = valueParts.join("=").trim();
+      if (isLockedMcProperty(name)) continue;
+      // Unescaped on the way out, re-escaped on the way in (see `unescapeMcValue`).
+      // The file holds `level-type=minecraft\:normal`, measured on the box, which never
+      // matched the dropdown's `minecraft:normal` — so the select rendered empty on every
+      // load and picking any entry silently changed the world type.
+      properties[name] = unescapeMcValue(valueParts.join("=").trim());
     }
 
     return NextResponse.json(properties);
@@ -134,6 +81,14 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Expected an object of settings" }, { status: 400 });
   }
 
+  // The version the dashboard believes is configured, which decides whether the four
+  // game-rule keys below are inert. Read per request (one indexed lookup) rather than
+  // hardcoded: 1.21.4 is still on the volume and still selectable, and on 1.21.4 those
+  // four properties do work.
+  const configured = await db.serverConfig
+    .findUnique({ where: { id: "main" }, select: { mcVersion: true } })
+    .catch(() => null);
+
   // A Map, not an object: `"constructor" in {}` is true, so an object lookup would
   // treat inherited names as settings to write.
   const updates = new Map<string, string>();
@@ -142,15 +97,44 @@ export async function PUT(request: NextRequest) {
   // neither `applied` nor `ignored` -- which is exactly what a browser tab opened
   // before this deploy will submit, since it still has the field on screen.
   const locked: string[] = [];
+  // Keys this Minecraft version does not read any more. Writing them is the project's
+  // defect class in miniature — flip PVP off, get a green toast, PVP stays on forever —
+  // so they are refused and the game rule that replaced each one is named back to the
+  // caller. The page renders them read-only, so reaching here means a stale tab or a
+  // direct request; both deserve the real answer rather than a silent drop.
+  const noEffect: { key: string; gameRule: string }[] = [];
   for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
-    if (isLocked(key)) {
+    if (isLockedMcProperty(key)) {
       locked.push(key);
       continue;
     }
-    updates.set(key, sanitizeValue(value));
+    const gameRule = gameRuleReplacing(key, configured?.mcVersion);
+    if (gameRule) {
+      noEffect.push({ key, gameRule });
+      continue;
+    }
+    updates.set(key, escapeMcValue(sanitizeMcValue(value)));
   }
+
+  const gameRuleWarning =
+    noEffect.length > 0
+      ? `Minecraft ${configured?.mcVersion} doesn't read ` +
+        `${noEffect.map((n) => n.key).join(", ")} from server.properties any more — ` +
+        `${noEffect.length === 1 ? "it is" : "they are"} now the game ` +
+        `${noEffect.length === 1 ? "rule" : "rules"} ` +
+        `${noEffect.map((n) => n.gameRule).join(", ")}. Set ` +
+        `${noEffect.length === 1 ? "it" : "them"} from the console, e.g. ` +
+        `"gamerule ${noEffect[0].gameRule} false". Nothing was written for ` +
+        `${noEffect.length === 1 ? "that key" : "those keys"}.`
+      : null;
+
   if (updates.size === 0) {
-    return NextResponse.json({ error: "No editable settings provided" }, { status: 400 });
+    // Answering "No editable settings provided" for a PUT that contained only the four
+    // game-rule keys would be true and useless. Say which keys, and where they went.
+    return NextResponse.json(
+      { error: gameRuleWarning ?? "No editable settings provided", noEffect, locked },
+      { status: 400 }
+    );
   }
 
   let content: string;
@@ -211,11 +195,18 @@ export async function PUT(request: NextRequest) {
     applied,
     ignored,
     locked,
-    ...(locked.length > 0
+    noEffect,
+    ...(locked.length > 0 || gameRuleWarning
       ? {
-          warning:
-            `${locked.join(", ")} ${locked.length === 1 ? "is" : "are"} managed by the dashboard ` +
-            `and cannot be edited here. Reload the page to see the current settings.`,
+          warning: [
+            locked.length > 0
+              ? `${locked.join(", ")} ${locked.length === 1 ? "is" : "are"} managed by the ` +
+                `dashboard and cannot be edited here. Reload the page to see the current settings.`
+              : null,
+            gameRuleWarning,
+          ]
+            .filter(Boolean)
+            .join(" "),
         }
       : {}),
   });
