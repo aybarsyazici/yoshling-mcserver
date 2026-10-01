@@ -35,7 +35,14 @@ What each game can answer, measured 2026-10-01 against production:
 |------|-------|---------|--------|
 | Minecraft | RCON `difficulty` + `list` | 2 values | `difficulty`, `max-players`. That is all RCON will tell you about `server.properties`. |
 | 7 Days to Die | telnet `getgamepref`, one session | **153** `GamePref.X = Y` lines | Everything the XML has except eight keys. See [`7-DAYS-TO-DIE.md`](7-DAYS-TO-DIE.md) for the `SandboxCode` caveat — that one row's green tick means "the string matches", not "the options are live". |
-| Project Zomboid | RCON `showoptions`, one call, 6,774 bytes, ~101 ms | **137** `* Key=Value` lines | All 144 `.ini` keys except `Password`, `RCONPassword`, `RCONPort`, `DiscordToken` and three Discord channel names. |
+| Project Zomboid | RCON `showoptions`, one call, 6,789 bytes, ~101 ms, **multi-packet** | **137** `* Key=Value` lines | All 144 `.ini` keys except `Password`, `RCONPassword`, `RCONPort`, `DiscordToken` and three Discord channel names. |
+
+**Any reply over 4096 bytes needs `rconCommandLong`, not the cached socket.** Source RCON
+splits a longer reply across packets with the same request id, and `rcon-client` resolves on
+the first one and discards the rest. PZ's `showoptions` arrived as **79** settings for as long
+as this feature existed — the first 4,102 of 6,789 bytes — with no error, `available: true`
+and the chips rendering. See `src/lib/rcon-frame.ts`. This applies to Minecraft too:
+`banlist` and a busy `list` pass 4096 just as easily.
 
 Three verdicts, and the third one matters: a setting the game **does not report** reads
 "not reported", never amber. An unanswered question is not a disagreement, and rendering it
@@ -159,3 +166,10 @@ wrong rather than quietly deleted.
   doc goes wrong while every sentence in it once passed review.
 - **"133 of the 138 settings it shows are checkable"** — correct when measured, falsified by
   a sibling branch in the same revision. Replaced with the derivation.
+- **"137 settings"** — right about the server and wrong about the app, for a day. It was
+  measured with `scripts/pz-rcon.sh`, which drains multi-packet replies; the dashboard's own
+  probe saw **79**. Both numbers were honestly obtained and one of them was the number that
+  mattered. **Measure through the path the user actually uses** — a figure taken with a
+  different client is a figure about that client. Fixed 2026-10-01; the app now reports 137,
+  verified including `PerkLogs` (the key at the old cutoff) and `ServerWelcomeMessage` (the
+  last line, 448 characters).

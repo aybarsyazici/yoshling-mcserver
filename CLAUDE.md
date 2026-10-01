@@ -162,6 +162,14 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
 - `src/lib/rcon.ts` — the shared Source-RCON transport, keyed per target with one
   cached authenticated socket each. Minecraft (25575) and Project Zomboid (27015)
   both speak it; `sendCommand`/`getPlayerList` are the Minecraft wrappers.
+  **A reply over 4096 bytes does not fit one RCON packet and this transport loses the
+  rest** — `rcon-client` resolves on the first packet and drops the others. That silently
+  cut PZ's `showoptions` from 137 settings to 79 (the first 4,102 of 6,789 bytes) with no
+  error and `available: true`. Anything that *enumerates* — `showoptions`, `banlist`, a
+  `list` on a busy server — must use **`rconCommandLong`** (`src/lib/rcon-long.ts`), which
+  drains until the server goes quiet the way `scripts/rcon.py` always has. Short control
+  commands stay on the cached socket; that is the right transport for a poll running every
+  few seconds. Framing and the reasoning: `src/lib/rcon-frame.ts`.
 - `src/lib/telnet.ts` — 7DTD control over telnet. `telnetSession()` runs multiple
   commands in ONE connection and always sends `exit` to close cleanly (dropping
   the socket makes 7DTD spam `IOException ... socket has been shut down` in its
