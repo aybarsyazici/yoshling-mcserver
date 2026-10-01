@@ -7,6 +7,13 @@ import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import path from "path";
 import { escapeXml, unescapeXml } from "@/lib/sdtd-xml";
+import {
+  annotateSdtdHelp,
+  normalizeSandboxCode,
+  pinnedReason,
+  readXmlProperty,
+  sandboxCodeIssue,
+} from "@/lib/sdtd-settings";
 
 // The full sdtdserver.xml, exposed generically: read every <property>, keep its
 // trailing comment as help text, and write back any subset the UI sends. This
@@ -55,6 +62,12 @@ function parseProperties(xml: string): SdtdProperty[] {
 
 // Sensitive keys the UI must not expose/allow-edit through the generic editor
 // (telnet password is app-managed; changing it here would break control).
+//
+// `LOCKED` *hides*. `PINNED_BY_DEPLOYMENT` (in `lib/sdtd-settings.ts`) refuses the write
+// but leaves the value on screen, which is the right treatment for `ServerPort` and
+// `WebDashboardPort`: the number is a fact worth reading, it is simply fixed by the
+// container's published port map. `TelnetPort` stays in `LOCKED` because it travels with
+// the password nobody may see anyway.
 const LOCKED = new Set(["TelnetPassword", "TelnetPort", "TelnetEnabled", "AdminFileName", "UserDataFolder"]);
 
 /**
@@ -96,7 +109,12 @@ export async function GET() {
   }
   try {
     const xml = await readFile(XML_PATH, "utf-8");
-    const properties = parseProperties(xml).filter((p) => !LOCKED.has(p.name));
+    // `annotateSdtdHelp` folds in what the *deployment* does to a setting — the two ports
+    // the compose port map pins, and the four keys the host firewall makes inert. The
+    // game's XML documents itself with a comment per property, which is why one generic
+    // panel serves both 7DTD and PZ; these notes are the only thing the file cannot know,
+    // so they are attached here rather than in a per-key UI table that would rot.
+    const properties = annotateSdtdHelp(parseProperties(xml).filter((p) => !LOCKED.has(p.name)));
     return NextResponse.json({ properties });
   } catch {
     return NextResponse.json(
@@ -157,6 +175,26 @@ export async function PUT(request: NextRequest) {
   const rejected: { name: string; why: string }[] = [];
   for (const name of names) {
     const value = String(updates[name]);
+    // Pinned by the deployment: saving a new `ServerPort` here wrote cleanly, toasted
+    // success, and moved the listener off the one port compose publishes — i.e. nobody
+    // could connect, with no indication why. Refused before any write, so the editor
+    // cannot report a save it did not make.
+    const pinned = pinnedReason(name);
+    if (pinned && value !== readXmlProperty(xml, name)) {
+      rejected.push({ name, why: pinned });
+      continue;
+    }
+    // The sandbox code's character class, checked here as well as in the quick settings,
+    // because this editor is the file's other writer and a code is a code wherever it is
+    // pasted. Shape (the length rule) is only a warning and this endpoint has no warning
+    // channel for a single key, so the length is left to the quick settings card.
+    if (name === "SandboxCode") {
+      const issue = sandboxCodeIssue(normalizeSandboxCode(value));
+      if (issue.error) {
+        rejected.push({ name, why: issue.error });
+        continue;
+      }
+    }
     if (PATH_SEGMENT_KEYS.has(name)) {
       const bad =
         value.trim() === ""
@@ -181,7 +219,13 @@ export async function PUT(request: NextRequest) {
   const applied: string[] = [];
   const ignored: string[] = [];
   for (const name of names) {
-    const value = String(updates[name]);
+    // Whitespace and case are the only things normalisation can change in a sandbox code
+    // (its alphabet is A-Z, and anything else was refused above), so a wrapped paste is
+    // cleaned rather than written as a value the game will not read. Known cosmetic edge:
+    // this generic panel redisplays the draft for an applied key, so a lowercase paste
+    // keeps showing lowercase until the panel is reloaded, even though the file has the
+    // uppercase form. The quick settings card uppercases as you type and has no such gap.
+    const value = name === "SandboxCode" ? normalizeSandboxCode(updates[name]) : String(updates[name]);
     // Replace only the value of an existing property; leave the comment intact.
     // `name` is escaped because it comes from the request body: a value like
     // `a.*b` would otherwise be a live pattern and could match a *different*
@@ -205,15 +249,33 @@ export async function PUT(request: NextRequest) {
   }
 
   // Keep the curated DB row in sync for the fields it mirrors.
+  //
+  // **`SandboxCode` was missing from this map and that was the bug.** The quick settings
+  // card used to *read* its sandbox code out of this row, so an edit made here left the row
+  // stale and the next quick save wrote the stale code back over the file: set a
+  // difficulty, rename the server later, difficulty silently reverts, green toast both
+  // times. The quick GET now reads the file instead — that is the fix — and this mirror is
+  // here so the row, which is the only config that survives a fresh SteamCMD install, does
+  // not quietly become a wrong recovery copy. Nothing reads the mirror; it only has to be
+  // true.
   const map: Record<string, string> = {
     ServerName: "serverName",
     ServerPassword: "password",
     ServerMaxPlayerCount: "maxPlayers",
+    SandboxCode: "sandboxCode",
   };
   const dbData: Record<string, string | number> = {};
   for (const [xmlKey, col] of Object.entries(map)) {
-    if (updates[xmlKey] !== undefined) {
-      dbData[col] = col === "maxPlayers" ? parseInt(updates[xmlKey], 10) || 8 : updates[xmlKey];
+    // `applied`, not merely "present in the request": a key the file does not have is
+    // reported as `ignored` and must not be mirrored, or the recovery row would record a
+    // value that was never written anywhere.
+    if (applied.includes(xmlKey)) {
+      dbData[col] =
+        col === "maxPlayers"
+          ? parseInt(updates[xmlKey], 10) || 8
+          : col === "sandboxCode"
+          ? normalizeSandboxCode(updates[xmlKey])
+          : updates[xmlKey];
     }
   }
   if (Object.keys(dbData).length > 0) {
