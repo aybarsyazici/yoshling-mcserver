@@ -20,8 +20,10 @@ export async function DELETE(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Refuse while an operation holds this world's files — the other half of the lane the
-  // single-mod install now takes.
+  // Refuse while an operation holds this world's files — the other half of the check the
+  // single-mod install now makes. *Checks*, not takes: `fileLaneBusy` reads the live registry
+  // and registers nothing, so this defers to a running apply and does not reserve anything
+  // against one starting.
   //
   // `mods.apply` runs `removeMod` over every installed jar while holding `files:minecraft`.
   // A Remove pressed during that window hits the same jar from two directions: `removeMod`

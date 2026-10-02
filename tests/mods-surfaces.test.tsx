@@ -643,3 +643,34 @@ describe("the mods page heading", () => {
     expect(text()).toContain("Search Modrinth, group mods into packs, and see what is installed.");
   });
 });
+
+/**
+ * **Before the first `/api/games/status` reply, nothing writable may be on screen.**
+ *
+ * `useGames` has to guess until the route answers, and the two mods flags guess `false`
+ * deliberately — they guard writes that delete a pack or replace every jar on the server, so a
+ * control that is live for a moment and then dead is the defect rather than the cure.
+ * `settings` guesses `true` for the opposite reason, spelled out at its declaration: it is a
+ * navigation link, and one that vanishes on load and reappears reads as broken.
+ *
+ * This is here because flipping the initial values to `true` left all 1190 tests green: every
+ * surface test above sets `can` directly, so none of them ever observes the pre-fetch state. A
+ * MEMBER would have been shown all six write controls for the length of one round trip — the
+ * exact defect this file exists to prevent, in the window nothing was looking at.
+ */
+describe("the state before the capability check returns", () => {
+  it("guesses no for the mods writes and yes for the settings link", () => {
+    // `readFileSync` + `path`, which this file already imports for the drift guard above.
+    const source = readFileSync(
+      path.join(__dirname, "..", "src", "lib", "use-games.ts"),
+      "utf-8"
+    );
+    const init = source.slice(source.indexOf("useState({"), source.indexOf("});", source.indexOf("useState({")));
+    // Pinned on the exact initialiser, not on the file containing the strings somewhere:
+    // `modsInstall: false` appears in the type and in the merge too.
+    expect(init).toMatch(/modsInstall:\s*false/);
+    expect(init).toMatch(/modsRemove:\s*false/);
+    expect(init).toMatch(/settings:\s*true/);
+    expect(init).toMatch(/start:\s*false/);
+  });
+});

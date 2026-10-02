@@ -709,8 +709,10 @@ connect **directly to the box IP `89.58.50.155`**:
     pack and apply it — which tars the world and deletes every installed mod first. Three gaps
     closed with it: the search facet now defaults to the server's own version and loader
     (it listed mods for every Minecraft version ever against a 26.1.2 server, and widening is
-    now the explicit literal `any`); `/api/mods/install` and `/api/mods/[id]` now hold
-    `files:minecraft` so neither can interleave with `mods.apply`'s delete loop; and the
+    now the explicit literal `any`); `/api/mods/install` and `/api/mods/[id]` now
+    **defer to** `files:minecraft`, so an install arriving during an apply is refused with the
+    lane named (`fileLaneBusy` only *reads* the registry — it is one-directional by design, so
+    an install already in flight when an apply starts is still not waited for); and the
     client-only 409 — whose `serverSide`, `decidedBy` and `allowClientOnly` opt-in nothing had
     ever read — is a named dialog that states the consequence and offers the override.
     **Not yet pressed against the live container.** Depth:

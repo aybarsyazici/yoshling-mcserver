@@ -212,7 +212,7 @@ mixed every Minecraft version Modrinth publishes into a 26.1.2 Fabric server's r
   it for compose's `TYPE`, so both spellings genuinely exist in this app. `categories:FABRIC`
   matches nothing and the symptom is an empty browser with no stated cause.
 
-### Both single-mod writers now hold `files:minecraft`
+### Both single-mod writers now *defer to* `files:minecraft`
 
 `POST /api/mods/install` and `DELETE /api/mods/[id]` took **no resource at all**, while 23
 handlers across 18 other route files already take this lane through `fileLaneBusy`. They could
@@ -226,8 +226,26 @@ therefore interleave with `mods.apply`, which holds the lane for the whole of a 
   `"<name>: could not be removed"` into `errors` and names a failure for a jar that *was*
   deleted. A reported fault that did not happen costs the same to chase as a real one.
 
-Both are sub-second writes, so they take the lane through `fileLaneBusy` and enter no
-operation record of their own — the discipline `docs/OPERATIONS.md` sets out for config writers.
+Both are sub-second writes, so they enter no operation record of their own — the discipline
+`docs/OPERATIONS.md` sets out for config writers.
+
+**They do not *hold* the lane, and this section said they did.** `fileLaneBusy` calls
+`assertResourceFree`, which only *reads* the live registry and throws if a registered operation
+is holding the resource; it registers nothing. So the guard is **one-directional by design**,
+and that is the documented intent — a sub-second write defers to a long operation, which is what
+the config writers use it for.
+
+What that means for the race above, precisely:
+
+| order | covered? |
+|---|---|
+| the apply is running, then an install/remove arrives | **yes** — 409 naming the lane, nothing written |
+| an install is already in flight when the apply starts | **no** — the apply does not wait for it |
+
+The second case stays open and is cheap to live with: increment 4's reconcile *reports* a jar on
+disk with no row as `untracked` and names it, and increment 6's `refuseIfPreempted` calls shorten
+the window. Saying "neither can interleave" was the overstatement — a reviewer disproved it with
+a direct probe, with an install mid-download and an apply started on top.
 
 ### The client-only refusal is a dialog, with the override
 
