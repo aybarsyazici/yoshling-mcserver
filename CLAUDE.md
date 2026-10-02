@@ -201,7 +201,10 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   per world, only the running world's branch lit), one card per world the viewer
   can see, hand-off confirm, RAM budget. A viewer with no worlds gets a "No
   worlds yet" screen instead.
-- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings
+- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings.
+  **`/minecraft/mods` is one surface, not tabs** — the pack as a header, the installed list
+  grouped by where each jar came from, saved sets below, and the two Modrinth searches as
+  dialogs (`Add a mod`, `Change pack`). See [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 - `/7dtd/*` — 7DTD overview, server (controls/monitor/console/files), backups, settings
 - `/zomboid/*` — PZ overview, mods, server (controls/monitor/console/files), backups, settings
 - Backups are their own sidebar page per game (`/{game}/backups`), not a server tab.
@@ -213,7 +216,12 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   hides entries for worlds the viewer can't see.
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
-  `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
+  `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`. `/api/modpacks/preview` is the one
+  that answers "what does this pack need, and can this server run it" **without writing a
+  `Modpack` row** — a read, so it answers a MEMBER, and it shares its version choice with
+  `/api/modpacks/import` (`src/lib/modpack-resolve.ts`) because a preview that resolved a
+  different build from the import behind it would make the comparison somebody read not the
+  comparison that was applied.
 - **Minecraft game rules are `/api/server/gamerules`** (the Game rules panel on MC
   settings) — the only config surface in the app that reads and writes the **running game**
   rather than a file. Two properties to keep, both load-bearing: **the rule ids are
@@ -744,6 +752,20 @@ connect **directly to the box IP `89.58.50.155`**:
     [`docs/MINECRAFT.md`](docs/MINECRAFT.md#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02).
     **Not yet read against the live container** — on production the DB and disk agreed when
     last counted (3 rows, 3 jars), so there is no known drift for it to find there yet.
+  - **`/minecraft/mods` is one page, with the pack as a header** (2026-10-02). It was
+    three tabs — Browse mods / Installed / Modpacks — the last holding two sub-tabs, which
+    put every write on the page inside a nested tab and the install instructions in the
+    *collection's* empty state. Searching Modrinth is an **action** now (`Add a mod`,
+    `Change pack`), the list of what is on the server is the page, and saved sets are a
+    section below. **Change pack shows the comparison before the button**: a new
+    `GET /api/modpacks/preview` resolves what a pack needs *without writing a `Modpack`
+    row*, so a version mismatch is a refusal you can read rather than a toast that
+    disappears — which matters because COBBLEVERSE and `Hoplite` can never install here and
+    production already carries nine rows for six packs from attempts. A modpack apply also
+    writes **one `apply_modpack` `Activity` row** at last (its 166 `installMod` calls wrote
+    the leaves and not the act), which is what lets the header name the pack. No schema
+    change. Full shape, and why there is deliberately **no "Remove pack"**:
+    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#the-mods-page-is-one-surface--2026-10-02).
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
@@ -837,7 +859,10 @@ Genuinely open:
 
 - **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11**, so on a
   26.1.2 server neither can install no matter how often it is re-imported. The apply
-  refuses with an honest version mismatch. Not a bug — a fact about those packs.
+  refuses with an honest version mismatch. Not a bug — a fact about those packs. Since
+  2026-10-02 it is also a fact you can **see before trying**: `Change pack` shows what a
+  pack needs beside what the server runs and refuses the Apply, instead of delivering the
+  409 as a four-second toast after another `Modpack` row has been created.
 - **`create` still snapshots a live world**, so a manual backup taken while people play
   can be torn. The automatic ones refuse while anyone is connected; a manual one is the
   operator's call.

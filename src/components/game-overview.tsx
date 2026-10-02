@@ -512,6 +512,10 @@ function formatAction(action: string): string {
     install_mod: "installed a mod",
     remove_mod: "removed a mod",
     update_mod: "updated a mod",
+    // Added with the row itself. This card gets only the action string, so no pack name
+    // here — /activity's renderer carries that. Without the entry the fallback renders
+    // "apply modpack", which reads as a half-finished key.
+    apply_modpack: "applied a modpack",
     server_start: "powered on the server",
     server_stop: "powered off the server",
     server_restart: "restarted the server",

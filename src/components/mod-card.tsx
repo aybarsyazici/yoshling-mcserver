@@ -257,7 +257,19 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
 
   return (
     <>
-      <Card className="flex flex-col border-2 border-border/50 rounded-xl shadow-sm hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] hover:border-[#cba6f7] dark:hover:border-[#cba6f7] hover:border-[#8839ef] transition-all duration-300 group cursor-pointer" onMouseEnter={fetchDepsIfNeeded} onClick={() => setShowDetail(true)}>
+      {/*
+        **The accent is `--tint`, not a hard-coded hex.** This was
+        `hover:border-[#cba6f7] dark:hover:border-[#cba6f7] hover:border-[#8839ef]` plus a
+        purple glow — three classes for one property, two of which could never win, and all
+        three the *wrong world's* colour: `#cba6f7` is Catppuccin mauve and Minecraft's
+        accent here is green/teal (`--mc`). CLAUDE.md's convention is per-game accent through
+        `--tint`, and these cards are the only place on the page that ignored it.
+      */}
+      <Card
+        className="group flex cursor-pointer flex-col rounded-xl ring-1 ring-border transition-colors hover:ring-[var(--tint)]/60 focus-within:ring-2 focus-within:ring-[var(--tint)]"
+        onMouseEnter={fetchDepsIfNeeded}
+        onClick={() => setShowDetail(true)}
+      >
         <CardHeader className="flex flex-row items-start gap-3 space-y-0 pb-3">
           {mod.icon_url ? (
             <img
@@ -266,12 +278,12 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
               className="h-11 w-11 rounded-lg object-cover ring-1 ring-border/50"
             />
           ) : (
-            <div className="h-11 w-11 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-bold text-primary ring-1 ring-primary/20">
+            <div className="h-11 w-11 rounded-lg bg-[var(--tint)]/10 flex items-center justify-center text-xs font-bold text-[var(--tint)] ring-1 ring-[var(--tint)]/20">
               {mod.title[0]}
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-sm leading-tight truncate group-hover:text-primary transition-colors">
+            <h3 className="font-semibold text-sm leading-tight truncate group-hover:text-[var(--tint)] transition-colors">
               {mod.title}
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">

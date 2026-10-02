@@ -263,6 +263,59 @@ describe("the report opens for an apply whose only news is the skips", () => {
   });
 });
 
+// ── the title's colour is a claim about the count ───────────────────────────
+
+describe("the report title is only destructive when nothing was installed", () => {
+  /**
+   * **A mutation survived the first version of this file**: hard-coding
+   * `className="text-destructive"` on the title left every test green, because nothing
+   * asserted the colour of a *successful* report.
+   *
+   * It matters for the reason `docs/OPERATIONS.md` sets out about `.op-warn`: the colour is
+   * a claim, and this repo has already shipped the mistake once — a `noop` step painted
+   * every clean backup amber with "part of it is missing. This is not a restore point."
+   * A 142-of-166 apply in failure red teaches people that red means nothing.
+   */
+  function titleClasses(): string {
+    const title = reportTitle();
+    if (!title) throw new Error("the report dialog is not open");
+    return title.className;
+  }
+
+  it("is not destructive when mods were installed", async () => {
+    await applyPack({
+      status: 500,
+      body: {
+        success: false,
+        installed: 1,
+        total: 2,
+        errors: ["Gone: no compatible version"],
+        warnings: [],
+        skipped: [],
+      },
+    });
+    await waitFor(() => expect(reportTitle()).not.toBeNull(), WAIT);
+    expect(titleClasses()).not.toMatch(/text-destructive/);
+  });
+
+  it("is destructive when the apply installed nothing", async () => {
+    // The complement, so "never destructive" does not pass the row above.
+    await applyPack({
+      status: 500,
+      body: {
+        success: false,
+        installed: 0,
+        total: 2,
+        errors: ["a: failed", "b: failed"],
+        warnings: [],
+        skipped: [],
+      },
+    });
+    await waitFor(() => expect(reportTitle()).not.toBeNull(), WAIT);
+    expect(titleClasses()).toMatch(/text-destructive/);
+  });
+});
+
 // ── mutant 10: the skipped block itself ─────────────────────────────────────
 
 /**
@@ -307,6 +360,31 @@ describe("the skipped block names each mod and the reason it was held back", () 
       q.getByText(/this build declares `client_only`, which has no server support/)
     ).toBeDefined();
     expect(q.getByText(/Modrinth lists this project as server-side unsupported/)).toBeDefined();
+  });
+
+  it("is bordered in an accent the dialog actually defines", async () => {
+    /**
+     * **This block's own comment said the colour was the claim, and the colour did not
+     * render.** `border-[var(--tint)]/30` resolves against a custom property that is only
+     * ever set by an inline style on a *page wrapper* — and a dialog portals into
+     * `document.body`, outside it. An undefined custom property inside `color-mix` is an
+     * invalid value and CSS drops the whole declaration, so the "nothing went wrong here"
+     * border has been no border at all since the accent was added. Fixed by setting
+     * `--tint` on the dialog; pinned here, because nothing else can notice a colour that
+     * silently does not apply.
+     */
+    await applyPack({
+      body: {
+        success: true,
+        installed: 1,
+        total: 1,
+        errors: [],
+        warnings: [],
+        skipped: [{ name: "Sodium", reason: "client-only" }],
+      },
+    });
+    await waitFor(() => expect(reportTitle()).not.toBeNull(), WAIT);
+    expect(report().el.style.getPropertyValue("--tint")).toBe("var(--mc)");
   });
 
   /** Singular when there is one, because "1 client-only mods skipped" is the small

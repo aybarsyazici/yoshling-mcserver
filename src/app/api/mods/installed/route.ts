@@ -3,7 +3,8 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { db } from "@/lib/db";
 import { getModsDir } from "@/lib/server-manager";
-import { reconcileMods } from "@/lib/mod-inventory";
+import { reconcileMods, type InstalledReading } from "@/lib/mod-inventory";
+import { APPLY_MODPACK_ACTION, parseAppliedPack } from "@/lib/modpack-applied";
 
 /**
  * **What is installed — reconciled against the directory, not recited from the database.**
@@ -26,6 +27,12 @@ import { reconcileMods } from "@/lib/mod-inventory";
  * **The response is an object, not the array this used to return.** The one caller
  * (`installed-mods.tsx`) reads `.mods`; a client left open across a deploy reads neither
  * and renders its empty state until it is reloaded.
+ *
+ * It also carries the two records the page's header states — the last recorded modpack
+ * apply and what the server is configured to run — **in this one response, on purpose.**
+ * The header and the list are two readers of one reading, so they cannot disagree about
+ * the same server; two components each fetching this endpoint is exactly the drift the
+ * reconcile's own groups are derived from one list to avoid.
  */
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -58,5 +65,23 @@ export async function GET(request: NextRequest) {
     for (const u of users as { id: string; username: string }[]) actorNames[u.id] = u.username;
   }
 
-  return NextResponse.json(await reconcileMods(rows, getModsDir(), { hash, actorNames }));
+  // The last recorded apply. `findFirst` on the newest matching row rather than a scan:
+  // `Activity` grows by one row per installed mod, so a 166-mod apply adds 332 and this
+  // must not read them all. The `user` relation comes along, so the actor's name needs no
+  // second lookup — unlike `InstalledMod.installedBy`, which is a plain column.
+  const applied = await db.activity.findFirst({
+    where: { action: APPLY_MODPACK_ACTION },
+    orderBy: { createdAt: "desc" },
+    include: { user: { select: { username: true } } },
+  });
+
+  // The same row `/api/settings` GET projects and `/api/mods/search` facets from.
+  const cfg = await db.serverConfig.findUnique({ where: { id: "main" } });
+
+  const reading: InstalledReading = {
+    ...(await reconcileMods(rows, getModsDir(), { hash, actorNames })),
+    pack: parseAppliedPack(applied),
+    server: cfg ? { mcVersion: cfg.mcVersion, loader: cfg.modLoader } : null,
+  };
+  return NextResponse.json(reading);
 }

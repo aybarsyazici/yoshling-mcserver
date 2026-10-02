@@ -27,6 +27,7 @@ import { sealArchive, type McManifest } from "@/lib/backup-create";
 import { recordBackupEvent } from "@/lib/backup-log";
 import { removeManifestSidecar } from "@/lib/backup-archive";
 import { archiveMembersPresent, describeMembers } from "@/lib/mc-archive";
+import { APPLY_MODPACK_ACTION, appliedPackDetails } from "@/lib/modpack-applied";
 
 /**
  * `execFile` with an argv array, never `exec` with a template string.
@@ -177,7 +178,7 @@ async function applyModpack(
     warnings,
     skipped,
   }: {
-    modpack: { name: string; mods: PackMod[] };
+    modpack: { id: string; name: string; mods: PackMod[] };
     serverConfig: { mcVersion: string; modLoader: string };
     userId: string;
     actorName: string;
@@ -669,6 +670,49 @@ async function applyModpack(
   // The HTTP status, the response `error`, the operation's final step and the per-mod
   // progress bar were four readers of the same arithmetic with nothing stopping them
   // disagreeing.
+  // **One durable row saying a pack was applied, which nothing wrote until 2026-10-02.**
+  //
+  // The 166 `installMod` calls above each write an `install_mod` row, so the log recorded
+  // every leaf and not the act — and "which pack is on this server" was answerable from
+  // nothing durable: the operation registry keeps a non-`ok` record for six hours and
+  // loses everything on a web-container restart. `/api/mods/installed` reads this row to
+  // head the mods page, and `/activity` renders it beside the power and backup rows.
+  //
+  // Written **after** the mods were replaced, never on a refusal path: every `return`
+  // above this line leaves the server's mod set untouched, and a log of things that did
+  // not happen is a defect this project has fixed twice (`powerOff` returning whether it
+  // stopped anything, `powerOn` returning `[]`).
+  //
+  // The counts go in the blob rather than being recomputed by a reader, because `total`
+  // is the plan's denominator — the pack minus the client-only mods — and re-deriving it
+  // from a row count would quietly report a different number from the one the apply
+  // reported.
+  try {
+    await db.activity.create({
+      data: {
+        userId,
+        action: APPLY_MODPACK_ACTION,
+        details: appliedPackDetails({
+          game: "minecraft",
+          packId: modpack.id,
+          packName: modpack.name,
+          installed,
+          total,
+          mcVersion: serverConfig.mcVersion,
+          loader: serverConfig.modLoader,
+        }),
+      },
+    });
+  } catch (e: any) {
+    // The jars are already replaced, so this must not throw the apply away — but it must
+    // not be silent either: with no row, the mods page will head itself "a pack was
+    // applied, but not from here", and nobody should have to work out why.
+    warnings.push(
+      `The mods were installed, but recording which pack was applied failed ` +
+        `(${e?.message || "unknown error"}), so the mods page will not name this pack.`
+    );
+  }
+
   const report = applyReport({
     packSize: modpack.mods.length,
     installed,

@@ -5,8 +5,17 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GAMES } from "@/lib/games";
+import { GameMark } from "@/components/glyphs";
 import { formatBytes, pluralise } from "@/lib/format";
 import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
+import { AddModDialog } from "@/components/add-mod-dialog";
+import { ChangePackDialog } from "@/components/change-pack-dialog";
+import {
+  packHeadline,
+  packVersionNote,
+  provenanceCounts,
+  provenanceSentence,
+} from "@/lib/mod-provenance";
 /**
  * **Types only.** `mod-inventory` reads the filesystem and hashes jars, so it imports
  * `node:crypto` and `node:fs` — a value import here would put node builtins in the
@@ -15,58 +24,107 @@ import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
  * side needs neither a date library nor a second request. Same pattern and same reason as
  * `mc-bans-card.tsx`.
  */
-import type { InventoryEntry, ModInventory } from "@/lib/mod-inventory";
+import type { InstalledReading, InventoryEntry } from "@/lib/mod-inventory";
 
 const TINT = GAMES.minecraft.tint;
 
 /**
- * **Installed mods — the reconcile, rendered.**
+ * **The mods page's spine: one list of what is on the server, with the pack as a header.**
  *
- * This page used to list `InstalledMod` rows and call that "Installed". Nothing had ever
- * compared them with the directory the server loads from, so the heading was a claim about
- * the app's memory rather than about the server. `/api/mods/installed` reconciles the two
- * now and this renders all three answers: a row and its jar agreeing, a jar with no row,
- * and a row whose jar is gone.
+ * Two shapes were wrong here and the second one is the interesting one.
  *
- * The drift bands name their members. A count of untracked jars cannot be acted on; a file
- * name can — it is what you would look for in the file browser.
+ * The page listed `InstalledMod` rows and called that "Installed", with nothing ever
+ * comparing them against the directory the server loads from. `/api/mods/installed`
+ * reconciles the two now and this renders all three answers: a row and its jar agreeing, a
+ * jar with no row, and a row whose jar is gone. The drift bands name their members, because
+ * "2 untracked jars" sends somebody to the file browser to guess which two.
+ *
+ * And it was the **second of three tabs** — behind "Browse mods", which until 2026-10-02
+ * could not install anything — with all the power on the page nested inside a sub-tab of
+ * the third. "Modpacks" with a Modrinth search beneath it nests a *source* under a
+ * *collection*, and the empty state of the collection was where the install instructions
+ * lived, which is the clearest possible proof the hierarchy was inverted. So: one page, one
+ * list, and the pack is a **header**, because which pack is on a server is server state and
+ * not a library item.
+ *
+ * **Provenance is the informational heart**, and it is carried by the *grouping* rather than
+ * by a badge on every row. "Which of these did the pack put there and which did we add
+ * ourselves" was not answerable by anything in this app before `InstalledMod.source`; four
+ * identical-looking pills would bury the answer it finally has.
  */
-
-interface State extends ModInventory {
+interface State extends InstalledReading {
   /** Not from the API: when this reading was taken, so "Re-check" visibly does something. */
   readAt: number;
 }
 
-const STATE_STYLE: Record<
-  InventoryEntry["state"],
-  { rail: string; label: string | null; chip: string | null }
-> = {
-  matched: { rail: TINT, label: null, chip: null },
-  untracked: {
-    rail: "var(--op-warn)",
-    label: "Not in the list",
-    chip: "op-warn",
-  },
-  missing: {
-    rail: "var(--destructive)",
-    label: "File is gone",
-    chip: "op-bad",
-  },
+const STATE_STYLE: Record<InventoryEntry["state"], { rail: string }> = {
+  matched: { rail: TINT },
+  untracked: { rail: "var(--op-warn)" },
+  missing: { rail: "var(--destructive)" },
 };
 
-const SOURCE_LABEL: Record<"pack" | "manual", string> = {
-  pack: "Pack",
-  manual: "Installed on its own",
-};
+/**
+ * The groups the list is split into, in reading order: problems first.
+ *
+ * `kind` lands on the element as `data-group`, and it is there for the tests — the same
+ * reason the drift bands carry `data-band`. A group heading and a row a few pixels below it
+ * are indistinguishable in `document.body.textContent`, which is how a mutant that replaced
+ * every band's file names with `"2 file(s)"` passed the whole suite. **If you add a group,
+ * give it a `kind`**, and assert the names inside it.
+ */
+interface Group {
+  kind: string;
+  heading: string;
+  /** One line under the heading. This is where the provenance claim is actually made. */
+  note: string;
+  match(mod: InventoryEntry): boolean;
+}
+
+const GROUPS: Group[] = [
+  {
+    kind: "missing",
+    heading: "Missing their jar",
+    note: "The record is here and the file is not, so the server will not load these.",
+    match: (m) => m.state === "missing",
+  },
+  {
+    kind: "untracked",
+    heading: "Not installed from here",
+    note: "The server loads these; this dashboard has no record of them.",
+    match: (m) => m.state === "untracked",
+  },
+  {
+    kind: "pack",
+    heading: "From a pack",
+    note: "Installed by a modpack apply. Applying another pack replaces all of these.",
+    match: (m) => m.state === "matched" && m.source === "pack",
+  },
+  {
+    kind: "manual",
+    heading: "Added one at a time",
+    note: "Installed individually, not by a pack — a pack apply removes these too.",
+    match: (m) => m.state === "matched" && m.source === "manual",
+  },
+  {
+    kind: "unrecorded",
+    heading: "No record of how these arrived",
+    note:
+      "Installed before this dashboard recorded where a mod came from, or restored from " +
+      "an archive that carried no record.",
+    match: (m) => m.state === "matched" && m.source !== "pack" && m.source !== "manual",
+  },
+];
 
 export function InstalledMods() {
-  // `can.modsRemove` only; see `CAPABILITY_POLL_MS` for why it is not the 5 s default.
+  // `can.modsRemove` / `can.modsInstall`; see `CAPABILITY_POLL_MS` for why it is not 5 s.
   const { can } = useGames(CAPABILITY_POLL_MS);
   const [state, setState] = useState<State | null>(null);
   const [loading, setLoading] = useState(true);
   const [removing, setRemoving] = useState<string | null>(null);
   /** Sticky: once hashes have been asked for, a re-check keeps asking for them. */
   const [withHashes, setWithHashes] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [changePackOpen, setChangePackOpen] = useState(false);
 
   /**
    * `spinner` separates the two readings this does. The mount read does not touch
@@ -82,7 +140,7 @@ export function InstalledMods() {
     if (opts.spinner) setLoading(true);
     try {
       const res = await fetch(`/api/mods/installed${hash ? "?hash=1" : ""}`);
-      const data = (await res.json()) as ModInventory & { error?: string };
+      const data = (await res.json()) as InstalledReading & { error?: string };
       if (!res.ok || !Array.isArray(data.mods)) {
         toast.error(data.error || "Couldn't read what is installed.");
         return;
@@ -126,12 +184,14 @@ export function InstalledMods() {
 
   /** Two jars with the same bytes under different names — what the hash is good for. */
   const twins = useMemo(() => twinsOf(state?.mods ?? []), [state]);
+  /** Where each jar came from, counted. Drives the header and the Change pack review. */
+  const counts = useMemo(() => provenanceCounts({ mods: state?.mods ?? [] }), [state]);
 
   if (loading && !state) {
     return (
       <div className="space-y-3">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-24 rounded-2xl bg-muted animate-pulse" />
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-24 animate-pulse rounded-2xl bg-muted" />
         ))}
       </div>
     );
@@ -145,28 +205,84 @@ export function InstalledMods() {
     );
   }
 
-  const { mods, matched, untracked, missing, ignored, modsDirPresent, hashed } = state;
-  // Problems first — the whole reason this list is a reconcile and not a listing.
-  const order: InventoryEntry["state"][] = ["missing", "untracked", "matched"];
-  const sorted = [...mods].sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state));
+  const { mods, untracked, missing, ignored, modsDirPresent, hashed } = state;
+  const headline = packHeadline(state.pack, counts);
+  const versionNote = packVersionNote(state.pack, state.server);
+  // Problems first — the whole reason this list is a reconcile and not a listing. The
+  // groups are walked in order and every entry lands in exactly one of them.
+  const grouped = GROUPS.map((g) => ({ group: g, mods: mods.filter(g.match) })).filter(
+    (g) => g.mods.length > 0
+  );
 
   return (
     <div className="space-y-4" style={{ ["--tint" as string]: TINT }}>
+      {/* ── the pack, as server state ───────────────────────────────────────── */}
+      <section
+        data-pack-header
+        className="overflow-hidden rounded-3xl bg-card/60 ring-1 ring-border backdrop-blur"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4 p-5">
+          <div className="flex min-w-0 items-start gap-3">
+            <GameMark
+              game="minecraft"
+              className="mt-0.5 h-8 w-8 shrink-0"
+              style={{ color: TINT }}
+            />
+            <div className="min-w-0">
+              <p className="eyebrow" style={{ color: TINT }}>
+                Pack on the server
+              </p>
+              <h2
+                className={cn(
+                  "font-display text-xl font-bold tracking-tight",
+                  // A real pack name is the heading; "No pack applied" is a *state*, and
+                  // setting it in the same weight makes an absence look like a title.
+                  !headline.named && "text-base font-semibold text-muted-foreground"
+                )}
+              >
+                {headline.title}
+              </h2>
+              <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                {headline.detail}
+              </p>
+              {/* Real drift, and previously invisible: the version dropdown can be changed
+                  after a pack is applied and the jars do not move with it. */}
+              {versionNote && (
+                <p className="op-warn mt-1.5 max-w-xl text-xs leading-relaxed">{versionNote}</p>
+              )}
+            </div>
+          </div>
+          {/* `/api/modpacks/import` and `/api/mods/install-modpack` both check
+              `mods.install`, so this is gated — hidden rather than disabled, like every
+              other write on this page. There is deliberately **no "Remove pack"**: nothing
+              removes a set of mods as one operation, and N client-side DELETEs would be a
+              bulk destructive action with no rollback archive, no operation record and a
+              partial-failure state this page could not report. Per-row Remove is the
+              supported way out; Change pack is the supported way to replace the set. */}
+          {can.modsInstall && (
+            <Button variant="outline" onClick={() => setChangePackOpen(true)}>
+              Change pack
+            </Button>
+          )}
+        </div>
+      </section>
+
       {/* ── the reading, and what it cost to take ───────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-card/60 px-4 py-3 ring-1 ring-border backdrop-blur">
-        <div className="space-y-0.5">
+        <div className="min-w-0 space-y-0.5">
           <p className="text-sm font-medium">
-            {matched.length > 0 || untracked.length > 0
-              ? `${pluralise(matched.length + untracked.length, "jar")} in the mods folder`
-              : "No jars in the mods folder"}
+            {provenanceSentence(counts)}
             {state.totalBytes > 0 && (
               <span className="text-muted-foreground"> · {formatBytes(state.totalBytes)}</span>
             )}
           </p>
           <p className="text-xs text-muted-foreground">{verdict(state)}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {!hashed && (matched.length > 0 || untracked.length > 0) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {/* `POST /api/mods/install` checks `mods.install`, and the dialog this opens is
+              where that request is made from. */}
+          {can.modsInstall && <Button onClick={() => setAddOpen(true)}>Add a mod</Button>}
+          {!hashed && counts.jars > 0 && (
             <Button
               variant="outline"
               size="sm"
@@ -235,6 +351,14 @@ export function InstalledMods() {
               <Names names={group} />
             </p>
           ))}
+          {/* Says what the reading is and what to do about it, and **stops short of
+              naming a consequence nobody here has observed.** The duplicate is a measured
+              fact — identical digests under two names; that it crashes Fabric is a claim
+              this code cannot check, and it has not been seen on this box. */}
+          <p className="mt-2">
+            Nothing needs two copies of the same jar. Delete one of each pair from the file
+            browser.
+          </p>
         </Band>
       )}
       {!modsDirPresent && (
@@ -258,33 +382,67 @@ export function InstalledMods() {
         </Band>
       )}
 
-      {/* ── the list ────────────────────────────────────────────────────────── */}
-      {sorted.length === 0 ? (
+      {/* ── the list, grouped by where each jar came from ───────────────────── */}
+      {mods.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <p className="text-lg">No mods installed</p>
-          <p className="mt-1 text-sm">Find one on the Browse mods tab and press Install.</p>
+          <p className="mt-1 text-sm">
+            {can.modsInstall
+              ? "Add a mod to install one, or change the pack to install a whole set."
+              : "Nothing is in the server's mods folder."}
+          </p>
         </div>
       ) : (
-        <ul className="space-y-2">
-          {sorted.map((mod) => (
-            <Row
-              key={mod.id ?? `file:${mod.fileName}`}
-              mod={mod}
-              hashed={hashed}
-              canRemove={can.modsRemove}
-              // **`mod.id != null &&` is load-bearing.** `removing` is `null` when nothing
-              // is being removed and an untracked entry's `id` is also `null`, so a bare
-              // `removing === mod.id` is `true` for every untracked row — which renders
-              // its control stuck on "Removing...". It is currently invisible because the
-              // button is gated on `mod.id` as well, and that is exactly the kind of
-              // second guard that stops being there: a mutation that removed it found
-              // this.
-              removing={mod.id != null && removing === mod.id}
-              onRemove={() => void handleRemove(mod)}
-            />
+        <div className="space-y-5">
+          {grouped.map(({ group, mods: rows }) => (
+            <section key={group.kind} data-group={group.kind}>
+              <div className="mb-2 flex flex-wrap items-baseline gap-x-2 px-1">
+                <h3 className="text-sm font-semibold">{group.heading}</h3>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {rows.length}
+                </span>
+                <p className="w-full text-xs leading-relaxed text-muted-foreground sm:w-auto">
+                  {group.note}
+                </p>
+              </div>
+              <ul className="space-y-2">
+                {rows.map((mod) => (
+                  <Row
+                    key={mod.id ?? `file:${mod.fileName}`}
+                    mod={mod}
+                    hashed={hashed}
+                    canRemove={can.modsRemove}
+                    // **`mod.id != null &&` is load-bearing.** `removing` is `null` when
+                    // nothing is being removed and an untracked entry's `id` is also
+                    // `null`, so a bare `removing === mod.id` is `true` for every untracked
+                    // row — which renders its control stuck on "Removing...". It is
+                    // currently invisible because the button is gated on `mod.id` as well,
+                    // and that is exactly the kind of second guard that stops being there:
+                    // a mutation that removed it found this.
+                    removing={mod.id != null && removing === mod.id}
+                    onRemove={() => void handleRemove(mod)}
+                  />
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       )}
+
+      {/* Both dialogs re-read on close rather than being told what landed — the list is a
+          reading of the directory, and an install or an apply that half-worked has to show
+          up as drift rather than as whatever the dialog assumed. */}
+      <AddModDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onClosed={() => void load(withHashes)}
+      />
+      <ChangePackDialog
+        open={changePackOpen}
+        onOpenChange={setChangePackOpen}
+        counts={counts}
+        onApplied={() => void load(withHashes)}
+      />
     </div>
   );
 }
@@ -307,8 +465,18 @@ function Row({
     <li
       className="flex items-stretch gap-0 overflow-hidden rounded-2xl bg-card/60 ring-1 ring-border backdrop-blur"
       data-state={mod.state}
+      // **`data-busy` is what makes the `mod.id != null` guard below observable**, and that
+      // is why it is here rather than only on the button. `removing` is `null` when nothing
+      // is being removed and an untracked entry's `id` is also `null`, so a bare
+      // `removing === mod.id` is `true` for every untracked row. With the label only inside
+      // a button that is itself gated on `mod.id`, dropping that guard changes nothing a
+      // test can see — measured: the mutation survived the whole suite. On the row it is
+      // visible, so the guard is pinned instead of merely commented.
+      data-busy={removing ? "true" : undefined}
+      aria-busy={removing || undefined}
     >
-      {/* The state rail: one glance tells a clean row from a drifted one. */}
+      {/* The state rail: one glance tells a clean row from a drifted one. The group heading
+          above says *why*; this is what makes a problem findable while scrolling. */}
       <span aria-hidden className="w-1 shrink-0" style={{ background: style.rail }} />
       <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0 space-y-1">
@@ -317,23 +485,6 @@ function Row({
             {mod.version && (
               <span className="rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
                 v{mod.version}
-              </span>
-            )}
-            {style.label && (
-              <span
-                className={cn("rounded-md px-1.5 py-0.5 text-[10px] font-medium", style.chip)}
-                style={{
-                  background: `color-mix(in oklab, ${style.rail} 12%, transparent)`,
-                }}
-              >
-                {style.label}
-              </span>
-            )}
-            {/* Provenance. Only on rows — an untracked jar has no row, so there is nothing
-                that could have recorded where it came from, and the state chip says so. */}
-            {mod.id && (
-              <span className="rounded-md bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {mod.source ? SOURCE_LABEL[mod.source] : "source not recorded"}
               </span>
             )}
           </div>
@@ -442,7 +593,7 @@ function Names({ names }: { names: string[] }) {
  * a measurement this endpoint now takes, and the reason it exists. Before it, the page
  * could not have said this truthfully in either direction.
  */
-function verdict(inv: ModInventory): string {
+function verdict(inv: Pick<InstalledReading, "untracked" | "missing" | "matched">): string {
   if (inv.untracked.length === 0 && inv.missing.length === 0) {
     if (inv.matched.length === 0) return "Nothing installed, and nothing on disk.";
     return "Every mod on this list has its jar on disk, and nothing else is there.";

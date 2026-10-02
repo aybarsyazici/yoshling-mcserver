@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import type { AppliedPack } from "./modpack-applied";
 
 /**
  * **What is installed, decided by the directory and not by memory.**
@@ -125,6 +126,34 @@ export interface ModInventory {
   hashed: boolean;
   /** Sum of `sizeBytes` over the jars that are actually on disk. */
   totalBytes: number;
+}
+
+/**
+ * **The whole `GET /api/mods/installed` answer: the reconcile plus the two records that
+ * frame it.**
+ *
+ * One request, so the pack strip at the top of the page and the list under it are two
+ * readers of *one* reading. They were going to be two components, and two components each
+ * fetching the same endpoint is two readings that can disagree about the same server —
+ * which is the failure the `matched`/`untracked`/`missing` groups are derived from one
+ * list to avoid, one level up.
+ */
+export interface InstalledReading extends ModInventory {
+  /**
+   * The most recent recorded modpack apply, or `null` if none has been recorded.
+   *
+   * A record, not a measurement: it says a pack was applied, not that the jars on disk
+   * are still that pack's. The `source` counts are what answer that. See
+   * `src/lib/modpack-applied.ts`.
+   */
+  pack: AppliedPack | null;
+  /**
+   * What the server is configured to run, so the surface can compare the pack's target
+   * against it. `null` when there is no `ServerConfig` row — a state that has to stay
+   * distinguishable from "configured, and it agrees", because an absent reading rendered
+   * as a disagreement is the mistake every settings surface in this app is built to avoid.
+   */
+  server: { mcVersion: string; loader: string } | null;
 }
 
 /**

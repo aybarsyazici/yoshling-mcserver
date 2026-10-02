@@ -129,6 +129,23 @@ function formatAction(action: string, details: Record<string, unknown>): string 
       return `removed ${details.modName}`;
     case "update_mod":
       return `updated ${details.modName} from v${details.fromVersion} to v${details.toVersion}`;
+    /**
+     * Rendered here in the same change that started writing it. Left to `default` it would
+     * read as the bare words "apply modpack", with no pack name and no counts — on the row
+     * class that records the most destructive thing this dashboard does, and the one the
+     * mods page reads to head itself. That is the gap the backup rows and `set_gamerule`
+     * each had before.
+     *
+     * The counts are stated when the row carried them. `installed` short of `total` is the
+     * durable record of a partial apply, which is the thing somebody debugging a world
+     * that no longer boots wants first.
+     */
+    case "apply_modpack":
+      return `applied the modpack ${details.packName}${on}${
+        typeof details.installed === "number" && typeof details.total === "number"
+          ? ` (${details.installed} of ${details.total} mods installed)`
+          : ""
+      }`;
     case "server_start":
       return `powered on the server${on}`;
     case "server_stop":

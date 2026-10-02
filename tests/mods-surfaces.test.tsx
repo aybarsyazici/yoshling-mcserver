@@ -19,7 +19,7 @@
  * file green while hiding Install to Server from an admin.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ALL_POWERS, NO_POWERS, gamesState, installBrowserStubs } from "./helpers/dom";
@@ -75,6 +75,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
+import { MC_ARCHIVE_MEMBERS } from "@/lib/mc-archive";
 import { InstalledMods } from "@/components/installed-mods";
 import { ModBrowser } from "@/components/mod-browser";
 import { ModpackBrowserModrinth } from "@/components/modpack-browser-modrinth";
@@ -86,6 +87,7 @@ afterEach(() => {
   cleanup();
   toasts.length = 0;
   deletes.length = 0;
+  fetched.length = 0;
   vi.unstubAllGlobals();
 });
 
@@ -116,6 +118,13 @@ const PACK = {
  * `tests/installed-mods-reconcile.test.tsx`.
  */
 const INSTALLED = {
+  /**
+   * `pack` and `server` ride along in the same response, which is what lets the page's
+   * header and its list be two readers of one reading. `null` here is production's state
+   * today: three mods, each installed on its own, no pack ever applied from the dashboard.
+   */
+  pack: null,
+  server: { mcVersion: "26.1.2", loader: "fabric" },
   mods: [
     {
       id: "im1",
@@ -178,8 +187,12 @@ const REMOTE_PACK = {
 
 /** Every DELETE the page sent, so "nothing was requested" is checkable. */
 const deletes: string[] = [];
+/** Every URL the page asked for, so "that surface was not mounted" is checkable. */
+const fetched: string[] = [];
 /** Set by the one test that needs a DELETE to be refused. */
 let failDelete: { status: number; body: unknown } | null = null;
+/** What `GET /api/modpacks` answers. Varied by the saved-set legibility tests. */
+let packs: unknown[] = [PACK];
 /** What the export endpoint answers with, for the Download All tests. */
 let exportMods: unknown[] = [];
 
@@ -189,15 +202,17 @@ function json(status: number, body: unknown) {
 
 function stubFetch() {
   failDelete = null;
+  packs = [PACK];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
+      fetched.push(u);
       if (init?.method === "DELETE") {
         deletes.push(u);
         return failDelete ? json(failDelete.status, failDelete.body) : json(200, { success: true });
       }
-      if (u === "/api/modpacks") return json(200, [PACK]);
+      if (u === "/api/modpacks") return json(200, packs);
       if (u === "/api/minecraft-versions") return json(200, { versions: ["26.1.2"] });
       if (u.startsWith("/api/mods/installed")) return json(200, INSTALLED);
       if (u === "/api/mods/categories") return json(200, []);
@@ -274,10 +289,19 @@ const SURFACES: Surface[] = [
   },
   {
     file: "installed-mods.tsx",
-    where: "Installed",
+    where: "the installed list (the page's spine)",
     render: () => void render(<InstalledMods />),
     ready: "Fabric API",
-    install: [],
+    /**
+     * **Both of these moved here**, and the test moved with them rather than being deleted.
+     *
+     * `Add a mod` was the "Browse mods" tab and `Change pack` was two clicks inside the
+     * "Modpacks" tab's Modrinth sub-tab. Searching Modrinth is an action, not a place, so
+     * both are now buttons on this surface — and both open a dialog whose writes check
+     * `mods.install` (`POST /api/mods/install` and `POST /api/mods/install-modpack` +
+     * `/api/modpacks/import`). A MEMBER shown either gets a dialog it cannot use.
+     */
+    install: ["Add a mod", "Change pack"],
     remove: ["Remove"],
     always: [],
   },
@@ -301,13 +325,34 @@ const SURFACES: Surface[] = [
   },
   {
     file: "modpack-browser-modrinth.tsx",
-    where: "Modpacks › Modrinth",
+    where: "Saved sets › Import a pack from Modrinth",
     render: () => void render(<ModpackBrowserModrinth onImported={() => {}} />),
     ready: "Fabulously Optimized",
+    // Default mode. The same `can.modsInstall` gates the `Choose this pack` label this
+    // component shows when the Change pack sheet passes `onChoose` — one boolean, two
+    // labels — and that mode is pinned in `tests/change-pack-dialog.test.tsx`, which is
+    // where the stepped flow behind it is driven.
     install: ["Import"],
     remove: [],
     always: [],
   },
+];
+
+/**
+ * Write surfaces whose gate is pinned in **another** file, because reaching their control
+ * takes more than a render.
+ *
+ * The drift guard below checks this list against the tree too, so a forgotten surface still
+ * fails loudly — what this buys is that a stepped flow does not have to be squeezed into the
+ * uniform `describe.each` above and asserted vacuously. `change-pack-dialog.tsx`'s Apply
+ * button only exists after a pack has been chosen and its preview has landed, and for a
+ * MEMBER the choose control is itself hidden — so a MEMBER row here would pass because the
+ * flow never started, which is not the same claim as "the gate works".
+ *
+ * `by` is asserted to exist, so "covered elsewhere" is checkable rather than declared.
+ */
+const COVERED_ELSEWHERE: { file: string; by: string }[] = [
+  { file: "change-pack-dialog.tsx", by: "tests/change-pack-dialog.test.tsx" },
 ];
 
 describe.each(SURFACES)("$where ($file)", (surface) => {
@@ -363,19 +408,28 @@ describe.each(SURFACES)("$where ($file)", (surface) => {
 // ── the drift guard: a fifth write surface must fail loudly ─────────────────
 
 describe("every component that writes a mod or a modpack is in the table above", () => {
-  it("finds no unlisted caller of a mods/modpacks write endpoint", () => {
-    /**
-     * The incident the power guards were built for was a *forgotten* surface, so the table is
-     * checked against the tree rather than trusted. Keyed on the thing that makes a component
-     * a write surface — a `fetch` to `/api/mods…` or `/api/modpacks…` with a write method —
-     * rather than on whether it mentions `can`, because a new file that forgot the gate
-     * entirely is exactly the case that must fail.
-     *
-     * `mod-browser.tsx` is deliberately absent: it sends no write of its own, it only feeds
-     * `canAddToPack`, and the MEMBER row above is what proves what it feeds.
-     */
+  /**
+   * The incident the power guards were built for was a *forgotten* surface, so the table is
+   * checked against the tree rather than trusted. Keyed on the thing that makes a component
+   * a write surface rather than on whether it mentions `can`, because a new file that forgot
+   * the gate entirely is exactly the case that must fail.
+   *
+   * **Two ways to be a writer, and the second one was added with the shared applier.** A
+   * literal `fetch("/api/mods…", {method: "POST"})` is the obvious one. But the modpack
+   * apply now lives in `src/lib/modpack-apply.ts` — it has two callers and the reasoning in
+   * it is subtle enough that two copies would drift — so a component can write without a
+   * `fetch` of its own anywhere in it. Matching only the literal would have let a new
+   * surface call `applyModpackToServer` with no gate and no row in this table, which is
+   * precisely the hole this guard exists to close, in a new shape.
+   *
+   * `mod-browser.tsx` is deliberately absent: it sends no write of its own, it only feeds
+   * `canAddToPack`/`canInstall` to the cards, and the MEMBER row above is what proves what
+   * it feeds. `add-mod-dialog.tsx` is absent for the same reason — it mounts `ModBrowser`
+   * and writes nothing itself.
+   */
+  function writeSurfaces(): string[] {
     const dir = path.resolve(__dirname, "../src/components");
-    const writers = readdirSync(dir)
+    return readdirSync(dir)
       .filter((f) => f.endsWith(".tsx"))
       .filter((f) => {
         const flat = readFileSync(path.join(dir, f), "utf8").replace(/\s+/g, " ");
@@ -384,12 +438,47 @@ describe("every component that writes a mod or a modpack is in the table above",
             /fetch\(\s*(`[^`]*`|"[^"]*")\s*,\s*\{[^}]*method:\s*"(?:POST|PUT|PATCH|DELETE)"/g
           ),
         ];
-        return calls.some((m) => /\/api\/mods|\/api\/modpacks/.test(m[1]));
+        if (calls.some((m) => /\/api\/mods|\/api\/modpacks/.test(m[1]))) return true;
+        // The shared applier. `ApplyReportDialog` imports only the *type* from it, which
+        // this deliberately does not match — rendering a report is not writing.
+        return /import\s*\{[^}]*\b(?:applyModpackToServer|importAndApply)\b[^}]*\}\s*from\s*"@\/lib\/modpack-apply"/.test(
+          flat
+        );
       });
+  }
+
+  it("finds no unlisted caller of a mods/modpacks write endpoint", () => {
+    const writers = writeSurfaces();
     // Sanity-check the pattern before trusting its verdict: one that matched nothing would
     // make this pass by finding no surfaces to miss.
     expect(writers.length).toBeGreaterThan(0);
-    expect(writers.sort()).toEqual(SURFACES.map((s) => s.file).sort());
+    const known = [...SURFACES.map((s) => s.file), ...COVERED_ELSEWHERE.map((c) => c.file)];
+    expect(writers.sort()).toEqual(known.sort());
+  });
+
+  it("catches a writer that goes through the shared applier rather than fetch", () => {
+    /**
+     * The complement, and it is what stops the second predicate being dead code: with only
+     * the `fetch` pattern, `change-pack-dialog.tsx` — which applies packs and nothing else
+     * — is invisible to this guard. Asserted on the real file so that moving its write back
+     * to an inline `fetch`, or the applier being renamed, both still leave it detected.
+     */
+    const flat = readFileSync(
+      path.resolve(__dirname, "../src/components/change-pack-dialog.tsx"),
+      "utf8"
+    ).replace(/\s+/g, " ");
+    expect(flat).not.toMatch(/fetch\([^)]*,\s*\{[^}]*method:\s*"POST"/);
+    expect(writeSurfaces()).toContain("change-pack-dialog.tsx");
+  });
+
+  it("names a real test file for every surface it defers", () => {
+    // "Covered elsewhere" has to be checkable, or it becomes the way to silence this guard.
+    for (const { file, by } of COVERED_ELSEWHERE) {
+      expect(
+        existsSync(path.resolve(__dirname, "..", by)),
+        `${file} claims to be covered by ${by}, which does not exist`
+      ).toBe(true);
+    }
   });
 });
 
@@ -627,22 +716,40 @@ describe("what the page says about applying a pack", () => {
   it("says what the install does to the mods and to the world, in both places", async () => {
     /**
      * The complement: deleting the sentence entirely would pass the test above. What replaces
-     * it has to be the two facts that are checkable in the route — every installed jar is
-     * removed (`installedMods.forEach(removeMod)`), and the rollback archive's only member is
-     * `world`, so the mods folder is not in it.
+     * it has to be the facts that are checkable in the route — every installed jar is removed
+     * (`installedMods.forEach(removeMod)`), and the rollback archive is taken first.
+     *
+     * **This test used to pin `/not the mods folder/`, and that claim went stale within the
+     * week.** It was true on 2026-09-30: the pre-apply archive was `tar -czf … -C MC_DIR
+     * world`. On 2026-10-02 `install-modpack` started tarring
+     * `archiveMembersPresent(MC_DIR)` — `world` **and** `mods` — and
+     * `restoreMinecraftArchive` renames both back (`src/lib/mc-archive.ts`,
+     * `MC_ARCHIVE_MEMBERS = ["world", "mods"]`). So the page was understating its own safety
+     * net, telling an operator their jars are not recoverable when they are, immediately
+     * before the button that deletes every one of them — and this assertion was holding that
+     * wrong sentence in place.
+     *
+     * Updated rather than dropped, and pinned against the module that decides it: the two
+     * members are read out of `MC_ARCHIVE_MEMBERS` so a future change to what an archive
+     * holds reddens this instead of quietly making the copy wrong again.
      */
     stub.games = gamesState(withCan(ALL_POWERS));
     stubFetch();
     render(<Modpacks />);
     await waitFor(() => expect(screen.queryByText("Big Pack")).not.toBeNull(), WAIT);
 
+    expect(MC_ARCHIVE_MEMBERS).toEqual(["world", "mods"]);
     expect(text()).toMatch(/removes every mod currently\s+installed/);
-    expect(text()).toMatch(/not the mods folder/);
+    expect(text()).toMatch(/archives the world\s+folder and the mods directory first/);
+    expect(text()).toMatch(/restoring that archive\s+puts both back/);
+    // And the stale claim is gone, in both places.
+    expect(text()).not.toMatch(/not the mods folder/);
 
     fireEvent.click(screen.getByRole("button", { name: "Install to Server" }));
     await waitFor(() => expect(screen.queryByText("Confirm Installation")).not.toBeNull(), WAIT);
     expect(text()).toMatch(/remove every mod currently installed/);
-    expect(text()).toMatch(/not the mods folder/);
+    expect(text()).toMatch(/archives the world folder and the\s+mods directory first/);
+    expect(text()).not.toMatch(/not the mods folder/);
   });
 });
 
@@ -662,17 +769,153 @@ describe("the mods page heading", () => {
      * install can open a client-only confirm dialog and the claim was never about the
      * number. Asserted on the rendered page rather than the string in the file, because the
      * subtitle is a prop and a prop can stop being passed.
+     *
+     * The heading is **"Mods"**, not "Mods & modpacks": the page is one surface now and the
+     * saved sets are a section inside it, so an ampersand in the title would be naming the
+     * old tab split.
      */
     stub.games = gamesState(withCan(ALL_POWERS));
     stubFetch();
     render(<ModsPage />);
-    await waitFor(() => expect(screen.queryByText("Mods & modpacks")).not.toBeNull(), WAIT);
+    await waitFor(
+      () => expect(screen.queryByRole("heading", { level: 1, name: "Mods" })).not.toBeNull(),
+      WAIT
+    );
     expect(text()).not.toMatch(/one click/i);
     // And the complement, so deleting the subtitle outright does not pass: it still has to
     // say what the page does.
     expect(text()).toContain(
       "Search Modrinth, install a mod or a whole pack, and see what is on the server."
     );
+  });
+});
+
+// ── the page is one surface, not three tabs ────────────────────────────────
+
+describe("the shape of /minecraft/mods", () => {
+  async function page(can: Partial<GamesState["can"]> = ALL_POWERS) {
+    setup(withCan(can));
+    render(<ModsPage />);
+    await waitFor(
+      () => expect(screen.queryByRole("heading", { level: 1, name: "Mods" })).not.toBeNull(),
+      WAIT
+    );
+  }
+
+  it("has no tabs, and opens on what is on the server", async () => {
+    /**
+     * It was **Browse mods / Installed / Modpacks**, with the last holding two sub-tabs.
+     * Two of the three were inert until 2026-10-02 — you could not install from Browse and
+     * could not add from Installed — and all the power sat in a nested sub-tab, with the
+     * install instructions living in the *collection's* empty state. The page opens on the
+     * reading of the mods directory now, and the searches are actions.
+     */
+    await page();
+    await waitFor(() => expect(screen.queryByText("Fabric API")).not.toBeNull(), WAIT);
+    for (const tab of ["Browse mods", "Installed", "Modpacks", "My Modpacks", "Modrinth"]) {
+      expect(button(tab), `"${tab}" should no longer be a tab`).toBeNull();
+    }
+    expect(button("Add a mod")).not.toBeNull();
+    expect(button("Change pack")).not.toBeNull();
+  });
+
+  it("keeps a home for the saved sets, below", async () => {
+    // Nine production rows including three duplicates and one named `a` — not deleted and
+    // not hidden, just no longer the page's spine.
+    await page();
+    expect(screen.queryByRole("heading", { level: 2, name: "Saved sets" })).not.toBeNull();
+    await waitFor(() => expect(screen.queryByText("Big Pack")).not.toBeNull(), WAIT);
+  });
+
+  it("does not mount the Modrinth pack search until it is asked for", async () => {
+    /**
+     * It owns a debounced `/api/modpacks/search` loop and a capability poll, and the
+     * primary route to a Modrinth pack is the Change pack sheet at the top — so running a
+     * second search on page load for a surface described as secondary is work nobody asked
+     * for. Checked on the request, not on the markup: a mounted-but-hidden component still
+     * polls.
+     */
+    await page();
+    await waitFor(() => expect(screen.queryByText("Big Pack")).not.toBeNull(), WAIT);
+    expect(fetched.filter((u) => u.startsWith("/api/modpacks/search"))).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Import a pack from Modrinth" }));
+    await waitFor(
+      () => expect(fetched.some((u) => u.startsWith("/api/modpacks/search"))).toBe(true),
+      WAIT
+    );
+  });
+
+  it("keeps the photo footer with its caption", async () => {
+    // CLAUDE.md: the MC mods page keeps this one. Pinned so a redesign does not quietly
+    // drop it, and so nobody adds one to the PZ pages to "fix the inconsistency".
+    await page();
+    expect(text()).toContain("approves of your mod list");
+  });
+});
+
+// ── the saved sets are made legible rather than tidied away ────────────────
+
+describe("what a saved set says about itself", () => {
+  const pack = (over: Record<string, unknown>) => ({ ...PACK, ...over });
+
+  async function show(rows: unknown[]) {
+    setup(withCan(ALL_POWERS));
+    packs = rows;
+    render(<Modpacks />);
+    await waitFor(() => expect(screen.queryByText("Big Pack")).not.toBeNull(), WAIT);
+  }
+
+  it("says when no mod in the set records a version", async () => {
+    /**
+     * **566 of 569 production `ModpackMod` rows carry no `versionId`.** That is not
+     * cosmetic: with no pin, applying a set installs each mod's *newest* matching build
+     * rather than the one the pack shipped, so two applies of the same set a month apart
+     * put different jars on the server. Pinning them is a later increment; saying so stops
+     * "apply the pack" reading as reproducible when it is not.
+     */
+    await show([PACK]);
+    expect(text()).toContain("No mod in this set records a version");
+    expect(text()).toMatch(/installs the newest matching build/);
+  });
+
+  it("counts the unpinned ones when only some are", async () => {
+    await show([
+      pack({
+        mods: [
+          { id: "m1", modrinthId: "a", slug: "sodium", name: "Sodium", versionId: "v1" },
+          { id: "m2", modrinthId: "b", slug: "lithium", name: "Lithium", versionId: null },
+        ],
+      }),
+    ]);
+    expect(text()).toContain("1 of 2 mods record no version");
+  });
+
+  it("says nothing about pins when every mod has one", async () => {
+    // The complement: an unconditional note would make a fully pinned set read as a
+    // problem, which is the "absent reading shown as a disagreement" trap in reverse.
+    await show([
+      pack({
+        mods: [{ id: "m1", modrinthId: "a", slug: "sodium", name: "Sodium", versionId: "v1" }],
+      }),
+    ]);
+    expect(text()).not.toMatch(/record no version/);
+    expect(text()).not.toMatch(/No mod in this set records a version/);
+  });
+
+  it("says when the set records no target Minecraft version", async () => {
+    // Production has a set named `a` with four mods and no target version, and the card
+    // said nothing about it — so the one fact that decides what Apply would do was absent
+    // exactly where it was missing. The apply falls back to `ServerConfig`, so this is not
+    // broken; it was unstated.
+    await show([pack({ targetMcVersion: null })]);
+    expect(text()).toContain("no version recorded");
+  });
+
+  it("names the version when the set records one", async () => {
+    await show([pack({ targetMcVersion: "26.1.2" })]);
+    expect(text()).toContain("MC 26.1.2");
+    expect(text()).not.toContain("no version recorded");
   });
 });
 

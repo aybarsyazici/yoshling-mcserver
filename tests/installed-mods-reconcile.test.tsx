@@ -20,12 +20,23 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ALL_POWERS, NO_POWERS, gamesState, installBrowserStubs } from "./helpers/dom";
 import type { GamesState } from "@/lib/use-games";
-import type { InventoryEntry, ModInventory } from "@/lib/mod-inventory";
+import type { AppliedPack } from "@/lib/modpack-applied";
+import type { InstalledReading, InventoryEntry } from "@/lib/mod-inventory";
 
 const stub = vi.hoisted(() => ({ games: null as unknown }));
 vi.mock("@/lib/use-games", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/use-games")>()),
   useGames: () => stub.games,
+}));
+
+/**
+ * The surface mounts the two Modrinth searches as dialogs. Both reach `ModDetailDialog`,
+ * which pulls in `html-react-parser` → the ESM-only `domhandler`, so on this project's
+ * Node 20.12 collecting the file dies with `ERR_REQUIRE_ESM` before a test runs. Stubbed
+ * for the same reason as in `tests/mods-surfaces.test.tsx`; it carries no write control.
+ */
+vi.mock("@/components/mod-detail-dialog", () => ({
+  ModDetailDialog: ({ open }: { open: boolean }) => (open ? <div>mod detail</div> : null),
 }));
 
 const toasts: { kind: string; text: string }[] = [];
@@ -60,9 +71,9 @@ const WORLDMAP = "xaeroworldmap-fabric-26.1.2-1.40.18.jar";
 const fetches: string[] = [];
 const deletes: string[] = [];
 /** What the next `GET /api/mods/installed` answers. Replaced per test. */
-let inventory: ModInventory;
+let inventory: InstalledReading;
 /** Answers for a second read, when a test needs the page to change underneath itself. */
-let nextInventory: ModInventory | null = null;
+let nextInventory: InstalledReading | null = null;
 
 function entry(over: Partial<InventoryEntry> & { fileName: string }): InventoryEntry {
   return {
@@ -86,7 +97,7 @@ function entry(over: Partial<InventoryEntry> & { fileName: string }): InventoryE
 }
 
 /** A reconcile built from its entries, the way the route derives the groups from them. */
-function inv(mods: InventoryEntry[], over: Partial<ModInventory> = {}): ModInventory {
+function inv(mods: InventoryEntry[], over: Partial<InstalledReading> = {}): InstalledReading {
   const named = (state: InventoryEntry["state"]) =>
     mods.filter((m) => m.state === state).map((m) => m.fileName);
   return {
@@ -98,6 +109,25 @@ function inv(mods: InventoryEntry[], over: Partial<ModInventory> = {}): ModInven
     modsDirPresent: true,
     hashed: mods.some((m) => m.sha512 != null),
     totalBytes: mods.reduce((n, m) => n + (m.sizeBytes ?? 0), 0),
+    // Production's state today: no pack has ever been applied from the dashboard, and the
+    // server is configured for 26.1.2 Fabric.
+    pack: null,
+    server: { mcVersion: "26.1.2", loader: "fabric" },
+    ...over,
+  };
+}
+
+/** A recorded `apply_modpack`, as `/api/mods/installed` projects it. */
+function applied(over: Partial<AppliedPack> = {}): AppliedPack {
+  return {
+    packId: "pack-1",
+    name: "Vanilla Perfected",
+    appliedAt: "2026-09-30T10:00:00.000Z",
+    appliedByName: "Aybars",
+    installed: 2,
+    total: 2,
+    mcVersion: "26.1.2",
+    loader: "fabric",
     ...over,
   };
 }
@@ -118,12 +148,26 @@ function setup(over: Partial<GamesState> = {}) {
       }
       fetches.push(u);
       if (u.startsWith("/api/mods/installed")) {
-        const answer = fetches.length > 1 && nextInventory ? nextInventory : inventory;
+        const reads = fetches.filter((f) => f.startsWith("/api/mods/installed")).length;
+        const answer = reads > 1 && nextInventory ? nextInventory : inventory;
         return json(200, answer);
+      }
+      // What the Add-a-mod dialog's search needs. Stubbed so that *whether it was asked
+      // for* is a fact this file can read — the dialog must not run a debounced Modrinth
+      // search behind a page nobody has opened it on.
+      if (u === "/api/mods/categories") return json(200, []);
+      if (u === "/api/modpacks") return json(200, []);
+      if (u.startsWith("/api/mods/search")) {
+        return json(200, { hits: [], total_hits: 0, filter: { mcVersion: "26.1.2", loader: "fabric" } });
       }
       return json(404, { error: `unstubbed ${u}` });
     })
   );
+}
+
+/** How many times the page has read the mods directory. */
+function reads(): number {
+  return fetches.filter((f) => f.startsWith("/api/mods/installed")).length;
 }
 
 function text(): string {
@@ -140,6 +184,29 @@ function text(): string {
  */
 function band(kind: string): string | null {
   const el = document.querySelector(`[data-band="${kind}"]`);
+  return el ? (el.textContent ?? "") : null;
+}
+
+/**
+ * The text inside one provenance group, and the scoping is load-bearing for the same
+ * reason as `band()`.
+ *
+ * The provenance claim is carried by the **grouping** rather than by a badge on every row —
+ * "which of these did the pack put there and which did we add ourselves" is the question
+ * `InstalledMod.source` finally answers, and four identical-looking pills would bury it. So
+ * the assertion has to be "this mod is inside the From-a-pack section", which
+ * `document.body.textContent` cannot express: a heading and a row a few pixels below it are
+ * the same string to it. `data-group` is what makes a section findable. **If you add a
+ * group, give it a `kind`.**
+ */
+function group(kind: string): string | null {
+  const el = document.querySelector(`[data-group="${kind}"]`);
+  return el ? (el.textContent ?? "") : null;
+}
+
+/** The pack strip at the top of the page: server state, not a library item. */
+function packHeader(): string | null {
+  const el = document.querySelector("[data-pack-header]");
   return el ? (el.textContent ?? "") : null;
 }
 
@@ -270,7 +337,16 @@ describe("the all-agree case", () => {
     expect(text()).toContain("3 jars in the mods folder");
   });
 
-  it("shows all three rows as mods, with their provenance", async () => {
+  it("shows all three rows as mods, each in its provenance group", async () => {
+    /**
+     * **Provenance, per row, asserted inside the group that makes the claim.**
+     *
+     * This used to check that the page text contained the three chip labels — "Pack",
+     * "Installed on its own", "source not recorded" — which is satisfied by a page that
+     * renders all three strings somewhere and attaches them to the wrong rows. The claim
+     * that matters is *which* mod is in which group, and that is only expressible against
+     * the group element.
+     */
     inventory = inv([
       entry({ fileName: FABRIC, source: "manual" }),
       entry({ fileName: MINIMAP, name: "Xaero's Minimap", source: "pack" }),
@@ -279,10 +355,50 @@ describe("the all-agree case", () => {
     setup();
     render(<InstalledMods />);
     await waitFor(() => expect(text()).toContain("Xaero's World Map"), WAIT);
-    expect(text()).toContain("Installed on its own");
-    expect(text()).toContain("Pack");
-    // A row written before the column existed is not labelled as either.
-    expect(text()).toContain("source not recorded");
+
+    expect(group("pack")).toContain("Xaero's Minimap");
+    expect(group("pack")).not.toContain("Fabric API");
+    expect(group("manual")).toContain("Fabric API");
+    expect(group("manual")).not.toContain("Xaero's Minimap");
+    // A row written before the column existed is in neither, and is not labelled as either.
+    expect(group("unrecorded")).toContain("Xaero's World Map");
+    expect(group("unrecorded")).not.toContain("Fabric API");
+
+    // The headings say what each group means, so the distinction is readable without
+    // knowing the data model.
+    expect(group("pack")).toMatch(/From a pack/);
+    expect(group("manual")).toMatch(/Added one at a time/);
+    expect(group("unrecorded")).toMatch(/No record of how these arrived/);
+  });
+
+  it("raises no group for a provenance nothing has", async () => {
+    // The complement: rendering all five headings unconditionally passes every assertion
+    // above, and tells somebody with three hand-installed mods that a pack put some there.
+    inventory = inv([entry({ fileName: FABRIC, source: "manual" })]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    expect(group("manual")).toContain("Fabric API");
+    expect(group("pack")).toBeNull();
+    expect(group("unrecorded")).toBeNull();
+    expect(group("missing")).toBeNull();
+    expect(group("untracked")).toBeNull();
+  });
+
+  it("counts where the jars came from in one sentence", async () => {
+    // The measured split, which nothing in this app could state before `source` existed:
+    // after an apply, the only record of the difference was in whoever had been watching.
+    inventory = inv([
+      entry({ fileName: FABRIC, source: "manual" }),
+      entry({ fileName: MINIMAP, name: "Xaero's Minimap", source: "pack" }),
+      entry({ fileName: WORLDMAP, name: "Xaero's World Map", source: "pack" }),
+    ]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    expect(text()).toMatch(/3 jars in the mods folder/);
+    expect(text()).toMatch(/2 from a pack/);
+    expect(text()).toMatch(/1 added one at a time/);
   });
 
   it("names who added it and when", async () => {
@@ -397,6 +513,129 @@ describe("hashing is something the page asks for", () => {
   });
 });
 
+describe("no row is busy until one is being removed", () => {
+  /**
+   * **A mutation survived the first version of this**, and the fix was to make the state
+   * visible rather than to add an assertion.
+   *
+   * `removing` is `null` when nothing is being removed, and an untracked entry's `id` is
+   * also `null` — so a bare `removing === mod.id` is `true` for **every** untracked row.
+   * The expression is guarded with `mod.id != null &&`, but with the only consequence being
+   * a label inside a button that is *itself* gated on `mod.id`, dropping the guard changed
+   * nothing any test could see. A guard nothing can observe is a comment, not a guard. The
+   * row carries `data-busy` now, so it is pinned.
+   */
+  it("leaves an untracked row not busy", async () => {
+    inventory = inv([
+      entry({ fileName: FABRIC }),
+      entry({
+        fileName: "stranger.jar",
+        id: null,
+        name: "stranger.jar",
+        state: "untracked",
+      }),
+    ]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("stranger.jar"), WAIT);
+    const rows = [...document.querySelectorAll("li[data-state]")];
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.getAttribute("data-busy"))).toEqual([null, null]);
+  });
+
+  it("marks exactly the row whose remove is in flight", async () => {
+    // The complement: `data-busy={undefined}` always would pass the row above. Driven with
+    // a DELETE that does not answer until the test lets it, so the in-flight state is
+    // observable rather than raced.
+    inventory = inv([
+      entry({ fileName: FABRIC, name: "Fabric API" }),
+      entry({ fileName: MINIMAP, name: "Xaero's Minimap" }),
+    ]);
+    stub.games = gamesState({ can: ALL_POWERS });
+    // A gate the test releases, so "this row is busy" is a separate observation rather
+    // than a race against a resolved promise. An array rather than a `let`, because a
+    // closure assignment is invisible to TypeScript's narrowing and `release?.()` then
+    // reads as a call on `never`.
+    const gates: (() => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (init?.method === "DELETE") {
+          deletes.push(u);
+          await new Promise<void>((r) => gates.push(r));
+          return json(200, { success: true });
+        }
+        fetches.push(u);
+        return json(200, inventory);
+      })
+    );
+
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove" })[0]);
+
+    await waitFor(() => {
+      const busy = [...document.querySelectorAll("li[data-busy='true']")];
+      expect(busy).toHaveLength(1);
+      expect(busy[0].textContent).toContain("Fabric API");
+    }, WAIT);
+    // And only that row: the other one must not read as busy because `removing` is set.
+    expect(document.querySelectorAll("li[data-busy='true']")).toHaveLength(1);
+    gates.shift()?.();
+  });
+});
+
+// ── Add a mod is an action, not a place ────────────────────────────────────
+
+describe("the mod search", () => {
+  it("does not run until Add a mod is pressed", async () => {
+    /**
+     * It was the page's **first and default tab** — "Browse mods" — and until 2026-10-02 it
+     * could not install anything, so the page opened on a debounced Modrinth search whose
+     * only outcome was adding a mod to a list. Searching is an action now, so the request
+     * only happens when somebody asks for one.
+     */
+    inventory = inv([entry({ fileName: FABRIC })]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    expect(fetches.filter((u) => u.startsWith("/api/mods/search"))).toEqual([]);
+
+    fireEvent.click(button("Add a mod")!);
+    await waitFor(
+      () => expect(fetches.some((u) => u.startsWith("/api/mods/search"))).toBe(true),
+      WAIT
+    );
+  });
+
+  it("re-reads the directory when the dialog closes", async () => {
+    /**
+     * An install happens inside the dialog and the list outside is a **reading** of the
+     * directory — it must not be told what landed, it has to look. Same argument as the
+     * per-row remove, which re-reads rather than splicing: an install whose row was created
+     * and whose write failed shows up as `missing`, and assuming would hide exactly that.
+     */
+    inventory = inv([entry({ fileName: FABRIC })]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    expect(reads()).toBe(1);
+
+    fireEvent.click(button("Add a mod")!);
+    await waitFor(
+      () => expect(document.querySelector("[data-slot='dialog-content']")).not.toBeNull(),
+      WAIT
+    );
+    // The dialog's own close control — its accessible name comes from the `sr-only` span.
+    // Scoped by role rather than by text because the page behind the dialog still carries
+    // the words "Add a mod" on the button that opened it, and `queryByText` throws on two
+    // matches rather than returning either.
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(reads()).toBe(2), WAIT);
+  });
+});
+
 describe("a remove re-reads the directory instead of assuming", () => {
   it("re-reconciles after a successful delete", async () => {
     // A `removeMod` whose `unlink` hit ENOENT deletes the row and leaves the jar, which the
@@ -414,6 +653,103 @@ describe("a remove re-reads the directory instead of assuming", () => {
     await waitFor(() => expect(deletes).toEqual([`/api/mods/row-${FABRIC}`]), WAIT);
     await waitFor(() => expect(fetches).toHaveLength(2), WAIT);
     await waitFor(() => expect(text()).toMatch(/not in this list/i), WAIT);
+  });
+});
+
+// ── the pack, as a header ───────────────────────────────────────────────────
+
+describe("the pack strip states server state, not a library item", () => {
+  it("names the pack a recorded apply names, with when and by whom", async () => {
+    inventory = inv([entry({ fileName: FABRIC, source: "pack" })], { pack: applied() });
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(packHeader()).toContain("Vanilla Perfected"), WAIT);
+    expect(packHeader()).toMatch(/Applied/);
+    expect(packHeader()).toMatch(/by Aybars/);
+    // The counts the apply itself reported, which are a different claim from the counts on
+    // disk — and the only place a shortfall survives once the ledger record has aged out.
+    expect(packHeader()).toMatch(/2 of 2 mods installed/);
+  });
+
+  it("says no pack has been applied rather than naming one", async () => {
+    // Production's state today: three mods, each installed on its own.
+    inventory = inv([entry({ fileName: FABRIC, source: "manual" })]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    expect(packHeader()).toContain("No pack applied");
+    expect(packHeader()).toMatch(/added on its own, not by a pack/);
+  });
+
+  it("reports pack jars with no recorded apply as exactly that", async () => {
+    /**
+     * The third state, and the one worth keeping: jars put there by an apply that predates
+     * the record. "No pack" would be false and a pack name would be invented, so it says
+     * what is known — some jars came from an apply, and nothing here knows which pack.
+     */
+    inventory = inv([
+      entry({ fileName: FABRIC, source: "pack" }),
+      entry({ fileName: MINIMAP, name: "Xaero's Minimap", source: "pack" }),
+    ]);
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toContain("Fabric API"), WAIT);
+    expect(packHeader()).toContain("A pack was applied, but not from here");
+    expect(packHeader()).toMatch(/2 jars on this server/);
+    expect(packHeader()).toMatch(/no record of which pack or when/);
+    expect(packHeader()).not.toContain("No pack applied");
+  });
+
+  it("reports a pack built for a Minecraft version the server no longer runs", async () => {
+    /**
+     * Real drift and previously invisible: the version dropdown can be changed after a pack
+     * is applied and the jars do not move with it.
+     */
+    inventory = inv([entry({ fileName: FABRIC, source: "pack" })], {
+      pack: applied({ mcVersion: "1.21.1" }),
+      server: { mcVersion: "26.1.2", loader: "fabric" },
+    });
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(packHeader()).toContain("Vanilla Perfected"), WAIT);
+    expect(packHeader()).toMatch(/applied for Minecraft 1\.21\.1/);
+    expect(packHeader()).toMatch(/the server is set to 26\.1\.2/);
+  });
+
+  it("says nothing about versions when the two agree", async () => {
+    // The complement: an always-rendered note would make every healthy server read as
+    // drifted — the "absent reading shown as a disagreement" trap, in reverse.
+    inventory = inv([entry({ fileName: FABRIC, source: "pack" })], { pack: applied() });
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(packHeader()).toContain("Vanilla Perfected"), WAIT);
+    expect(packHeader()).not.toMatch(/applied for Minecraft/);
+  });
+
+  it("says nothing about versions when the server records none", async () => {
+    inventory = inv([entry({ fileName: FABRIC, source: "pack" })], {
+      pack: applied({ mcVersion: "1.21.1" }),
+      server: null,
+    });
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(packHeader()).toContain("Vanilla Perfected"), WAIT);
+    expect(packHeader()).not.toMatch(/applied for Minecraft/);
+  });
+
+  it("offers no Remove pack, because nothing removes a set as one operation", async () => {
+    /**
+     * Deliberately absent, and pinned so it does not get added by reflex. N client-side
+     * DELETEs would be a bulk destructive action with no rollback archive, no operation
+     * record and a partial-failure state this page could not report — this project's named
+     * defect class. Per-row Remove is the way out; Change pack replaces the set.
+     */
+    inventory = inv([entry({ fileName: FABRIC, source: "pack" })], { pack: applied() });
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(packHeader()).toContain("Vanilla Perfected"), WAIT);
+    expect(button(/Remove pack/i)).toBeNull();
+    expect(button("Change pack")).not.toBeNull();
   });
 });
 

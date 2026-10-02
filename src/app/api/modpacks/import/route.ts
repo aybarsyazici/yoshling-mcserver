@@ -4,6 +4,7 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { getProjectVersions, getProject } from "@/lib/modrinth";
+import { chooseModpackVersion, modDepsOf, packNeeds } from "@/lib/modpack-resolve";
 
 // Creating a modpack needs a capability, not just world access — see the note in
 // `src/app/api/modpacks/route.ts`.
@@ -41,10 +42,15 @@ export async function POST(request: NextRequest) {
     // Falls back to the newest build when the server's version has no release, because a
     // pack you cannot install yet is still worth having on the shelf — but the response
     // says which happened rather than leaving the caller to infer it from a number.
+    //
+    // **The choice lives in `src/lib/modpack-resolve.ts`**, because
+    // `GET /api/modpacks/preview` has to resolve the *same* build: it shows the user which
+    // Minecraft version a pack needs before anything is created, and a preview that picked
+    // a different build from the import behind it would make the comparison somebody read
+    // not the comparison that was applied.
     const cfg = await db.serverConfig.findUnique({ where: { id: "main" } });
     const want = cfg?.mcVersion ?? null;
-    const matching = want ? versions.find((v) => v.game_versions?.includes(want)) : undefined;
-    const version = matching ?? versions[0];
+    const { version, matchedServerVersion } = chooseModpackVersion(versions, want);
     if (!version) {
       return NextResponse.json(
         { error: "No versions found for this modpack" },
@@ -52,21 +58,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const targetMcVersion = version.game_versions[0] || "unknown";
-    const targetLoader = version.loaders[0] || "fabric";
+    const { mcVersion: targetMcVersion, loader: targetLoader } = packNeeds(version);
 
-    // Modpack versions list their included mods as dependencies (embedded or required)
-    const modDeps = version.dependencies.filter(
-      (d: any) => (d.dependency_type === "required" || d.dependency_type === "embedded") && d.project_id
-    );
+    // Modpack versions list their included mods as dependencies (embedded or required);
+    // `modDepsOf` applies that rule, shared with the preview so the count the preview
+    // promises is the count this creates.
+    const modDeps = modDepsOf(version);
 
     // Fetch project info for each dependency
     const mods = await Promise.all(
-      modDeps.map(async (dep: any) => {
+      modDeps.map(async (dep) => {
         try {
-          const project = await getProject(dep.project_id!);
+          const project = await getProject(dep.projectId);
           return {
-            modrinthId: (project as any).id || project.project_id || dep.project_id,
+            modrinthId: (project as any).id || project.project_id || dep.projectId,
             slug: project.slug,
             name: project.title,
           };
@@ -103,7 +108,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       // Say which build was chosen and why, so "why is this pack 26.3?" is answerable
       // from the response instead of from the Modrinth version list.
-      matchedServerVersion: Boolean(matching),
+      matchedServerVersion,
       serverMcVersion: want,
       ...modpack,
       targetMcVersion,

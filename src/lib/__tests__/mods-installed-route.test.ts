@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ModInventory } from "@/lib/mod-inventory";
+import type { InstalledReading } from "@/lib/mod-inventory";
 
 /**
  * **`GET /api/mods/installed`, driven as a route over a real mods directory.**
@@ -48,6 +48,25 @@ let users: { id: string; username: string }[] = [];
 const modQueries: unknown[] = [];
 /** Every `user.findMany` the route ran — one for the whole page, not one per row. */
 const userQueries: unknown[] = [];
+/**
+ * The `Activity` row the route finds, if any, plus the query it used to find it.
+ *
+ * The row is how "which pack is on the server" is answered, and the *query* matters as
+ * much: `Activity` grows by one row per installed mod, so a 166-mod apply adds 332 of them
+ * and this lookup has to be a `findFirst` on the newest `apply_modpack` rather than a scan.
+ */
+let appliedRow: {
+  action: string;
+  details: string;
+  createdAt: Date;
+  user?: { username: string | null } | null;
+} | null = null;
+const activityQueries: unknown[] = [];
+/** `null` models a fresh install with no `ServerConfig` row. */
+let serverConfig: { mcVersion: string; modLoader: string } | null = {
+  mcVersion: "26.1.2",
+  modLoader: "fabric",
+};
 
 vi.mock("@/lib/auth", () => ({
   auth: vi.fn(async () =>
@@ -69,6 +88,15 @@ vi.mock("@/lib/db", () => ({
         const where = args as { where: { id: { in: string[] } } };
         return users.filter((u) => where.where.id.in.includes(u.id));
       }),
+    },
+    activity: {
+      findFirst: vi.fn(async (args: unknown) => {
+        activityQueries.push(args);
+        return appliedRow;
+      }),
+    },
+    serverConfig: {
+      findUnique: vi.fn(async () => serverConfig),
     },
   },
 }));
@@ -94,9 +122,11 @@ function row(over: Partial<Row> & { fileName: string }): Row {
   };
 }
 
-async function get(qs = ""): Promise<{ status: number; body: ModInventory & { error?: string } }> {
+async function get(
+  qs = ""
+): Promise<{ status: number; body: InstalledReading & { error?: string } }> {
   const res = await GET(new Request(`http://localhost/api/mods/installed${qs}`) as never);
-  return { status: res.status, body: (await res.json()) as ModInventory & { error?: string } };
+  return { status: res.status, body: (await res.json()) as InstalledReading & { error?: string } };
 }
 
 beforeEach(async () => {
@@ -108,6 +138,9 @@ beforeEach(async () => {
   users = [{ id: "u1", username: "Aybars" }];
   modQueries.length = 0;
   userQueries.length = 0;
+  appliedRow = null;
+  serverConfig = { mcVersion: "26.1.2", modLoader: "fabric" };
+  activityQueries.length = 0;
   await rm(ROOT, { recursive: true, force: true });
   await mkdir(MODS, { recursive: true });
 });
@@ -231,6 +264,93 @@ describe("an empty server is not an error", () => {
     expect(status).toBe(200);
     expect(body.modsDirPresent).toBe(false);
     expect(body.mods).toEqual([]);
+  });
+});
+
+describe("the last recorded modpack apply travels with the reading", () => {
+  /**
+   * **One request, two readers.** The pack strip at the top of the page and the list under
+   * it both come out of this response, so they cannot disagree about the same server —
+   * which is what two components each fetching this endpoint would allow, and is the same
+   * drift the reconcile's three groups are derived from one list to avoid.
+   */
+  it("reports the pack a recorded apply names", async () => {
+    appliedRow = {
+      action: "apply_modpack",
+      details: JSON.stringify({
+        game: "minecraft",
+        packId: "pack-1",
+        packName: "Vanilla Perfected",
+        installed: 78,
+        total: 81,
+        mcVersion: "26.1.2",
+        loader: "fabric",
+      }),
+      createdAt: new Date("2026-10-01T12:00:00Z"),
+      user: { username: "Aybars" },
+    };
+    const { body } = await get();
+    expect(body.pack).toEqual({
+      packId: "pack-1",
+      name: "Vanilla Perfected",
+      appliedAt: "2026-10-01T12:00:00.000Z",
+      appliedByName: "Aybars",
+      installed: 78,
+      total: 81,
+      mcVersion: "26.1.2",
+      loader: "fabric",
+    });
+  });
+
+  it("answers null when no apply has been recorded", async () => {
+    // Production's state today: three mods, each installed on its own, no pack ever
+    // applied from this dashboard. `null` is what makes the header say so instead of
+    // naming a pack nobody applied.
+    const { body } = await get();
+    expect(body.pack).toBe(null);
+  });
+
+  it("asks for the newest apply_modpack row, not for the whole log", async () => {
+    // `Activity` gains a row per installed mod, so a 166-mod apply adds 332. A scan here
+    // would read the lot on every page load.
+    await get();
+    expect(activityQueries).toEqual([
+      {
+        where: { action: "apply_modpack" },
+        orderBy: { createdAt: "desc" },
+        include: { user: { select: { username: true } } },
+      },
+    ]);
+  });
+
+  it("answers null for a row whose details will not parse", async () => {
+    // `Activity.details` is free-text JSON written by several routes over several months.
+    // A row this cannot read is not a record to state anything from, and "Unknown pack"
+    // would put a pack on the header that nobody applied.
+    appliedRow = {
+      action: "apply_modpack",
+      details: "{not json",
+      createdAt: new Date("2026-10-01T12:00:00Z"),
+      user: { username: "Aybars" },
+    };
+    expect((await get()).body.pack).toBe(null);
+  });
+});
+
+describe("what the server is configured to run travels with it too", () => {
+  it("reports the configured version and loader", async () => {
+    // So the header can compare the pack's target against it — real drift, because the
+    // version dropdown can be changed after a pack is applied and the jars do not move.
+    const { body } = await get();
+    expect(body.server).toEqual({ mcVersion: "26.1.2", loader: "fabric" });
+  });
+
+  it("reports null when there is no ServerConfig row", async () => {
+    // A fresh install. It has to stay distinguishable from "configured, and it agrees":
+    // an absent reading rendered as a disagreement is the mistake every settings surface
+    // in this app is built to avoid.
+    serverConfig = null;
+    expect((await get()).body.server).toBe(null);
   });
 });
 
