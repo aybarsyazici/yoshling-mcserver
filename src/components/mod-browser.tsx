@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { ModCard } from "@/components/mod-card";
 import { Button } from "@/components/ui/button";
+import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
 import type { ModrinthProject } from "@/lib/modrinth";
 
 interface Category {
@@ -27,6 +28,8 @@ interface Modpack {
 }
 
 export function ModBrowser() {
+  // One poll for the whole grid, not one per card — see `ModCardProps.canAddToPack`.
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ModrinthProject[]>([]);
   const [loading, setLoading] = useState(false);
@@ -211,7 +214,7 @@ export function ModBrowser() {
           </p>
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
             {results.map((mod) => (
-              <ModCard key={mod.project_id} mod={mod} />
+              <ModCard key={mod.project_id} mod={mod} canAddToPack={can.modsInstall} />
             ))}
           </div>
 

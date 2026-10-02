@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
 
 interface ModpackMod {
   id: string;
@@ -85,6 +86,8 @@ interface InstallReport {
 }
 
 export function Modpacks() {
+  // `can.modsInstall` / `can.modsRemove` only; see `CAPABILITY_POLL_MS` for the interval.
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const [modpacks, setModpacks] = useState<Modpack[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -101,11 +104,18 @@ export function Modpacks() {
   const [showInstallConfirm, setShowInstallConfirm] = useState<string | null>(null);
   const [editingPack, setEditingPack] = useState<Modpack | null>(null);
   const [removeWarning, setRemoveWarning] = useState<{ mod: ModpackMod; dependents: string[] } | null>(null);
-  const [showImport, setShowImport] = useState(false);
-  const [importQuery, setImportQuery] = useState("");
-  const [importResults, setImportResults] = useState<any[]>([]);
-  const [importLoading, setImportLoading] = useState(false);
-  const [importing, setImporting] = useState<string | null>(null);
+  /**
+   * The dependency scan in flight, so it can be seen and not started twice.
+   *
+   * `checkDependentsAndRemove` asks `/api/mods/dependencies` once per *other* mod in the
+   * pack, sequentially — 74 requests on a 75-mod pack. There was no feedback of any kind:
+   * the Remove button stayed live and nothing moved, so the only reading available was
+   * "this is broken", and clicking a second Remove started a second scan on top of the
+   * first.
+   */
+  const [depScan, setDepScan] = useState<{ modId: string; done: number; total: number } | null>(
+    null
+  );
 
   useEffect(() => {
     fetchModpacks();
@@ -169,7 +179,8 @@ export function Modpacks() {
     }
   }
 
-  async function handleRemoveMod(modpackId: string, modId: string) {
+  /** True when the mod is gone from the pack. The callers prune their own copy on that. */
+  async function handleRemoveMod(modpackId: string, modId: string): Promise<boolean> {
     const res = await fetch(`/api/modpacks/${modpackId}/mods?modId=${modId}`, {
       method: "DELETE",
     });
@@ -181,66 +192,47 @@ export function Modpacks() {
             : p
         )
       );
+      return true;
     }
+    // No `else` at all before this, so a 403 or a 500 produced total silence — the two
+    // siblings above (`handleCreate`, `handleDelete`) both read the body and say what
+    // happened. Returning false matters as much as the toast: both callers used to prune
+    // the row out of the edit dialog unconditionally, so a refused remove showed an error
+    // and the mod vanished from the list it was still in.
+    const d = await res.json().catch(() => ({}));
+    toast.error(d.error || "Couldn't remove that mod from the modpack");
+    return false;
   }
 
   async function checkDependentsAndRemove(pack: Modpack, mod: ModpackMod) {
     const otherMods = pack.mods.filter((m) => m.id !== mod.id);
     const dependents: string[] = [];
 
-    for (const other of otherMods) {
-      try {
-        const res = await fetch(`/api/mods/dependencies?modrinthId=${other.modrinthId}`);
-        const data = await res.json();
-        const deps = data.dependencies || [];
-        if (deps.some((d: any) => d.modrinthId === mod.modrinthId)) {
-          dependents.push(other.name);
-        }
-      } catch {}
+    // One request per other mod, sequential, so the count is the honest unit of progress.
+    // What this computes is unchanged; it just says where it is while it does it.
+    setDepScan({ modId: mod.id, done: 0, total: otherMods.length });
+    try {
+      for (const other of otherMods) {
+        try {
+          const res = await fetch(`/api/mods/dependencies?modrinthId=${other.modrinthId}`);
+          const data = await res.json();
+          const deps = data.dependencies || [];
+          if (deps.some((d: any) => d.modrinthId === mod.modrinthId)) {
+            dependents.push(other.name);
+          }
+        } catch {}
+        setDepScan((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+      }
+    } finally {
+      setDepScan(null);
     }
 
     if (dependents.length > 0) {
       setRemoveWarning({ mod, dependents });
-    } else {
-      await handleRemoveMod(pack.id, mod.id);
+    } else if (await handleRemoveMod(pack.id, mod.id)) {
       setEditingPack((prev) =>
         prev ? { ...prev, mods: prev.mods.filter((m) => m.id !== mod.id) } : null
       );
-    }
-  }
-
-  async function searchModrinch() {
-    setImportLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (importQuery) params.set("q", importQuery);
-      const res = await fetch(`/api/modpacks/search?${params.toString()}`);
-      const data = await res.json();
-      setImportResults(data.hits || []);
-    } finally {
-      setImportLoading(false);
-    }
-  }
-
-  async function handleImport(modrinthId: string, name: string) {
-    setImporting(modrinthId);
-    try {
-      const res = await fetch("/api/modpacks/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modrinthId, name }),
-      });
-      if (res.ok) {
-        const pack = await res.json();
-        setModpacks((prev) => [pack, ...prev]);
-        toast.success(`Imported "${name}" with ${pack.mods.length} mods`);
-        setShowImport(false);
-      } else {
-        const data = await res.json();
-        toast.error(data.error || "Failed to import");
-      }
-    } finally {
-      setImporting(null);
     }
   }
 
@@ -369,16 +361,26 @@ export function Modpacks() {
         <p className="text-sm text-muted-foreground">
           Create modpacks to group mods together, or import one from the Modrinth tab
         </p>
-        <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>
+        {/* The route behind this checks `mods.install`, so a MEMBER was shown a dialog
+            whose Create button answered a bare 403. Hidden rather than disabled: there is
+            nothing to read in a disabled Create, and the Install/Delete controls below take
+            the same approach. */}
+        {can.modsInstall && <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>}
       </div>
 
       <div className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-4">
         <p className="text-sm font-medium text-chart-5">Warning</p>
+        {/* This used to end "it's recommended to **delete the world folder** and start
+            fresh" — advice to destroy the save, on the page whose own install takes a
+            world archive precisely so the save survives. The replacement states what the
+            install actually does: `/api/mods/install-modpack` runs
+            `tar -czf … -C MC_DIR world` before touching anything, and that archive's only
+            member is `world`, so the mods folder is not in it. */}
         <p className="text-xs text-muted-foreground mt-1">
-          Installing a modpack to the server will <strong>remove all currently installed mods</strong> and
-          replace them with the modpack&apos;s mods. Changing mods on an existing world can cause
-          corruption or loss of modded items/blocks. It&apos;s recommended to <strong>delete the world
-          folder</strong> and start fresh when switching modpacks.
+          Installing a modpack to the server <strong>removes every mod currently
+          installed</strong> and replaces them with the modpack&apos;s mods. Changing mods under
+          an existing world can lose modded items and blocks. The install archives the world
+          first as a rollback point; that archive holds the world only, not the mods folder.
         </p>
       </div>
 
@@ -417,13 +419,24 @@ export function Modpacks() {
                     </p>
                   </div>
                   <div className="flex gap-2 flex-shrink-0">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setEditingPack(pack)}
-                    >
-                      Edit
-                    </Button>
+                    {/* Edit opens one thing — a list with a Remove beside each mod — so it
+                        is gated on `mods.remove`, the capability those Removes need. The
+                        names it would show are already on the card as badges below, so a
+                        viewer who cannot remove loses no information with it hidden. */}
+                    {can.modsRemove && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setEditingPack(pack)}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {/* Export is NOT gated, and that is checked rather than assumed:
+                        `/api/modpacks/[id]/export` calls `denyGame` and no `hasPermission`,
+                        so it answers a MEMBER. It is a read that returns download links for
+                        the viewer's own launcher, which is the one thing on this page a
+                        read-only account is meant to do. */}
                     <Button
                       size="sm"
                       variant="outline"
@@ -432,20 +445,24 @@ export function Modpacks() {
                     >
                       {exporting === pack.id ? "..." : "Export"}
                     </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => setShowInstallConfirm(pack.id)}
-                      disabled={installing === pack.id || pack.mods.length === 0}
-                    >
-                      {installing === pack.id ? "Installing..." : "Install to Server"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => handleDelete(pack.id)}
-                    >
-                      Delete
-                    </Button>
+                    {can.modsInstall && (
+                      <Button
+                        size="sm"
+                        onClick={() => setShowInstallConfirm(pack.id)}
+                        disabled={installing === pack.id || pack.mods.length === 0}
+                      >
+                        {installing === pack.id ? "Installing..." : "Install to Server"}
+                      </Button>
+                    )}
+                    {can.modsRemove && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleDelete(pack.id)}
+                      >
+                        Delete
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -542,12 +559,16 @@ export function Modpacks() {
             <DialogTitle className="text-destructive">Confirm Installation</DialogTitle>
             <DialogDescription className="pt-2 space-y-2">
               <p>
-                This will <strong>remove ALL currently installed mods</strong> from the server
+                This will <strong>remove every mod currently installed</strong> on the server
                 and replace them with this modpack&apos;s mods.
               </p>
+              {/* Was "Consider deleting the world folder first (Server > Files > world)" —
+                  the same advice-to-destroy-the-save as the banner on the page, and worse
+                  here because this is the last thing read before pressing the button. */}
               <p>
-                If you have an existing world with modded content, it may become corrupted
-                or unplayable. Consider deleting the world folder first (Server &gt; Files &gt; world).
+                If your world has modded content in it, it can lose those items and blocks.
+                The install archives the world first as a rollback point; that archive holds
+                the world only, not the mods folder.
               </p>
               <p className="font-medium">Are you sure?</p>
             </DialogDescription>
@@ -708,7 +729,20 @@ export function Modpacks() {
                     a.click();
                     document.body.removeChild(a);
                   }
-                  toast.success(`Starting download of ${urls.length} mods...`);
+                  /**
+                   * What this loop does is ask the browser N times; whether the browser
+                   * accepts N is not ours to claim. The old copy was
+                   * `toast.success("Starting download of N mods...")`, which asserts every
+                   * one started — and this is a list of up to 166 synthesised anchor
+                   * clicks, so the per-mod Download links below are the recovery and are
+                   * what the sentence now points at. Green also claimed an outcome, so
+                   * `info`.
+                   */
+                  toast.info(
+                    `Requested ${urls.length} download${urls.length === 1 ? "" : "s"}. Your ` +
+                      `browser may not accept them all at once — use the Download link next ` +
+                      `to any mod that did not arrive.`
+                  );
                 }}
               >
                 Download All
@@ -773,7 +807,13 @@ export function Modpacks() {
           <DialogHeader>
             <DialogTitle>Edit &quot;{editingPack?.name}&quot;</DialogTitle>
             <DialogDescription>
-              Remove mods from this modpack.
+              {depScan
+                ? // The count on the button says how far; this says what it is counting.
+                  // Without it the only thing on screen is a number with no noun, for what
+                  // is 74 requests on a 75-mod pack.
+                  `Checking which of the other mods in this pack need this one — ` +
+                  `${depScan.done} of ${depScan.total} checked.`
+                : "Remove mods from this modpack."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 pt-2 max-h-[400px] overflow-y-auto">
@@ -788,12 +828,20 @@ export function Modpacks() {
                   className="flex items-center justify-between py-2 border-b border-border/50 last:border-0"
                 >
                   <span className="text-sm">{mod.name}</span>
+                  {/* Every Remove is dead while a scan runs, not just the one that started
+                      it: the scan is sequential and a second click used to start a second
+                      one over the top. The button that owns the scan carries the count,
+                      because the request total is known up front and is the only honest
+                      unit of progress here. */}
                   <Button
                     size="sm"
                     variant="destructive"
+                    disabled={depScan !== null}
                     onClick={() => checkDependentsAndRemove(editingPack, mod)}
                   >
-                    Remove
+                    {depScan?.modId === mod.id
+                      ? `Checking ${depScan.done}/${depScan.total}...`
+                      : "Remove"}
                   </Button>
                 </div>
               ))
@@ -829,10 +877,13 @@ export function Modpacks() {
               variant="destructive"
               onClick={async () => {
                 if (removeWarning && editingPack) {
-                  await handleRemoveMod(editingPack.id, removeWarning.mod.id);
-                  setEditingPack((prev) =>
-                    prev ? { ...prev, mods: prev.mods.filter((m) => m.id !== removeWarning.mod.id) } : null
-                  );
+                  // Gated on the result for the same reason as the other caller: this used
+                  // to filter the row out whatever the DELETE answered.
+                  if (await handleRemoveMod(editingPack.id, removeWarning.mod.id)) {
+                    setEditingPack((prev) =>
+                      prev ? { ...prev, mods: prev.mods.filter((m) => m.id !== removeWarning.mod.id) } : null
+                    );
+                  }
                   setRemoveWarning(null);
                 }
               }}
@@ -842,79 +893,6 @@ export function Modpacks() {
           </div>
         </DialogContent>
       </Dialog>
-
-      <Dialog open={showImport} onOpenChange={setShowImport}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Import from Modrinth</DialogTitle>
-            <DialogDescription>
-              Search for community modpacks on Modrinth and import their mod list.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Search modpacks (e.g. Fabulously Optimized, Better MC)..."
-                value={importQuery}
-                onChange={(e) => setImportQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && searchModrinch()}
-              />
-              <Button onClick={searchModrinch} disabled={importLoading}>
-                {importLoading ? "..." : "Search"}
-              </Button>
-            </div>
-
-            {importResults.length === 0 && !importLoading ? (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                Search for a modpack to import
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {importResults.map((pack: any) => (
-                  <div
-                    key={pack.project_id}
-                    className="flex items-center gap-3 p-3 rounded-lg border border-border/50 hover:border-primary/30 transition-colors"
-                  >
-                    {pack.icon_url ? (
-                      <img
-                        src={pack.icon_url}
-                        alt=""
-                        className="h-10 w-10 rounded-lg object-cover"
-                      />
-                    ) : (
-                      <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center text-xs font-bold">
-                        {pack.title?.[0]}
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{pack.title}</p>
-                      <p className="text-xs text-muted-foreground line-clamp-1">
-                        {pack.description}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        {formatDownloads(pack.downloads)} downloads
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      disabled={importing === pack.project_id}
-                      onClick={() => handleImport(pack.project_id, pack.title)}
-                    >
-                      {importing === pack.project_id ? "Importing..." : "Import"}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
-}
-
-function formatDownloads(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
 }

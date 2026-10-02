@@ -117,6 +117,65 @@ from `doDaylightCycle` to `advance_time`) and nobody has measured what each new 
 grouped under "Other", with their live value and no help — annotation is additive here, never
 a filter. Adding help for them is real work left undone, not a bug.
 
+## The mods page's write controls — gated 2026-10-02
+
+`/minecraft/mods` had **never** had the fix `CLAUDE.md` records for the power buttons, and it
+is the same defect verbatim: a MEMBER was shown Create Modpack, Edit, Install to Server,
+Delete, Remove, + Add to Pack and Import, and every one answered a bare 403 with nothing on
+screen saying why. None of the four components read a session.
+
+`/api/games/status`'s existing `can` projection now carries **`modsInstall`** and
+**`modsRemove`** beside the three power booleans and `settings`. No new endpoint, no second
+poller: `useGames` already polls this one, and the four components read it (`mod-card.tsx`
+takes it as a required prop from `mod-browser.tsx`, because "Load More" appends 20 cards at a
+time and a hook per card would be 20, 40, 60 pollers for one boolean).
+
+Three things worth not re-deriving:
+
+- **Export is deliberately ungated, and that was measured, not assumed.**
+  `/api/modpacks/[id]/export` calls `denyGame` and **no** `hasPermission`, so it answers a
+  MEMBER — it is a read that hands back download links for the viewer's own launcher, which is
+  the one thing on this page a read-only account is meant to do. Hiding it would have removed
+  a working capability under cover of fixing refused ones. `tests/mods-surfaces.test.tsx` pins
+  its presence for a MEMBER, so a later "tidy the inconsistency" pass fails.
+- **Two flags, not one.** `permissions.ts` keeps `mods.install` and `mods.remove` separate, so
+  the surfaces do too, and each is pinned from both directions — granting one must not grant
+  the other. A single `can.modsInstall || can.modsRemove` passes a MEMBER/MOD pair of tests.
+- **The gate is proven through the rendered DOM**, never by calling `hasPermission`: an
+  assertion on the helper cannot fail when a component stops asking it, which is the only
+  failure that has actually happened here. `tests/mods-can-route.test.ts` is the other half —
+  that the route still *sends* both flags, derived from the real table — because with
+  `useGames` stubbed, a route that dropped `modsInstall` would leave the DOM suite green while
+  hiding Install to Server from an **admin**.
+
+### Dead weight removed in the same pass
+
+- **An unreachable "Import from Modrinth" dialog in `modpacks.tsx`** — 66 lines plus
+  `handleImport`, `searchModrinch` and five state hooks. `setShowImport(true)` was never
+  called anywhere, so `open={showImport}` was permanently false and nothing in it could run.
+  The working import lives in `modpack-browser-modrinth.tsx`, on the page's other sub-tab.
+- **`model ModRequest` and `User.modRequests`** in `prisma/schema.prisma`: zero rows in
+  production, zero references outside the generated client. This is the other half of the
+  cleanup `permissions.ts` records, which deleted `mods.request` for guarding "a request
+  feature that exists in the Prisma schema and nowhere in the code". **The empty table is
+  deliberately left on the production DB** — prod runs no automatic migrations, so dropping it
+  means a hand-run `DROP TABLE` for no gain.
+
+### Copy that was false
+
+- The banner and the install confirm both advised **deleting the world folder** before
+  switching packs — on the page whose own install archives the world first precisely so the
+  save survives (`/api/mods/install-modpack` runs `tar -czf … -C MC_DIR world` and refuses to
+  continue if it fails). Both now state the two checkable facts instead: every installed jar
+  is removed, and the rollback archive's only member is `world`, so **the mods folder is not
+  in it**.
+- `Download All` toasted `success("Starting download of N mods...")` for a loop that
+  synthesises up to 166 anchor clicks — a claim about what the browser did with them, which
+  the code cannot observe. It now says what it asked for and names the per-mod Download links
+  as the recovery.
+- The page subtitle promised "install with one click". Nothing on this page installs a single
+  mod: `/api/mods/install` exists and has **no caller anywhere in the tree**.
+
 ## Modpacks — and why we are NOT delegating to the image
 
 > **This section used to say the opposite.** It argued that

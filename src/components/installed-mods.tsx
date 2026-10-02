@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
 
 interface InstalledMod {
   id: string;
@@ -19,6 +20,8 @@ interface InstalledMod {
 }
 
 export function InstalledMods() {
+  // `can.modsRemove` only; see `CAPABILITY_POLL_MS` for why it is not the 5 s default.
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const [mods, setMods] = useState<InstalledMod[]>([]);
   const [loading, setLoading] = useState(true);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -101,14 +104,18 @@ export function InstalledMods() {
                 <span>{mod.fileName}</span>
               </div>
             </div>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={removing === mod.id}
-              onClick={() => handleRemove(mod)}
-            >
-              {removing === mod.id ? "Removing..." : "Remove"}
-            </Button>
+            {/* `DELETE /api/mods/[id]` checks `mods.remove`, so for a MEMBER this button
+                was a live destructive control that answered a bare 403. */}
+            {can.modsRemove && (
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={removing === mod.id}
+                onClick={() => handleRemove(mod)}
+              >
+                {removing === mod.id ? "Removing..." : "Remove"}
+              </Button>
+            )}
           </CardContent>
         </Card>
       ))}

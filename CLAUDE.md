@@ -340,10 +340,16 @@ Enforcement, in layers:
 - The three game layouts (`src/app/{minecraft,7dtd,zomboid}/layout.tsx`) redirect
   to `/home` when the viewer lacks that world, so the pages simply don't exist
   for them.
-- `/api/games/status` also returns `can: {start, stop, restart}`, and
-  `game-controls.tsx` disables the buttons accordingly. Without it the controls
-  were shown to everyone and only the API refused, so a MEMBER pressed Power on
-  and got an unexplained "Forbidden" — which is exactly how this was reported.
+- `/api/games/status` also returns
+  `can: {start, stop, restart, settings, modsInstall, modsRemove}`, and the UI
+  disables or omits each control accordingly. Without it the controls were shown to
+  everyone and only the API refused, so a MEMBER pressed Power on and got an
+  unexplained "Forbidden" — which is exactly how this was reported. **`can` is the
+  one place a new write control gets its flag; don't add a second endpoint.** The
+  mods pair was added 2026-10-02 because `/minecraft/mods` had never had this fix
+  applied — see [`docs/MINECRAFT.md`](docs/MINECRAFT.md). A control whose route
+  refuses *nobody* stays ungated, and that is checked against the route rather than
+  assumed (Export is the live example).
 - `/api/games/status` returns `access: GameId[]`, which `useGames` surfaces and
   the UI filters on (sidebar world switcher, landing cards). It still reports the
   *run state* of worlds the user can't open — only one server fits on the box, so
