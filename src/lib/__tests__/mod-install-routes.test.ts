@@ -132,6 +132,8 @@ let installedNames: string[] = [];
 let directWrites: { path: string; bytes: number }[] = [];
 let sidecarWrites: { path: string; json: string }[] = [];
 let dbRows: string[] = [];
+/** The whole `data` of every direct `installedMod.create`, so provenance is checkable. */
+let dbCreates: Record<string, unknown>[] = [];
 let tarRuns: string[][] = [];
 let tarTimeouts: (number | undefined)[] = [];
 let rmRuns: string[] = [];
@@ -363,6 +365,7 @@ vi.mock("@/lib/db", () => ({
       findFirst: vi.fn(async () => existingInstalled),
       create: vi.fn(async ({ data }: { data: { name: string } }) => {
         dbRows.push(data.name);
+        dbCreates.push(data as Record<string, unknown>);
         return data;
       }),
     },
@@ -428,6 +431,7 @@ beforeEach(() => {
   journalled.length = 0;
   activityRows.length = 0;
   dbRows = [];
+  dbCreates = [];
   tarRuns = [];
   tarTimeouts = [];
   rmRuns = [];
@@ -1244,5 +1248,89 @@ describe("/api/mods/install refuses a client-only mod", () => {
     expect((await installSingle(sodium)).status).toBe(401);
     expect(installMod).not.toHaveBeenCalled();
     expect(lookups).toEqual([]);
+  });
+});
+
+/**
+ * **Each writer records which of them wrote the row.**
+ *
+ * `InstalledMod.source` exists so "which of these jars did the pack put there" is
+ * answerable — before it, after an apply the only record of the difference was in whoever
+ * had been watching. Both writers already knew the answer; neither wrote it down.
+ *
+ * `installMod` is faked in this file, so these assert what the **routes** pass. That the
+ * value then reaches the row is `mod-download.test.ts`'s half ("records where the row came
+ * from and which build is on disk"), and the split is deliberate: a route that passes
+ * `"manual"` to a writer that ignores it, and a writer that persists a value no route
+ * sends, are two different bugs.
+ */
+describe("provenance is recorded by whichever writer wrote the row", () => {
+  /** The `source` each `installMod` call carried, in order. */
+  function sources(): unknown[] {
+    return installMod.mock.calls.map(
+      (c) => (c[0] as unknown as { source?: unknown }).source
+    );
+  }
+
+  it("marks a modpack apply's mods as coming from a pack", async () => {
+    specs = [LITHIUM, { name: "Starlight", environment: "server_only" }];
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(installedNames).toEqual(["Lithium", "Starlight"]);
+    expect(sources()).toEqual(["pack", "pack"]);
+  });
+
+  it("marks the direct-download path as coming from a pack too", async () => {
+    // The Technic path writes its own row rather than going through `installMod`, so it is
+    // a second site that can forget — and it is the one with no Modrinth version, so
+    // `versionId` is deliberately absent rather than invented.
+    specs = [{ name: "TechnicThing", url: "https://technic.test/thing.jar" }];
+    directLength = directBody.byteLength;
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(dbCreates).toHaveLength(1);
+    expect(dbCreates[0].source).toBe("pack");
+    expect(dbCreates[0].versionId).toBeUndefined();
+  });
+
+  it("marks a single install as installed on its own", async () => {
+    specs = [LITHIUM];
+    const res = await installSingle({
+      modrinthId: "id-Lithium",
+      slug: "lithium",
+      name: "Lithium",
+    });
+    expect(res.status).toBe(200);
+    expect(sources()).toEqual(["manual"]);
+  });
+
+  it("still says manual when the client-only refusal was overridden", async () => {
+    // The override is the one path where a single install looks unusual; it is still one
+    // mod, one request, and labelling it anything else would make the Installed page
+    // attribute it to a pack that was never applied.
+    specs = [SODIUM];
+    const res = await installSingle({
+      modrinthId: "id-Sodium",
+      slug: "sodium",
+      name: "Sodium",
+      allowClientOnly: true,
+    });
+    expect(res.status).toBe(200);
+    expect(sources()).toEqual(["manual"]);
+  });
+
+  it("never lets the two writers agree on one label", async () => {
+    // The drift guard: a refactor that gives `installMod` a default, or that passes the
+    // same constant from both call sites, makes the column useless while every assertion
+    // above still passes individually. One apply and one install in the same test, so the
+    // two values are compared rather than each checked against a literal.
+    specs = [LITHIUM];
+    await apply();
+    const fromPack = sources();
+    installMod.mockClear();
+    await installSingle({ modrinthId: "id-Lithium", slug: "lithium", name: "Lithium" });
+    const fromInstall = sources();
+    expect(fromPack).not.toEqual(fromInstall);
+    expect(new Set([...fromPack, ...fromInstall]).size).toBe(2);
   });
 });

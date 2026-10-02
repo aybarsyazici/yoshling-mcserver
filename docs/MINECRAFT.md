@@ -242,10 +242,11 @@ What that means for the race above, precisely:
 | the apply is running, then an install/remove arrives | **yes** — 409 naming the lane, nothing written |
 | an install is already in flight when the apply starts | **no** — the apply does not wait for it |
 
-The second case stays open and is cheap to live with: increment 4's reconcile *reports* a jar on
-disk with no row as `untracked` and names it, and increment 6's `refuseIfPreempted` calls shorten
-the window. Saying "neither can interleave" was the overstatement — a reviewer disproved it with
-a direct probe, with an install mid-download and an apply started on top.
+The second case stays open and is cheap to live with: **`/api/mods/installed` now reports a jar
+on disk with no row as `untracked` and names it** — see "What is installed is now a reading"
+below — and a `refuseIfPreempted` call would shorten the window. Saying "neither can interleave"
+was the overstatement — a reviewer disproved it with a direct probe, with an install mid-download
+and an apply started on top.
 
 ### The client-only refusal is a dialog, with the override
 
@@ -276,6 +277,111 @@ facet array Modrinth would have received, with the real `buildFacets`),
 
 **Not verified against a live server.** Every claim above is about code and is pinned by tests;
 nobody has yet pressed Install on the box and watched a jar appear in `mods/`.
+
+## What is installed is now a reading, not a memory — 2026-10-02
+
+`GET /api/mods/installed` reconciles the `InstalledMod` rows against `MC_DIR/mods` and
+answers three named groups. Logic in `src/lib/mod-inventory.ts`, rendered by
+`src/components/installed-mods.tsx`.
+
+**It was `db.installedMod.findMany()` and nothing else, and there was no `readdir` anywhere
+in the mod code.** So the tab headed "Installed" showed what the app last remembered
+writing, which is a different claim from what the server will load. Production agrees today
+(3 rows, 3 jars, 5.8 MB) — but nothing had ever looked, so *"they agree"* was not something
+anybody could know, and this app's named defect class is exactly the one that produces.
+
+| group | means | what it is called by |
+|---|---|---|
+| `matched` | a row, and the jar it names is in the directory | file name |
+| `untracked` | a jar in the directory that no row names | file name — the only name it has |
+| `missing` | a row whose jar is not in the directory | file name, with the mod's name in the list |
+
+**The groups are names, never counts, and that is the whole point.** "2 untracked jars"
+sends somebody to the file browser to guess which two; the only reason to take the reading
+is to be told. They are also **derived from the one `mods` list** by filter rather than
+accumulated beside it, so a reader that trusts `untracked` and a reader that filters `mods`
+cannot get different answers. There are four ordinary ways the two sides part:
+
+- someone dropped a jar in with the file browser;
+- `removeMod`'s `unlink` hit `ENOENT` (it is swallowed), so the row went and the jar did not
+  — or the reverse;
+- a restore replaced `mods` from an archive whose manifest carried no `installedMods`, so
+  the whole set is on disk with nothing naming it. `/api/server/backups` already says so and
+  points here;
+- an install landed inside a `mods.apply` window — the half `fileLaneBusy` cannot cover, see
+  the table above.
+
+Four things worth not re-deriving:
+
+- **Hashing is opt-in (`?hash=1`), `stat` is not.** No digest can change the reconcile
+  verdict, and there is nothing to compare one against: `checkIntegrity` verifies a download
+  against Modrinth's sha512 *before* the jar is written and keeps no column. So a hash here
+  answers "are these two jars the same bytes" — which is a real question, because the two
+  writers name files differently (`installMod` uses Modrinth's filename, the Technic path
+  writes `<slug>.jar`) and Fabric loading one mod twice is a crash. The page reports a
+  duplicate pair by name. `stat` stays unconditional: one syscall, and a 0-byte jar is a torn
+  download worth seeing without asking.
+- **A missing `mods/` directory is "nothing installed", not an error** — and the catch is
+  **ENOENT-only**. Swallowing an EACCES would report every installed mod as missing and every
+  jar as absent, which is the read-nothing-report-success shape again. Pinned by a test that
+  points the reconcile at a path whose parent is a file (ENOTDIR).
+- **Classification is `!isDirectory()`, not `isFile()`.** `readdir` does not follow links, so
+  a jar reached through a symlink answers `isSymbolicLink()` and the server loads it anyway.
+  A directory called `extracted.jar` is the case worth excluding. Anything that is not a
+  `.jar` goes in `ignored` — listed, so nothing is silently dropped, but never called an
+  untracked *mod*, because `.DS_Store` is not one.
+- **Only names `readdir` returned are ever joined onto the directory.** A row carrying
+  `../../something` fails the presence check, stays `missing` and is never opened.
+
+### Provenance: `source` and `versionId`
+
+Two nullable columns on `InstalledMod`, migration
+`20261002143000_add_installed_mod_provenance`.
+
+- **`source`** is `"pack"` or `"manual"`, written at both writers —
+  `/api/mods/install-modpack` (both its paths, including the Technic direct-create) and
+  `/api/mods/install`. Before it, "which of these jars did the pack put there" was not
+  answerable at all: after an apply the only record of the difference was in whoever had been
+  watching. **`installMod`'s parameter is required, not defaulted** — a default would let a
+  third caller silently inherit somebody else's provenance, which is worse than no column.
+- **`versionId`** is the Modrinth version id. Both writers had it in hand and discarded it;
+  `version` is `version_number`, a publisher's free text that does not identify a build.
+  Absent on the Technic path, which has no Modrinth version.
+- Both nullable because the three production rows predate them. The migration backfills
+  `source = 'manual'`, which is **true of those rows** and not a default standing in for one:
+  each was installed on its own, before any pack had ever been applied. A row with no source
+  renders "source not recorded" rather than being labelled either way — a restore puts rows
+  back from an archive that never carried provenance.
+- The backfill is `WHERE "source" IS NULL`. The hand-apply is a human pasting SQL into a
+  container and the one that gets pasted twice is the one that read as having failed;
+  without the guard a second run after the next pack apply would rewrite every `'pack'` row
+  to `'manual'` and undo the column's purpose.
+
+### Tests, and two mutants that survived first
+
+`src/lib/__tests__/mod-inventory.test.ts` (real files in a temp directory — a faked `readdir`
+is a second place to write down the answer being tested),
+`mods-installed-route.test.ts` (the route over a real directory, with only `auth`, Prisma and
+`getModsDir` faked), `tests/installed-mods-reconcile.test.tsx` (the rendering), and
+`mod-provenance-migration.test.ts`.
+
+Three of those exist because a mutation went green:
+
+- **A band that renders `"2 file(s)"` instead of the names passed the entire suite.** Each row
+  prints its own `fileName` a few pixels below, and `document.body.textContent` cannot tell
+  the two apart. Every band now carries `data-band` and the names are asserted *inside* it.
+  **If you add a band, give it a `kind`.**
+- **A verdict line that consults only `untracked` passed too**, so a server with a missing jar
+  was told "every mod on this list has its jar on disk". Pinned from both directions now.
+- **The migration SQL was executed by nothing**, so deleting the whole backfill left 1346
+  tests green. `mod-provenance-migration.test.ts` runs the file verbatim against an in-memory
+  libSQL database — the same client production is read through, no Docker, no network, no
+  file — over the `CREATE TABLE` taken out of `20260519104842_init` rather than a hand-written
+  approximation.
+
+A fourth mutation found a live defect: `removing === mod.id` is `true` for an untracked entry,
+because `removing` is `null` when nothing is being removed and an untracked `id` is also
+`null`. It was invisible only because the button is gated on `mod.id` as well.
 
 ## Modpacks — and why we are NOT delegating to the image
 

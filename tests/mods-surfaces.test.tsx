@@ -108,16 +108,41 @@ const PACK = {
   ],
 };
 
+/**
+ * `/api/mods/installed` answers a **reconcile**, not a row list — one entry per row and
+ * per jar, with the three groups named. This file only varies capabilities, so the
+ * clean all-agree shape is what it stubs; the reconcile itself is pinned by
+ * `src/lib/__tests__/mod-inventory.test.ts` and its drift rendering by
+ * `tests/installed-mods-reconcile.test.tsx`.
+ */
 const INSTALLED = {
-  id: "im1",
-  modrinthId: "P7dR8mSH",
-  slug: "fabric-api",
-  name: "Fabric API",
-  version: "0.100.0",
-  fileName: "fabric-api-0.100.0.jar",
-  mcVersion: "26.1.2",
-  loader: "fabric",
-  installedAt: "2026-10-01T00:00:00Z",
+  mods: [
+    {
+      id: "im1",
+      modrinthId: "P7dR8mSH",
+      slug: "fabric-api",
+      name: "Fabric API",
+      version: "0.100.0",
+      fileName: "fabric-api-0.100.0.jar",
+      mcVersion: "26.1.2",
+      loader: "fabric",
+      source: "manual",
+      versionId: "vvvv1111",
+      installedBy: "u1",
+      installedByName: "Tester",
+      installedAt: "2026-10-01T00:00:00Z",
+      state: "matched",
+      sizeBytes: 2048,
+      sha512: null,
+    },
+  ],
+  matched: ["fabric-api-0.100.0.jar"],
+  untracked: [],
+  missing: [],
+  ignored: [],
+  modsDirPresent: true,
+  hashed: false,
+  totalBytes: 2048,
 };
 
 const PROJECT = {
@@ -174,7 +199,7 @@ function stubFetch() {
       }
       if (u === "/api/modpacks") return json(200, [PACK]);
       if (u === "/api/minecraft-versions") return json(200, { versions: ["26.1.2"] });
-      if (u === "/api/mods/installed") return json(200, [INSTALLED]);
+      if (u.startsWith("/api/mods/installed")) return json(200, INSTALLED);
       if (u === "/api/mods/categories") return json(200, []);
       if (u.startsWith("/api/mods/search")) return json(200, { hits: [PROJECT], total_hits: 1 });
       if (u.startsWith("/api/modpacks/search"))
@@ -627,11 +652,16 @@ describe("the mods page heading", () => {
   it("does not promise a one-click install", async () => {
     /**
      * The subtitle read "Search Modrinth, install with one click, and manage what's running."
-     * Nothing on this page installs a single mod: `/api/mods/install` exists and has **no
-     * caller anywhere in the tree** (measured), and the only thing that writes to the
-     * server's mods folder is applying a whole pack — which is six clicks and a confirm
-     * dialog, not one. Asserted on the rendered page rather than the string in the file,
-     * because the subtitle is a prop and a prop can stop being passed.
+     * At the time nothing on this page installed a single mod: `/api/mods/install` existed
+     * with **no caller anywhere in the tree** (measured), and the only thing that wrote to
+     * the server's mods folder was applying a whole pack — six clicks and a confirm dialog,
+     * not one.
+     *
+     * The route has a caller since 2026-10-02 (the Install button on each search result),
+     * so the subtitle names installing again — but still not as "one click", because an
+     * install can open a client-only confirm dialog and the claim was never about the
+     * number. Asserted on the rendered page rather than the string in the file, because the
+     * subtitle is a prop and a prop can stop being passed.
      */
     stub.games = gamesState(withCan(ALL_POWERS));
     stubFetch();
@@ -640,7 +670,9 @@ describe("the mods page heading", () => {
     expect(text()).not.toMatch(/one click/i);
     // And the complement, so deleting the subtitle outright does not pass: it still has to
     // say what the page does.
-    expect(text()).toContain("Search Modrinth, group mods into packs, and see what is installed.");
+    expect(text()).toContain(
+      "Search Modrinth, install a mod or a whole pack, and see what is on the server."
+    );
   });
 });
 

@@ -11,6 +11,7 @@ import {
   type IntegrityCheck,
   type ServerSideVerdict,
 } from "./mod-admission";
+import type { ModProvenance } from "./mod-inventory";
 
 /**
  * Every Activity row this module writes carries `game: "minecraft"` in its `details`
@@ -116,14 +117,26 @@ export async function serverSideFor(
   }
 }
 
+/**
+ * `source` is **required**, and that is the point of it being a parameter rather than a
+ * default.
+ *
+ * Both callers know which they are — `/api/mods/install` is one mod one request,
+ * `/api/mods/install-modpack` is a pack — and until this column existed, "which of these
+ * jars did the pack put there" was not answerable at all: after an apply, the only record
+ * of the difference was in whoever had been watching. A default would make a third caller
+ * silently inherit somebody else's provenance, which is worse than no column, so the
+ * compiler asks.
+ */
 export async function installMod(params: {
   modrinthId: string;
   slug: string;
   name: string;
   version: ModrinthVersion;
   userId: string;
+  source: ModProvenance;
 }): Promise<IntegrityCheck> {
-  const { modrinthId, slug, name, version, userId } = params;
+  const { modrinthId, slug, name, version, userId, source } = params;
   const modsDir = getModsDir();
 
   const file = version.files.find((f) => f.primary) || version.files[0];
@@ -143,6 +156,11 @@ export async function installMod(params: {
       mcVersion: version.game_versions[0] || "unknown",
       loader: version.loaders[0] || "unknown",
       installedBy: userId,
+      source,
+      // The id of the build that is actually on disk. `version` above is
+      // `version_number` — a publisher's free text, which does not identify a build and
+      // cannot be handed back to Modrinth. This was in hand here all along and discarded.
+      versionId: version.id,
     },
   });
 
@@ -285,6 +303,10 @@ export async function updateMod(
       fileName: file.filename,
       mcVersion: newVersion.game_versions[0] || mod.mcVersion,
       loader: newVersion.loaders[0] || mod.loader,
+      // The jar on disk changed, so the build id has to change with it or the row would
+      // name a version the directory no longer holds. `source` is deliberately left
+      // alone: updating a mod does not change how it arrived.
+      versionId: newVersion.id,
     },
   });
 

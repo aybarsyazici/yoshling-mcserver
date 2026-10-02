@@ -168,6 +168,7 @@ describe("installMod never leaves a corrupt jar behind", () => {
           files: [file({ sha512: REAL.sha512 })],
         } as never,
         userId: "u1",
+        source: "manual",
       })
     ).rejects.toBeInstanceOf(ModIntegrityError);
 
@@ -189,6 +190,7 @@ describe("installMod never leaves a corrupt jar behind", () => {
         files: [file({ sha512: REAL.sha512 })],
       } as never,
       userId: "u1",
+      source: "manual",
     });
     expect(check.checked).toBe("sha512");
     expect(writeFile).toHaveBeenCalledTimes(1);
@@ -196,6 +198,41 @@ describe("installMod never leaves a corrupt jar behind", () => {
     expect(target).toBe("/mods/thing.jar");
     expect(bytes.equals(JAR)).toBe(true);
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **Provenance reaches the row, not just the signature.** `source` and `versionId` are
+   * the two columns added on 2026-10-02 so the Installed page can answer "which of these
+   * did the pack put there" and so increment 5 has a build id to pin against — and both
+   * were already in hand at this call site and discarded. A writer that accepts `source`
+   * and then does not persist it is the drop-it-on-the-floor shape `mod-install-routes`
+   * found eleven of.
+   */
+  it("records where the row came from and which build is on disk", async () => {
+    serving(JAR);
+    await installMod({
+      modrinthId: "AAAA",
+      slug: "thing",
+      name: "Thing",
+      version: {
+        id: "VeRsIoN1",
+        version_number: "1.0.0",
+        game_versions: ["26.1.2"],
+        loaders: ["fabric"],
+        files: [file({ sha512: REAL.sha512 })],
+      } as never,
+      userId: "u1",
+      source: "pack",
+    });
+    // The fake takes no declared arguments, so its recorded calls type as `[]`.
+    const [{ data }] = create.mock.calls[0] as unknown as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data.source).toBe("pack");
+    // The **id**, not `version_number`: a version number is a publisher's free text and
+    // cannot be handed back to Modrinth to identify a build.
+    expect(data.versionId).toBe("VeRsIoN1");
+    expect(data.version).toBe("1.0.0");
   });
 });
 

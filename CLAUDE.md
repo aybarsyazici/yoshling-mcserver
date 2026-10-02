@@ -504,6 +504,18 @@ ALTER TABLE "User" ADD COLUMN "games" TEXT NOT NULL DEFAULT '';
 UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 ```
 
+**NOT YET APPLIED** — migration `20261002143000_add_installed_mod_provenance`. Two
+nullable columns on `InstalledMod` so the Installed page can say which jars a modpack
+apply put there. **The `WHERE` on the backfill is the part not to drop**: without it, a
+second paste after the next pack apply rewrites every `'pack'` row to `'manual'`.
+Reasoning and what reads it: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+
+```sql
+ALTER TABLE "InstalledMod" ADD COLUMN "source" TEXT;
+ALTER TABLE "InstalledMod" ADD COLUMN "versionId" TEXT;
+UPDATE "InstalledMod" SET "source" = 'manual' WHERE "source" IS NULL;
+```
+
 ### 7 Days to Die specifics
 
 > **Read [`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md) first for anything 7DTD.**
@@ -717,6 +729,21 @@ connect **directly to the box IP `89.58.50.155`**:
     ever read — is a named dialog that states the consequence and offers the override.
     **Not yet pressed against the live container.** Depth:
     [`docs/MINECRAFT.md`](docs/MINECRAFT.md#installing-one-mod).
+  - **The Installed tab stopped reciting the database** (2026-10-02).
+    `GET /api/mods/installed` was `db.installedMod.findMany()` and there was **no `readdir`
+    anywhere in the mod code**, so "what is installed" was the app's memory of its own
+    writes rather than a reading of the directory the server loads from. It now reconciles
+    the two and answers three groups — `matched`, `untracked` (a jar with no row),
+    `missing` (a row with no jar) — **by file name, never by count**, because "2 untracked
+    jars" sends somebody to the file browser to guess which two. `InstalledMod` gains
+    `source` (`"pack"` / `"manual"`, written by both writers) and `versionId`, so "which of
+    these did the pack put there" is answerable for the first time —
+    **needs the hand-applied migration above**. Hashing is opt-in (`?hash=1`) and
+    `stat` is not; the reasoning, and the three mutants that went green before the tests
+    were fixed, are in
+    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02).
+    **Not yet read against the live container** — on production the DB and disk agreed when
+    last counted (3 rows, 3 jars), so there is no known drift for it to find there yet.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the

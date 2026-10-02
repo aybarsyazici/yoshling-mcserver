@@ -25,14 +25,18 @@ export default function ModsPage() {
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: tint }}>
-      {/* The subtitle said "install with one click", which described a control that does not
-          exist: nothing on this page installs a single mod — `/api/mods/install` has no
-          caller anywhere in the tree — and the only thing that writes to the server's mods
-          folder is applying a whole pack. */}
+      {/* This subtitle once said "install with one click" for a control that did not exist —
+          `/api/mods/install` had no caller anywhere in the tree, so the only way to put a jar
+          on the server was to apply a whole pack. It has one since 2026-10-02 (the Install
+          button on each search result), so the sentence can say so again.
+
+          "what is on the server" rather than "what is installed", because the Installed tab
+          now reconciles the database against the mods directory and reports the difference —
+          it is a reading of the server, not a recital of the app's own writes. */}
       <SectionHeading
         eyebrow="Minecraft · Content"
         title="Mods & modpacks"
-        sub="Search Modrinth, group mods into packs, and see what is installed."
+        sub="Search Modrinth, install a mod or a whole pack, and see what is on the server."
         tint={tint}
       />
 

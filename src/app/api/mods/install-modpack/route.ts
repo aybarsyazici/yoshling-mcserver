@@ -631,6 +631,10 @@ async function applyModpack(
             mcVersion: serverConfig.mcVersion,
             loader: serverConfig.modLoader,
             installedBy: userId,
+            // This apply put it there, so the Installed page can say which jars a
+            // rollback would be undoing. No `versionId`: this is the Technic path, which
+            // has no Modrinth version — `version` above is the literal `"technic"`.
+            source: "pack",
           },
         });
         installed++;
@@ -645,6 +649,9 @@ async function applyModpack(
           name: mod.name,
           version: item.version,
           userId,
+          // Written by this apply, so the Installed page can answer "which of these did
+          // the pack put there" — which, before the column existed, nothing could.
+          source: "pack",
         });
         if (check.checked === null) unverified.push(mod.name);
         installed++;
