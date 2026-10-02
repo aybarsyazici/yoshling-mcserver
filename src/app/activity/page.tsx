@@ -6,7 +6,7 @@ import { SectionHeading } from "@/components/ui-bits";
 import { PowerGlyph } from "@/components/glyphs";
 import { GAMES, isGameId } from "@/lib/games";
 import { formatBytes } from "@/lib/format";
-import { Puzzle, FileEdit, Trash2, Users, Activity as ActivityIcon } from "lucide-react";
+import { Puzzle, FileEdit, Trash2, Users, Ban, Activity as ActivityIcon } from "lucide-react";
 
 interface Activity {
   id: string;
@@ -109,6 +109,11 @@ function actionVisual(action: string, details: Record<string, unknown>): { icon:
     return { icon: FileEdit, tint: gameTint(details, "var(--chart-2)") };
   }
   if (action === "delete_file") return { icon: Trash2, tint: "var(--destructive)" };
+  // Both directions carry the same glyph; the sentence says which way it went. Banning
+  // and unbanning are the same kind of moderation event when you are scanning the log.
+  if (action === "ban_add" || action === "ban_remove") {
+    return { icon: Ban, tint: "var(--destructive)" };
+  }
   if (action === "set_user_games") return { icon: Users, tint: "var(--primary)" };
   return { icon: ActivityIcon, tint: "var(--muted-foreground)" };
 }
@@ -178,6 +183,21 @@ function formatAction(action: string, details: Record<string, unknown>): string 
     }
     case "backup_download":
       return `downloaded a backup${on}${details.name ? ` (${details.name})` : ""}`;
+    /**
+     * Rendered here rather than left to `default`, which would turn `ban_add` into the
+     * bare words "ban add" with no target and no world — the same gap the backup rows
+     * had. `via` is part of the sentence on purpose: "applied over RCON" and "written to
+     * the ban file" are different claims about whether the ban was in effect at the time,
+     * and that distinction is the whole point of the feature.
+     */
+    case "ban_add":
+      return `banned ${details.kind === "ip" ? `IP ${details.target}` : details.target}${on}${
+        details.via === "file" ? " (written to the ban file)" : " (applied over RCON)"
+      }${details.reason ? ` — ${details.reason}` : ""}`;
+    case "ban_remove":
+      return `unbanned ${details.kind === "ip" ? `IP ${details.target}` : details.target}${on}${
+        details.via === "file" ? " (written to the ban file)" : " (applied over RCON)"
+      }`;
     default:
       return action.replace(/_/g, " ");
   }

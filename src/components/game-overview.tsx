@@ -533,6 +533,11 @@ function formatAction(action: string): string {
     backup_download: "downloaded a backup",
     server_update: "updated the server",
     server_reset: "reset the world",
+    // Without these the fallback rendered "ban add" / "ban remove", which reads as a
+    // half-finished key rather than a moderation action. This card has no room for the
+    // target, so it names the action only — /activity's version carries the name or IP.
+    ban_add: "banned a player or an address",
+    ban_remove: "lifted a ban",
   };
   return map[action] || action.replace(/_/g, " ");
 }

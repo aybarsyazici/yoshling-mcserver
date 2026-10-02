@@ -20,6 +20,7 @@ import { SectionHeading } from "@/components/ui-bits";
 import { PhotoFooter } from "@/components/photo-footer";
 import { MemoryCard } from "@/components/memory-card";
 import { McGameRules } from "@/components/mc-game-rules";
+import { McBansCard } from "@/components/mc-bans-card";
 import { GAMES } from "@/lib/games";
 import { gameRuleControlHint } from "@/lib/mc-gamerules";
 import {
@@ -298,7 +299,7 @@ export default function SettingsPage() {
       <SectionHeading
         eyebrow="Minecraft · Settings"
         title="Server settings"
-        sub="Version, resources, game rules, operators, and the whitelist."
+        sub="Version, resources, game rules, operators, the whitelist, and bans."
         tint={GAMES.minecraft.tint}
       />
 
@@ -643,6 +644,13 @@ export default function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      {/*
+        The third member of the whitelist/ops set, and deliberately the one card here with
+        no Save button: while the server is running a ban is an RCON command that applies
+        immediately, so there is no pending-edit state to save. See `mc-bans-card.tsx`.
+      */}
+      <McBansCard />
 
       <PhotoFooter src="/the-rizzler.jpg" />
     </div>
