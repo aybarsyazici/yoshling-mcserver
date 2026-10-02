@@ -203,6 +203,15 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
   `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
+- **Minecraft game rules are `/api/server/gamerules`** (the Game rules panel on MC
+  settings) — the only config surface in the app that reads and writes the **running game**
+  rather than a file. Two properties to keep, both load-bearing: **the rule ids are
+  discovered with `help gamerule`, never hardcoded**, and **a write is followed by a fresh
+  query** so the UI shows what the game read back rather than what was typed. That
+  discovery read **must** go through `sendCommandLong` — its reply is 5 KB with zero
+  newlines and `sendCommand` cuts it at 4096. Depth, the measurement and the floor that
+  stops a short read rendering as a complete one:
+  [`docs/MINECRAFT.md`](docs/MINECRAFT.md#game-rules).
 - `src/components/file-browser.tsx` is shared: MC uses the default
   `/api/server/files`; 7DTD and PZ pass their own endpoint + `roots` from
   `GAMES[game].fileRoots` (7DTD: Config = `/sevendtd-config`, Saves =
@@ -611,6 +620,18 @@ connect **directly to the box IP `89.58.50.155`**:
   yourself locked *everyone* out with a green success toast. `src/lib/mc-identity.ts`
   now derives the offline UUID the way the server does
   (`md5("OfflinePlayer:" + name)`, v3). The MC layer is still the oldest code here.
+  **Game rules became reachable 2026-10-01** (`/api/server/gamerules` + the Game rules
+  panel) — see Routes and [`docs/MINECRAFT.md`](docs/MINECRAFT.md#game-rules). Before that
+  the dashboard could *detect* that a `server.properties` key had moved to a game rule,
+  refuse the write, and then only tell you to type the command yourself, for 58 rules none of
+  which it listed. Someone was doing exactly that: production has
+  `enable-command-block=false` in the file against `command_blocks_work = true` in the world,
+  and `mob_griefing` is false with nothing in this app having set it. **The live
+  `help gamerule` reply has been captured and is a test fixture** — 5 KB, no newlines, 58
+  rules each listed twice; it is parsed by the suite. The first version of this shipped a
+  parser that read **one** rule out of it and a route that answered 200 with that one rule,
+  so what is still unexercised on the box is the *write* path: no `gamerule` write has been
+  sent to the live container from the dashboard.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the

@@ -105,7 +105,9 @@ function gameTint(details: Record<string, unknown>, fallback = "var(--muted-fore
 function actionVisual(action: string, details: Record<string, unknown>): { icon: IconT; tint: string } {
   if (action.startsWith("server_")) return { icon: PowerGlyph, tint: gameTint(details) };
   if (action.includes("mod")) return { icon: Puzzle, tint: gameTint(details, "var(--mc)") };
-  if (action === "edit_file") return { icon: FileEdit, tint: gameTint(details, "var(--chart-2)") };
+  if (action === "edit_file" || action === "set_gamerule") {
+    return { icon: FileEdit, tint: gameTint(details, "var(--chart-2)") };
+  }
   if (action === "delete_file") return { icon: Trash2, tint: "var(--destructive)" };
   if (action === "set_user_games") return { icon: Users, tint: "var(--primary)" };
   return { icon: ActivityIcon, tint: "var(--muted-foreground)" };
@@ -134,6 +136,15 @@ function formatAction(action: string, details: Record<string, unknown>): string 
       return `reset the world${on}${details.newName ? ` (new game: ${details.newName})` : ""}`;
     case "edit_file":
       return `edited ${details.file ?? details.path}${on}`;
+    // A game rule is not a file edit — it goes to the running game over RCON — so it gets
+    // its own row rather than being folded into `edit_file`. Rendered here in the same change
+    // that started writing it: the `default` below turns an unhandled action into bare
+    // underscored words ("set gamerule"), which is a defect this function has already been
+    // fixed for twice, for the backup rows and then for `backup_failed`.
+    case "set_gamerule":
+      return `set the game rule ${details.rule} to ${details.value}${
+        details.from !== undefined && details.from !== details.value ? ` (was ${details.from})` : ""
+      }${on}`;
     case "delete_file":
       return `deleted ${details.path}${on}`;
     case "set_user_games":

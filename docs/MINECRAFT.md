@@ -35,10 +35,87 @@ See [`SETTINGS.md`](SETTINGS.md) for the shared layer. Minecraft-specific:
   configured-only.
 - **Game rules override `server.properties` and the properties route knows it.** It refuses
   a write to a key a game rule has taken over, rather than writing a value that will have no
-  effect.
-- `gamerule <name>` is the **query** form and `gamerule <name> <value>` is the write. Game
-  rule names are camelCase (`mobGriefing`, `keepInventory`, `doFireTick`) while
-  `server.properties` keys are kebab-case — the mapping matters where the two meet.
+  effect. There is a control for them now — see [Game rules](#game-rules) below.
+- `gamerule <name>` is the **query** form and `gamerule <name> <value>` is the write.
+  **Rule names on the deployed 26.1.2 build are `snake_case`** (`mob_griefing`,
+  `keep_inventory`, `fall_damage`), measured 2026-10-01; `server.properties` keys are
+  kebab-case. This doc said camelCase (`mobGriefing`, `keepInventory`, `doFireTick`) — that
+  is the **1.21.x** spelling, which is still right for the 1.21.4 jars on the volume and
+  wrong for what is running. Nothing in the app hardcodes either, and that is on purpose.
+
+## Game rules
+
+`/api/server/gamerules` + the Game rules panel on `/minecraft/settings`
+(`src/components/mc-game-rules.tsx`, logic in `src/lib/mc-gamerules.ts`). The only config
+surface in the app that reads and writes the **running game** rather than a file.
+
+Before it existed the dashboard could *detect* that a `server.properties` key had moved to a
+game rule, refuse the write, and then only tell you to type the command yourself — for 58
+rules none of which it listed. Someone was doing exactly that: production has
+`enable-command-block=false` in the file against `command_blocks_work = true` in the world,
+and `mob_griefing` is false with nothing in this app having set it.
+
+**The rule ids are discovered with `help gamerule`, never hardcoded.** 26.1 renamed every
+rule and not mechanically (`enable-command-block` → `command_blocks_work`), while 1.21.4 is
+still on the volume and still selectable, so a fixed list would be wrong for one of the two
+builds and would fail by rendering an empty panel — which reads as "this server has no game
+rules". It is also the write path's injection guard: the only ids ever interpolated into a
+console command are ids the game itself printed.
+
+**A write is followed by a fresh query**, so what the UI shows is what the game read back,
+not what was typed. A disagreement is a 502 carrying both values, never a 200 with
+`applied: false`. The switches have no optimistic local state for the same reason.
+
+### `help gamerule` is 5 KB with no newlines, and both halves of that bit
+
+Measured against the live server on 2026-10-01, and committed as
+`src/lib/__tests__/fixtures/mc-help-gamerule.txt`:
+
+- the full reply is **5,099 bytes** (5,082 as captured) and contains **zero newlines**.
+  `RconConsoleSource.sendSystemMessage` appends each feedback message to one buffer with no
+  separator, so brigadier's usage lines arrive as one run-together string.
+- it lists **58 rules, each twice** — bare and `minecraft:`-namespaced — so 116 occurrences
+  of the literal `/gamerule `.
+
+Two bugs followed, and each was sufficient on its own to make the panel lie:
+
+1. the parser split on `\n`, found one "line", and returned **one** rule id. The route
+   answered 200 with it.
+2. read through `sendCommand` the reply arrives **truncated at exactly 4096 bytes**, because
+   `rcon-client` resolves on the first packet. ~46 of 58 rules.
+
+So: **the discovery read goes through `sendCommandLong`** (`src/lib/rcon-long.ts`, see
+`rcon-frame.ts` for the framing) and the parser splits on the `/gamerule ` delimiter, strips
+`minecraft:` and de-duplicates. Per-rule `gamerule <id>` queries are ~50 bytes and stay on
+the cached socket.
+
+And because a short read is indistinguishable from a small build at the call site,
+`assessGameRuleList` is a **floor**: under 10 rules it refuses, and the message says what was
+actually read ("Read 1 game rule out of the server's 5082-character reply … which mentions
+gamerule 116 times") rather than naming a cause. A reply exactly 4096 long warns about the
+packet cliff even though it clears the floor, because ~46 rules looks complete. The PUT
+applies the same floor **before** judging whether a rule exists — on a misread list it used
+to answer `400 "this build has no game rule called fall_damage. 26.1 renamed the rules"` for
+a rule the server had just listed 116 times.
+
+### The defaults table states a default or states none
+
+`MC_GAME_RULES` adds the two things the server does not supply: help text and defaults,
+joined to a discovered id by a case- and separator-insensitive canonical form so one entry
+covers both spellings of the rename. **`default` is optional.** Five entries leave it empty
+on purpose — the four rules 26.x created out of `server.properties` keys (`pvp`,
+`spawn_monsters`, `command_blocks_work`, `allow_entering_nether_using_portals`) did not exist
+in 1.21.x, so the column's only stated provenance cannot be true of them, and
+`playersNetherPortalCreativeDelay` was written as `1` where the deployed registry reports
+`0`. The column drives one soft "not the vanilla default" hint and nothing that writes; a
+rule with no default renders no hint. Verify a default or state none.
+
+**24 of the 58 live ids have no table entry** (measured: the table describes 34, pinned by a
+test) — `advance_time`, `spawn_mobs`, `block_drops`, `natural_health_regeneration`, `raids`,
+`locator_bar` and so on, because the 26.x rename was not mechanical (nothing canonical gets
+from `doDaylightCycle` to `advance_time`) and nobody has measured what each new one does. They still render,
+grouped under "Other", with their live value and no help — annotation is additive here, never
+a filter. Adding help for them is real work left undone, not a bug.
 
 ## Modpacks — and the better way, which we are not using
 

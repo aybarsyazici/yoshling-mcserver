@@ -4,6 +4,7 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
 import { db } from "@/lib/db";
+import { gameRuleControlHint } from "@/lib/mc-gamerules";
 import {
   escapeMcValue,
   gameRuleReplacing,
@@ -116,15 +117,20 @@ export async function PUT(request: NextRequest) {
     updates.set(key, escapeMcValue(sanitizeMcValue(value)));
   }
 
+  // The refusal is unchanged — 26.x genuinely does not read these keys, so writing them
+  // would be a green toast over nothing. What changed is where it sends you: there is now a
+  // control for game rules (`/api/server/gamerules` + the Game rules panel on the settings
+  // page), so this no longer hands out a console command to type. The destination sentence
+  // comes from `gameRuleControlHint` because the editor's own per-field note says the same
+  // thing, and two hand-written copies of one instruction is how they drift.
   const gameRuleWarning =
     noEffect.length > 0
       ? `Minecraft ${configured?.mcVersion} doesn't read ` +
         `${noEffect.map((n) => n.key).join(", ")} from server.properties any more — ` +
         `${noEffect.length === 1 ? "it is" : "they are"} now the game ` +
         `${noEffect.length === 1 ? "rule" : "rules"} ` +
-        `${noEffect.map((n) => n.gameRule).join(", ")}. Set ` +
-        `${noEffect.length === 1 ? "it" : "them"} from the console, e.g. ` +
-        `"gamerule ${noEffect[0].gameRule} false". Nothing was written for ` +
+        `${noEffect.map((n) => n.gameRule).join(", ")}. ` +
+        `${gameRuleControlHint(noEffect.map((n) => n.gameRule))} Nothing was written for ` +
         `${noEffect.length === 1 ? "that key" : "those keys"}.`
       : null;
 
