@@ -29,10 +29,17 @@
  * say. And 1.21.4 is still on the volume and still selectable in the version dropdown, so
  * there is no single correct spelling to hardcode either.
  *
- * So the route asks the server: `help gamerule` prints one usage line per rule, which is
- * the same recipe `mc-properties.ts` already names as the answer to "what game rules
- * exist?". Every id this module hands out came from the running build, which means the
- * panel is correct on 1.21.4 and on 26.1.2 without this file knowing which is booted.
+ * So the route asks the server: `help gamerule` lists every rule, which is the same recipe
+ * `mc-properties.ts` already names as the answer to "what game rules exist?". Every id this
+ * module hands out came from the running build, which means the panel is correct on 1.21.4
+ * and on 26.1.2 without this file knowing which is booted.
+ *
+ * **It does not list them one per line — there are no newlines in that reply at all.** That
+ * sentence used to say "prints one usage line per rule", and it was the belief that shipped
+ * a parser returning *one* rule out of 58 and a route answering HTTP 200 with it. The
+ * measurement and the parser that handles the real shape are below (search for "There are no
+ * newlines"); the correction is repeated here because this header is the first thing a reader
+ * meets, and the first version of it stayed false for 290 lines above its own refutation.
  *
  * ## What the table below is for, then
  *

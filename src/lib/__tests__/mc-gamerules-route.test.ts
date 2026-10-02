@@ -42,6 +42,16 @@ let failures: { match: RegExp; error: Error }[] = [];
 let activityRows: { action: string; details: string }[] = [];
 let laneBusy = false;
 let role = "ADMIN";
+// Varied like `role`, because the two gates are independent and only one was asserted.
+// A route can hold a correct `gameGate` call and nothing notices when it is removed.
+let games = "minecraft,7dtd,zomboid";
+// The frozen clock, but movable. It was `mockReturnValue`, which pinned `Date.now()` for
+// the whole file — correct for keeping the 58-rule test off wall time, but it also made
+// `Date.now() >= deadline` false in every test, so the entire READ_BUDGET_MS path was
+// unexecuted and could be deleted with the suite green. `msPerQuery` lets one test buy
+// simulated time per rule query without reintroducing a wall-clock dependency anywhere else.
+let now = 1_760_000_000_000;
+let msPerQuery = 0;
 
 function helpReply(): string {
   if (listReplyOverride !== null) return listReplyOverride;
@@ -57,6 +67,14 @@ function answer(command: string): string {
   const m = /^gamerule (\S+)(?: (\S+))?$/.exec(command);
   if (!m) return "Unknown or incomplete command, see below for error";
   const [, id, value] = m;
+  // Simulated per-query latency, so one test can exhaust the route's read budget
+  // deterministically. It lives HERE and not in the `vi.mock` factory above: vitest hoists
+  // those factories, and the reference to `msPerQuery` inside one does not share this
+  // module's binding — the increment ran against a different variable and the clock never
+  // moved, while the test still read all 12 rules and looked like the budget branch was
+  // simply unreachable. `answer` is an ordinary hoisted function declaration the factory
+  // calls at runtime, so it sees the real bindings.
+  now += msPerQuery;
   if (!(id in world)) return "Incorrect argument for command";
   if (value === undefined) return `Gamerule ${id} is currently set to: ${world[id]}`;
   // A rule the fake server declines: it accepts the command and does not change the value,
@@ -78,7 +96,7 @@ vi.mock("@/lib/rcon", () => ({
 
 vi.mock("@/lib/auth", () => ({
   auth: vi.fn(async () => ({
-    user: { id: "u1", name: "Tester", role, games: "minecraft,7dtd,zomboid" },
+    user: { id: "u1", name: "Tester", role, games },
   })),
 }));
 
@@ -144,7 +162,9 @@ beforeEach(() => {
   // 58-rule test flaky on a starved machine: 58 awaits that normally take microseconds can
   // outlive the budget under load, and the test then fails on a `warning` that is true.
   // Frozen rather than faked wholesale (`vi.useFakeTimers()` would also stall the awaits).
-  vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
+  now = 1_760_000_000_000;
+  msPerQuery = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   commands = [];
   world = vanillaish();
   listed = null;
@@ -154,6 +174,7 @@ beforeEach(() => {
   activityRows = [];
   laneBusy = false;
   role = "ADMIN";
+  games = "minecraft,7dtd,zomboid";
 });
 
 afterEach(() => {
@@ -415,6 +436,44 @@ describe("the PUT refuses without naming a cause it has not established", () => 
   });
 });
 
+/**
+ * The shortfall paths. Both of these drop a rule out of the list, and the only thing
+ * separating "a short list that says it is short" from the defect this feature was rebuilt
+ * to fix is that they push onto `unread` and set a `warning`. Deleting either `unread.push`
+ * left the whole suite green, because the frozen clock meant the budget branch never ran and
+ * no fixture had more than 200 rules — so the panel could silently render a complete-looking
+ * list that was missing rows, which is exactly the shape of the original blocker.
+ */
+describe("a short read says it is short", () => {
+  it("names the rules it ran out of time for, and warns", async () => {
+    // The default fake build lists 12 rules. At 400 simulated ms each against a 4 s budget
+    // it gets through ten and names the last two, rather than quietly returning ten.
+    msPerQuery = 400;
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.unread.length).toBeGreaterThan(0);
+    expect(body.rules.length).toBeGreaterThan(0);
+    // Nothing is lost: every discovered rule is either read or named as unread.
+    expect(body.rules.length + body.unread.length).toBe(body.discovered);
+    expect(body.warning).toMatch(/ran out of time/i);
+    // The warning states the real figures rather than a round number.
+    expect(body.warning).toContain(String(body.rules.length));
+  });
+
+  it("reads everything and warns about nothing when the server is prompt", async () => {
+    msPerQuery = 0;
+    const body = await (await GET()).json();
+    expect(body.unread).toEqual([]);
+    // Omitted, not null: the route spreads `...(warning ? { warning } : {})`, so "nothing to
+    // say" is the absence of the key. Asserting `toBeNull()` here passed for the wrong
+    // reason on a body that had no `warning` at all.
+    expect(body.warning).toBeUndefined();
+    expect(body.rules.length).toBe(body.discovered);
+  });
+});
+
 // ── the gates ────────────────────────────────────────────────────────────────
 
 describe("who may read and who may write", () => {
@@ -433,6 +492,36 @@ describe("who may read and who may write", () => {
     const res = await put({ rule: "pvp", value: "false" });
     expect(res.status).toBe(403);
     expect(commands).toEqual([]);
+  });
+
+  /**
+   * World access, which is a different axis from role and was the untested one. The route
+   * calls `gameGate("minecraft")` on both verbs, correctly — but every test above ran with
+   * `games: "minecraft,7dtd,zomboid"` and varied only `role`, so the gate could have been
+   * deleted outright with the suite green. A MOD with only Project Zomboid has full
+   * capability *on Zomboid*; the whole point of `User.games` is that it must not reach
+   * Minecraft's running world.
+   */
+  it("refuses a MOD who has not been granted Minecraft, on both verbs", async () => {
+    role = "MOD";
+    games = "zomboid";
+
+    const read = await GET();
+    expect(read.status).toBe(403);
+
+    const write = await put({ rule: "pvp", value: "false" });
+    expect(write.status).toBe(403);
+
+    // And nothing reached the game. A 403 that still sent the command would be the gate
+    // failing after the fact.
+    expect(commands).toEqual([]);
+  });
+
+  it("lets a MOD who HAS Minecraft through, so the refusal above is about access", async () => {
+    role = "MOD";
+    games = "minecraft";
+    expect((await GET()).status).toBe(200);
+    expect((await put({ rule: "pvp", value: "false" })).status).toBe(200);
   });
 
   it("refuses a write while an operation holds the file lane", async () => {

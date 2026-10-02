@@ -72,6 +72,14 @@ import {
  * record: a GET is a page load, and entering one in the ledger on every page load would make
  * the ledger useless.
  *
+ * **The worst case is `LIST_TIMEOUT_MS + READ_BUDGET_MS + RCON_TIMEOUT_MS`**, and all three
+ * terms are needed: the list read can burn its whole deadline, the per-rule loop can burn
+ * its whole budget, and because the budget is checked *before* a query is issued, a query
+ * starting one millisecond inside it still runs to its own timeout. 3000 + 4000 + 2000 =
+ * 9000. The first version of this comment made the same claim over constants summing to
+ * 13,000 — the bound was asserted rather than computed, which is the only reason it was
+ * wrong. If you change one of these, redo the addition.
+ *
  * The budget is spent, not assumed: a rule not reached inside it is reported in `unread`
  * rather than dropped, so a slow server produces a short list that says it is short instead
  * of a complete-looking list that is missing rows.
@@ -80,8 +88,13 @@ import {
  * multi-packet drain with a quiet-period tail (see `rcon-long.ts`), not a 50-byte answer.
  */
 const RCON_TIMEOUT_MS = 2000;
-const LIST_TIMEOUT_MS = 5000;
-const READ_BUDGET_MS = 6000;
+const LIST_TIMEOUT_MS = 3000;
+// 3000 + 4000 + 2000 = 9000 ms worst case, which is the arithmetic the comment above
+// claims and which these three numbers now actually satisfy. They were 5000 + 6000 +
+// 2000 = 13,000, i.e. the comment asserted a bound its own constants broke — and the
+// trailing 2000 is easy to miss, because the budget is checked *before* a query is
+// issued, so a query starting at `deadline - 1` still runs its full timeout.
+const READ_BUDGET_MS = 4000;
 
 /**
  * A ceiling on how many rules one GET will query, so a datapack or mod that registers a

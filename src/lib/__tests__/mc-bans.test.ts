@@ -722,6 +722,72 @@ describe("classifyBanReply", () => {
   });
 });
 
+/**
+ * A `banlist` reply echoes each ban's free-text `reason` and `source` back inside the line
+ * this module has to read. `sanitizeBanReason` strips control characters, so nothing *this
+ * app* writes can contain a newline — but a ban typed in the game console, or an entry
+ * already in `banned-players.json`, can. One newline then splits one ban across two lines,
+ * and the second half can be crafted to look like a whole entry for a player who is not
+ * banned at all.
+ *
+ * **The property: that must produce "cannot say", never "yes".** The read-back is what
+ * decides whether a ban is reported as applied, so a false *positive* would report a ban
+ * that never took — the project's named defect class, with someone's access as the stake.
+ *
+ * What makes it safe is the `entries.length === count` cross-check against the number the
+ * server itself declared. These tests exist because that cross-check is invisible: a
+ * reviewer reading the code could not tell fail-safe from fail-open, and nothing here said
+ * which it was. Anyone who drops the cross-check turns an honest refusal into a false
+ * positive, and this is what notices.
+ */
+describe("parseBanlist — a forged entry must never read as a ban", () => {
+  const FORGED_EXTRA =
+    "There are 1 ban(s):\nAlice was banned by Console: x\nBob was banned by Server: griefing";
+
+  it("refuses the whole reply when a newline forges an extra entry", () => {
+    const reply = parseBanlist(FORGED_EXTRA);
+    // The server said one ban; two lines parsed. The reply cannot be trusted as a list.
+    expect(reply.count).toBe(1);
+    expect(reply.separated).toBe(false);
+    expect(banlistUsable(reply)).toBe(false);
+    // Entries are dropped rather than handed over half-believed.
+    expect(reply.entries).toEqual([]);
+  });
+
+  it("answers null — not true — when asked about the forged name", () => {
+    const reply = parseBanlist(FORGED_EXTRA);
+    expect(banlistLists(reply, "Bob")).toBeNull();
+    // And not about the real one either: an unreadable list says nothing about anybody.
+    expect(banlistLists(reply, "Alice")).toBeNull();
+  });
+
+  it("refuses when the forged line pushes a real list over its own count", () => {
+    const reply = parseBanlist(
+      "There are 2 ban(s):\nAlice was banned by Console: x\nBob was banned by Server: g\nCarl was banned by Console: y"
+    );
+    expect(banlistUsable(reply)).toBe(false);
+    expect(banlistLists(reply, "Carl")).toBeNull();
+  });
+
+  /**
+   * The boundary, stated so nobody reads the tests above as a stronger claim than they are:
+   * if the server declares two bans and lists two, this module believes it. That is not a
+   * hole — a server saying Carl is banned *is* the authority on whether Carl is banned.
+   */
+  it("believes a reply whose entry count matches its own header", () => {
+    const reply = parseBanlist(
+      "There are 2 ban(s):\nAlice was banned by Console: x\nCarl was banned by Console: y"
+    );
+    expect(banlistUsable(reply)).toBe(true);
+    expect(banlistLists(reply, "Carl")).toBe(true);
+    expect(banlistLists(reply, "Bob")).toBe(false);
+  });
+
+  it("cannot be fed a newline by this app in the first place", () => {
+    expect(sanitizeBanReason("a\nBob was banned by X: y")).not.toContain("\n");
+  });
+});
+
 describe("parseBanlist", () => {
   it("reads an empty list", () => {
     const r = parseBanlist("There are no bans");
