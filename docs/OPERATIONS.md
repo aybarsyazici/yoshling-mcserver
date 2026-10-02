@@ -360,3 +360,80 @@ mods.update   startedBy=None   ok
 `startedBy=None` is the proof — no human actor, so it came from the timer, in the
 `instrumentation.ts` bundler layer. (That sentence also exposed a `"1 mods"` pluralisation
 bug, now fixed and pinned.)
+
+---
+
+# The mod installers get a harness — 2026-10-02
+
+`/api/mods/install-modpack` is the most destructive endpoint in the app (tar the world,
+`removeMod` **every** installed jar, download up to 166 replacements) and it had **no
+behavioural test at all**. The modules it delegates to were covered — `mod-plan`,
+`mod-admission`, `mod-download` — and an adversarial recheck showed what that is worth on
+its own by producing **eleven surviving mutants**, every one of them a variation on *the
+route computes the right answer and then drops it on the floor*. Two files close them:
+
+- **`src/lib/__tests__/mod-install-routes.test.ts`** — both installers driven as routes,
+  36 tests.
+- **`tests/modpack-report.test.tsx`** — the report dialog, rendered, 9 tests. `modpacks.tsx`
+  had no test of any kind, which left the whole UI half of the client-only filter unverified
+  — and the filter's justification is that the user can *see* the decision.
+
+## Only the edges are faked, and that is the whole design
+
+Faked: `auth`, Prisma, Modrinth, `mod-manager`'s three I/O functions, `fs/promises`,
+`child_process` and `getModsDir`. **Not** faked: `mod-plan`, `mod-admission`,
+`serverSideVerdict`, `game-gate`, `permissions` — and the **operation registry**, which is
+load-bearing. Two of the eleven mutants are facts going missing from the *ledger*, and a
+mocked registry cannot notice that; the tests read the record `runOperation` actually
+concluded, through the real `listFinished()`.
+
+**Do not stub the gates.** `tests/mc-bans-route.test.ts` does `denyGame: () => null` and
+`hasPermission: () => true`, which means deleting the real calls from the route changes
+nothing — the recheck flagged exactly that. These suites vary `role` **and** `games` on a
+mocked `auth` and let the real gate run, the way `mc-gamerules-route.test.ts` does. Role and
+world access are independent axes and only varying one leaves the other deletable.
+
+Two mechanical traps worth not re-learning:
+
+- **`vi.clearAllMocks()` in `beforeEach`, never `resetAllMocks()`.** The latter drops the
+  implementations the module factories installed, leaving every fake returning `undefined`
+  for the rest of the file. Without *some* per-test clear, the `not.toHaveBeenCalled()`
+  assertions pass on accumulated history from earlier tests — which is how the first draft
+  of this file reported `installMod` "called 24 times" on a request that refused.
+- **The `child_process` fake must be callback-shaped**, because the route wraps it in
+  `promisify`. A promise-returning fake hangs forever waiting for a callback.
+
+## Eleven mutants, applied and confirmed red
+
+Each was applied to the tree, `npm test` run, and the tree restored (`git status` clean).
+
+| # | Mutation | Caught by |
+|---|---|---|
+| 1 | `if (false && !side.install)` — the client-only filter deleted | `mod-plan` (4) **and** the route suite (5). Also checked against the nastier variant — drop the `continue` so the skip is still *reported* and downloaded anyway, which no assertion on the response's `skipped` can see: red in both (8 tests), because the route asserts which mods reached `installMod` |
+| 2 | the unmapped-`environment` warning never pushed | `an environment value this app cannot read is reported` |
+| 3 | `skipped.push(...plan.skipped)` deleted | 5 tests — response, ledger fact, *and* the status, because `applyReport` then computes a different denominator from the route's |
+| 4 | `errors.push(...plan.errors)` deleted | 3 tests — `errors`, the `Failed` fact, the outcome |
+| 5 | `/api/mods/install`'s client-only refusal → `if (false)` | `409s without installing anything` |
+| 6 | `{status: complete ? 200 : 500}` → `200` | 4 tests |
+| 7 | the no-download-source refusal removed | 2 tests |
+| 8 | `unverified.push(mod.name)` suppressed | 2 tests, and **each of the two writer paths independently** — mutating one site reddens exactly one test |
+| 9 | the `skipped.length > 0` disjunct dropped from the report-dialog condition | 4 tests |
+| 10 | the skipped-rendering block in `modpacks.tsx` deleted | 6 tests |
+| 11 | sha512 mismatch returning the corrupt buffer | **already defended** — `mod-download.test.ts`, 3 tests. No new test written |
+
+Mutant 7 is the one worth reading the detail of, because the obvious assertion does not
+catch it. With the `installable === 0` branch gone, `modsDirRefusal` catches the same pack
+one step later and **also answers 409**, so a status assertion passes. What changes is the
+sentence ("could not be installed on a server" instead of "has no download source —
+re-import it"), which sends the operator looking for a server fault, and the body shape
+(counts present instead of absent), which `modpacks.tsx` branches on. The test asserts the
+sentence and the shape.
+
+## The complements are not padding
+
+Every mutant above is a *deletion*, and a deletion is caught by a test that demands the
+thing exist. The opposite mutant — do it always — needs a test that demands it *not*
+happen, so each guarantee is pinned from both sides: a clean apply answers 200 with an empty
+`warnings`, a pack whose values the enum all knows warns about nothing, and an apply with no
+skips and no failures opens **no** dialog and raises **no** toast. Without that last one,
+"always open the report" passes every other test in the file.

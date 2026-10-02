@@ -122,15 +122,16 @@ a filter. Adding help for them is real work left undone, not a bug.
 **The current implementation is not the best way to do this, and the evidence is inside the
 image we already run.**
 
-`/api/mods/install-modpack` resolves a pack to a list of mods and downloads each one into the
-mods directory itself. Measured against the running `itzg/minecraft-server` container
-2026-10-01, that image ships a first-class Modrinth modpack installer we are not calling:
+`/api/mods/install-modpack` resolves a pack to a list of mods and downloads the server-side
+ones into the mods directory itself. Measured against the running `itzg/minecraft-server`
+container 2026-10-01, that image ships a first-class Modrinth modpack installer we are not
+calling:
 
 | | ours | `mc-image-helper install-modrinth-modpack` |
 |---|---|---|
 | Pack format | a resolved mod list | the real `.mrpack`, including its `overrides/` tree (configs, datapacks, scripts the pack needs) |
-| Client-only mods | nothing filtered | `env.server` **plus** a curated list of **104** known-client-only slugs at `/image/modrinth-exclude-include.json`, maintained upstream. More than `env.server` gives you: plenty of mods declare `server: optional` and are still useless or harmful on a server |
-| Hash verification | none | yes |
+| Client-only mods | filtered, since 2026-10-01: the version's own `environment` (a measured ten-value enum in `src/lib/mod-admission.ts`), falling back to the project's `server_side`, skipping only a **positive `unsupported`**. Skips are named in the report and in the ledger, never silent; a value the enum has no row for is reported rather than guessed at. No curated slug list | `env.server` **plus** a curated list of **104** known-client-only slugs at `/image/modrinth-exclude-include.json`, maintained upstream. More than `env.server` gives you: plenty of mods declare `server: optional` and are still useless or harmful on a server |
+| Hash verification | yes, since 2026-10-01: Modrinth's sha512 is compared **before the jar is written** (`downloadVerifiedJar` → `checkIntegrity`), with sha1 and then size as fallbacks, and "installed without a checksum to verify against" reported when the registry published neither. A direct (Technic/Solder) download has no registry hash and is checked against the response's `Content-Length` | yes |
 | Mod loader | assumed to already match | installed from the pack, with `--force-modloader-reinstall` |
 | Escape hatches | none | `--exclude-files`, `--force-include-files`, `--overrides-exclusions`, `--ignore-missing-files` |
 
@@ -149,8 +150,17 @@ implements for the version/loader change, with the control lock, the graceful st
 hand-rolled downloader is the part that does not fit the architecture.
 
 **Not a reason to drop the per-mod work.** `/api/mods/install` installs a *single* mod and
-has no image-level equivalent, so `env.server` filtering and hash verification still have to
-live in this app for that path. The pack path is where the image is strictly better.
+has no image-level equivalent, so side filtering and hash verification have to live in this
+app for that path — and they do, in `src/lib/mod-admission.ts` and `src/lib/mod-manager.ts`,
+shared by both installers so the single-mod and the 166-mod path cannot disagree about the
+same jar.
+
+**What the image still has that we do not**, now that the two rows above have been closed:
+the `.mrpack`'s `overrides/` tree, the loader install, the curated 104-slug exclude list, and
+the four escape-hatch flags. The first is the substantial one — a pack's configs and
+datapacks are not in a resolved mod list at all. **Switching remains the owner's call and is
+deliberately not implemented**; the point of the table is that the decision is informed, not
+that it is overdue.
 
 Decide before building more on the current installer. Switching is a real change — the
 ledger copy, the `InstalledMod` rows (the image owns the mods dir, so the app's inventory

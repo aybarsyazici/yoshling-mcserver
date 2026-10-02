@@ -666,11 +666,22 @@ connect **directly to the box IP `89.58.50.155`**:
   - **Not yet run against a live pack.** The enum and the hashes were measured against the
     real Modrinth API, but no modpack has been applied through it. The three saved packs that
     could exercise it are the ones a version guard refuses anyway (below).
-  - A wider scan (200 projects / 360 versions) found **nine** distinct `environment` values,
-    not six, including `singleplayer_only` — exactly the shape this filter exists to exclude.
-    An earlier version of this paragraph said the two signals "never disagree on a skip, only
-    on an install"; that was true of the first 160-version sample and false of the wider one.
-    An unmapped value now fails loudly rather than falling through.
+  - **`environment` has ten values, not six and not nine.** This said nine over 200 projects /
+    360 versions, which was an intermediate scan; the one the code is built from is **527
+    projects / 2,751 versions** and it is the table on `ENVIRONMENT_TO_SERVER` in
+    `src/lib/mod-admission.ts` — ten rows, with each value's count and its sampling written
+    out beside it. Don't restate the list here; a second copy of an enum Modrinth can extend
+    is how one of them goes stale, which is exactly what happened to this bullet. The narrow
+    160-version sample missed `singleplayer_only`, the one value that changes an answer from
+    install to skip. An earlier version of this paragraph also said the two signals "never
+    disagree on a skip, only on an install"; true of the 160-version sample, false of the
+    wider one (17 counter-examples). An unmapped value now fails loudly rather than silently.
+  - **Both installers and the report UI have behavioural tests** (2026-10-02):
+    `src/lib/__tests__/mod-install-routes.test.ts` drives `/api/mods/install-modpack` and
+    `/api/mods/install` as routes with only the edges faked — the real gates, the real plan,
+    the real operation registry — and `tests/modpack-report.test.tsx` renders the report
+    dialog. Written against eleven named mutants; see
+    [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
