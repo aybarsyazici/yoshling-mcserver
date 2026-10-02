@@ -38,6 +38,21 @@ export interface ModrinthVersion {
   downloads: number;
   files: ModrinthFile[];
   dependencies: ModrinthDependency[];
+  /**
+   * Which side of the game this specific build runs on — the field that decides whether
+   * a jar belongs in the *server's* mods directory, and which nothing in this app read
+   * until 2026-10-01.
+   *
+   * A single string, **not** the `env: {client, server}` object the `.mrpack` format
+   * uses. Measured against `/v2/project/<id>/version` across 160 versions of the 40
+   * most-downloaded mods: present on 160 of 160, with six distinct values
+   * (`client_only`, `client_or_server_prefers_both`, `client_or_server`,
+   * `client_only_server_optional`, `client_and_server`, `unknown`), plus `server_only`
+   * observed directly on LuckPerms. `src/lib/mod-admission.ts` owns the mapping and
+   * records the counts; it is optional here only so a cached or older response that
+   * lacks it falls through to the project-level `server_side` instead of crashing.
+   */
+  environment?: string;
 }
 
 export interface ModrinthFile {

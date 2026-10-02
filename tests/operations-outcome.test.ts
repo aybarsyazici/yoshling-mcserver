@@ -285,3 +285,143 @@ describe("concludeOperation", () => {
       done();
     }));
 });
+
+/**
+ * The modpack installer's step shapes, now that it is allowed to leave mods out.
+ *
+ * Driven through the real `runOperation` rather than asserted from the route, which needs
+ * `auth()`, Prisma, a mods directory and Modrinth. What is under test is the thing the
+ * route cannot see for itself: **what the registry concludes from the steps it records.**
+ * Both of these were got wrong in the first draft of the filtering change, in opposite
+ * directions, and neither would have shown up as a failing request.
+ */
+describe("install-modpack's step shapes after client-only filtering", () => {
+  /**
+   * The one that matters most. A pack where every server-side mod installed and the
+   * client-only ones were left out is a clean success — `ok`, green.
+   *
+   * Settling the plan step `noop` because `plan.length < modpack.mods.length` would make
+   * this `partial`, i.e. every correct apply of every real pack (30-50% client mods)
+   * summarised as something having gone wrong. That is the backup-`noop` regression this
+   * suite was created over, wearing new clothes.
+   */
+  it("concludes ok when the only shortfall is client-only mods", async () => {
+    const rec = await record(
+      { kind: "mods.apply", game: "minecraft", title: "Installing a modpack" },
+      async (op) => {
+        op.step("Checking which mods run on a server");
+        op.settle("Checked which mods run on a server — 40 are client-only", {
+          count: { done: 126, total: 166, noun: "to install" },
+        });
+        op.step("Downloading mods");
+        // `total` is the server-side count, not the pack's row count — see
+        // `serverModTotal`. 126 of 126 is the complete case.
+        op.settle("Installed 126 of 126 mods", {
+          kind: "done",
+          count: { done: 126, total: 126, noun: "mods" },
+        });
+        return {
+          facts: [
+            { label: "Installed", value: "126 of 126" },
+            // No `verdict: "warn"` on the skip fact, deliberately: a warn fact alone is
+            // enough to force `partial`, so tagging a correct decision would repaint every
+            // apply amber by a different route than the `noop` above.
+            { label: "Skipped as client-only", value: "40 — Sodium, Iris Shaders" },
+          ],
+          value: null,
+        };
+      }
+    );
+    expect(rec.outcome).toBe("ok");
+    expect(rec.summary).not.toMatch(/nothing changed|missing|partial/i);
+  });
+
+  /**
+   * The refusal path: a pack where nothing runs on a server must not summarise as though
+   * mods were attempted and lost.
+   *
+   * The route reaches here with "Read the modpack list" already settled at a **non-zero**
+   * count, which is what makes this subtle. `concludeOperation` only reaches outcome
+   * `nothing` through `zeroOfSomething`, and that rule is guarded by `!madeProgress` — so
+   * a `noop` settle here falls through to the `partial` rule and summarises *"Installed 0
+   * of 45 server mods; 45 failed."*, calling 45 client-only mods failures when not one was
+   * attempted. The complement case below pins that reading, so the two cannot be confused
+   * again.
+   */
+  it("concludes failed, with the reason, when no mod in the pack runs on a server", async () => {
+    const rec = await record(
+      { kind: "mods.apply", game: "minecraft", title: "Installing a modpack" },
+      async (op) => {
+        op.step("Reading the modpack list");
+        op.settle("Read the modpack list: 45 mods", {
+          count: { done: 45, total: 45, noun: "installable" },
+        });
+        op.step("Checking which mods run on a server");
+        op.reject("No mod in this pack runs on a server");
+        return { value: null };
+      }
+    );
+    expect(rec.outcome).toBe("failed");
+    // The summary has to carry the REASON, not just the failure: "installing a modpack
+    // failed" with no cause is what sends someone to the container logs for a pack that
+    // was simply client-side.
+    expect(rec.summary).toMatch(/No mod in this pack runs on a server/);
+  });
+
+  /**
+   * Why that branch is a `reject` and not a `noop` settle — the mis-marking it replaced,
+   * pinned with the sentence it produces. Anyone "tidying" the refusal into a count-shaped
+   * step gets this test's explanation rather than having to rediscover it.
+   */
+  it("would call untried client-only mods failures if the refusal were a noop count", async () => {
+    const rec = await record(
+      { kind: "mods.apply", game: "minecraft", title: "Installing a modpack" },
+      async (op) => {
+        op.step("Reading the modpack list");
+        op.settle("Read the modpack list: 45 mods", {
+          count: { done: 45, total: 45, noun: "installable" },
+        });
+        op.step("Checking which mods run on a server");
+        op.settle("Checked which mods run on a server — none of them run on one", {
+          kind: "noop",
+          count: { done: 0, total: 45, noun: "server mods" },
+        });
+        return { value: null };
+      }
+    );
+    // Not `nothing`: the earlier step's non-zero count sets `madeProgress`, which guards
+    // the `zeroOfSomething` rule.
+    expect(rec.outcome).toBe("partial");
+    expect(rec.summary).toMatch(/45 failed/);
+  });
+
+  /**
+   * The trap that produced the first draft's bug, stated directly: a second `settle` on a
+   * closed step is silently discarded, so a corrective marking after a `done` settle does
+   * nothing at all.
+   */
+  it("silently discards a second settle on an already-settled step", async () => {
+    const rec = await record(
+      { kind: "mods.apply", game: "minecraft", title: "Installing a modpack" },
+      async (op) => {
+        op.step("Checking which mods run on a server");
+        op.settle("Checked which mods run on a server", {
+          count: { done: 0, total: 45, noun: "to install" },
+        });
+        // Intended to mark the refusal. Records nothing — there is no live step left.
+        op.settle("Nothing in this pack runs on a server", {
+          kind: "noop",
+          count: { done: 0, total: 45, noun: "server mods" },
+        });
+        return { value: null };
+      }
+    );
+    expect(rec.steps).toHaveLength(1);
+    expect(rec.steps[0].kind).toBe("done");
+    expect(rec.steps[0].label).toBe("Checked which mods run on a server");
+    // The consequence, measured: a refusal that changed nothing reports that it finished
+    // and could not be checked, and sends the reader to the installed-mods list.
+    expect(rec.outcome).toBe("unverified");
+    expect(rec.summary).toMatch(/nothing could be read back/);
+  });
+});

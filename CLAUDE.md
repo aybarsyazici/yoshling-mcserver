@@ -647,6 +647,30 @@ connect **directly to the box IP `89.58.50.155`**:
   page), closing the whitelist/ops/bans set. It is routed on a live RCON socket rather than
   on `docker inspect`, reads every outcome back, and **has not been run against the live
   server** — depth in [`docs/MINECRAFT.md`](docs/MINECRAFT.md#bans).
+- **The mod installers now filter by side and verify downloads** (2026-10-01,
+  `src/lib/mod-admission.ts`, tested). Two holes, both the house defect class. Every pack
+  mod went into the *server's* mods dir regardless of side — a large pack is 30–50%
+  client-only (Sodium, Iris), where the good case is wasted disk and the bad case is Fabric
+  Loader aborting on a jar with no server entrypoint, i.e. a permanent "Starting…" with the
+  cause nowhere on screen. And `ModrinthFile.hashes` had been typed since the file was
+  written with nothing reading it, so a truncated download wrote a bad jar and the route
+  answered `{success:true}`. Now: **skip only on a positive `unsupported`** (`environment` is
+  a *string* on the API, not the `env:{client,server}` object the `.mrpack` format uses), skips
+  are **named** in the response and the ledger, and `downloadVerifiedJar` hashes in memory and
+  throws `ModIntegrityError` **before** any write, so a bad jar never exists in the mods
+  directory. One helper for both `/api/mods/install` and `install-modpack`. **The denominator
+  changed and that is the load-bearing part:** "installed n of m" counts *mods that belong on
+  this server* (pack rows − client-only), because counting the skips would make every correct
+  apply settle `noop` → outcome `partial` → amber, which is the backup-`noop` regression the
+  test suite exists for. See `serverModTotal`.
+  - **Not yet run against a live pack.** The enum and the hashes were measured against the
+    real Modrinth API, but no modpack has been applied through it. The three saved packs that
+    could exercise it are the ones a version guard refuses anyway (below).
+  - A wider scan (200 projects / 360 versions) found **nine** distinct `environment` values,
+    not six, including `singleplayer_only` — exactly the shape this filter exists to exclude.
+    An earlier version of this paragraph said the two signals "never disagree on a skip, only
+    on an install"; that was true of the first 160-version sample and false of the wider one.
+    An unmapped value now fails loudly rather than falling through.
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
