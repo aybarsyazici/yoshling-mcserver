@@ -117,55 +117,86 @@ from `doDaylightCycle` to `advance_time`) and nobody has measured what each new 
 grouped under "Other", with their live value and no help — annotation is additive here, never
 a filter. Adding help for them is real work left undone, not a bug.
 
-## Modpacks — and the better way, which we are not using
+## Modpacks — and why we are NOT delegating to the image
 
-**The current implementation is not the best way to do this, and the evidence is inside the
-image we already run.**
+> **This section used to say the opposite.** It argued that
+> `mc-image-helper install-modrinth-modpack`, which ships inside the
+> `itzg/minecraft-server` image we already run, was the better way and that our own installer
+> was "the part that does not fit the architecture". A design review then measured three things
+> that reverse the conclusion. The original recommendation is kept below, struck through,
+> because a plausible wrong answer that survived a writeup is worth recording as wrong — and
+> because the image genuinely does have the capabilities it was credited with. It is the
+> *trade* that was wrong, not the inventory.
 
-`/api/mods/install-modpack` resolves a pack to a list of mods and downloads the server-side
-ones into the mods directory itself. Measured against the running `itzg/minecraft-server`
-container 2026-10-01, that image ships a first-class Modrinth modpack installer we are not
-calling:
+### The decisive reason: it would install nothing, and say so only by accident
 
-| | ours | `mc-image-helper install-modrinth-modpack` |
-|---|---|---|
-| Pack format | a resolved mod list | the real `.mrpack`, including its `overrides/` tree (configs, datapacks, scripts the pack needs) |
-| Client-only mods | filtered, since 2026-10-01: the version's own `environment` (a measured ten-value enum in `src/lib/mod-admission.ts`), falling back to the project's `server_side`, skipping only a **positive `unsupported`**. Skips are named in the report and in the ledger, never silent; a value the enum has no row for is reported rather than guessed at. No curated slug list | `env.server` **plus** a curated list of **104** known-client-only slugs at `/image/modrinth-exclude-include.json`, maintained upstream. More than `env.server` gives you: plenty of mods declare `server: optional` and are still useless or harmful on a server |
-| Hash verification | yes, since 2026-10-01: Modrinth's sha512 is compared **before the jar is written** (`downloadVerifiedJar` → `checkIntegrity`), with sha1 and then size as fallbacks, and "installed without a checksum to verify against" reported when the registry published no checksum and no size. A direct (Technic/Solder) download has no registry hash and is checked against the response's `Content-Length` | yes |
-| Mod loader | assumed to already match | installed from the pack, with `--force-modloader-reinstall` |
-| Escape hatches | none | `--exclude-files`, `--force-include-files`, `--overrides-exclusions`, `--ignore-missing-files` |
+Driving `MODRINTH_MODPACK` means patching `.env` and recreating the service, which is what
+`applyServiceEnv` does for the version dropdown. But `applyServiceEnv` calls
+**`recreateService(game, { start: false })`** (`game-manager.ts:1974` and `:2108`) and starts the
+world again only `if (wasRunning)`. **Minecraft is `exited exit=0` on this box** — verified
+2026-10-02 — and it is the world that spends most of its time stopped.
 
-Facts, first-hand from the container: `/usr/bin/mc-image-helper` exists;
-`mc-image-helper install-modrinth-modpack --help` lists the options above;
-`/image/scripts/start-deployModrinth` wires it to `MODRINTH_MODPACK` / `MODRINTH_PROJECT`,
-`MODRINTH_LOADER`, `MODRINTH_VERSION` and friends under `MODPACK_PLATFORM=MODRINTH`;
-`globalExcludes` in that json has 104 entries.
+So "apply a pack" would recreate a stopped container, install **nothing**, and the only honest
+ledger entry would be *"requested, not applied"*. The actual download would happen on some
+later Power on, where a failure is a line in `docker logs` behind `restart: "no"` with no
+operation record and nobody watching. That is this project's named defect class —
+reports-success-after-doing-nothing — reached **structurally** rather than by a bug, which means
+no amount of care in the calling code fixes it.
 
-**Why this fits this project better than it looks.** It runs at container start from env
-vars, which sounds like the wrong shape for a dashboard that installs things at runtime —
-but applying a modpack through it would be an `.env` patch plus
-`create --force-recreate`, which is **exactly** the mechanism `applyServiceEnv` already
-implements for the version/loader change, with the control lock, the graceful stop, the
-"a stopped world stays stopped" rule and the operation ledger all already in place. The
-hand-rolled downloader is the part that does not fit the architecture.
+### Two claims in the original writeup were simply wrong
 
-**Not a reason to drop the per-mod work.** `/api/mods/install` installs a *single* mod and
-has no image-level equivalent, so side filtering and hash verification have to live in this
-app for that path — and they do, in `src/lib/mod-admission.ts` and `src/lib/mod-manager.ts`,
-shared by both installers so the single-mod and the 166-mod path cannot disagree about the
-same jar.
+| Claimed here | Measured |
+|---|---|
+| the image verifies hashes | its **Modrinth** path uses `skipExisting(true)` and applies `FileHashVerifier` only under `curseforge/`. Delegating would **lose** `downloadVerifiedJar`'s verify-before-write, which this repo added deliberately |
+| its client-only filtering is better than ours | it reads sidedness from the `.mrpack` index. **COBBLEVERSE's index declares all 168 files `server: required` — zero client-only — while the per-version API reports 43 `client_only`** (50 counting `client_only_server_optional`). Trusting the index writes ~43 client-only jars into `mods/`, and Fabric Loader aborts on a jar with no server entrypoint |
 
-**What the image still has that we do not**, now that the two rows above have been closed:
-the `.mrpack`'s `overrides/` tree, the loader install, the curated 104-slug exclude list, and
-the four escape-hatch flags. The first is the substantial one — a pack's configs and
-datapacks are not in a resolved mod list at all. **Switching remains the owner's call and is
-deliberately not implemented**; the point of the table is that the decision is informed, not
-that it is overdue.
+The second one is the sharper lesson: **the `.mrpack` index's `env` is written by the pack
+author and is frequently wrong, while `version.environment` is derived by Modrinth.** Take
+sidedness from the API, which is what `mod-admission.ts` already does. The image and
+Pelican's egg both take it from the index.
 
-Decide before building more on the current installer. Switching is a real change — the
-ledger copy, the `InstalledMod` rows (the image owns the mods dir, so the app's inventory
-becomes a *read* of what landed rather than a record of what it put there), and the existing
-pack import/export would all move.
+### And the pinning problem needs no zip reader
+
+The thing our importer actually gets wrong is that it discards data it already has:
+`dependencies[].version_id` is present on **168 of COBBLEVERSE's 186 dependencies** and the
+import throws every one away, which is why **566 of 569 production `ModpackMod` rows are
+unpinned** and "Apply" installs the newest build of each mod rather than the pack.
+
+Two batched calls replace the whole problem — measured 2026-10-02:
+
+| call | result |
+|---|---|
+| `GET /v2/versions?ids=[…]` | 168 pinned versions in **424 ms**, every primary file carrying sha512 |
+| `GET /v2/projects?ids=[…]` | 168 projects in ~0.79 s, 1.5 MB |
+
+That is two requests in place of up to 166 sequential ones, and it removes any need for a
+`.mrpack` zip reader, a central-directory parser, or a schema migration to hold file lists.
+
+### What we are deliberately not doing, and why
+
+- **Not installing `overrides/`.** Real cost measured: 7 files for `adrenaline`, **2,436** for
+  `cobblemon-fabric`, up to ~4,645 and 424 MB for the largest. Writing those into a live server
+  directory collides with every settings surface in this app, for packs that cannot run on
+  26.1.2 anyway. The cheap half of the value is free: the preview *says* "18 dependencies carry
+  no pinned version, so this pack may ship files we do not install", which turns a silent
+  incompleteness into a stated one.
+- **Not writing a real `.mrpack` exporter.** Nobody here is round-tripping a pack into Prism.
+- **Not adding a `Profile` table.** Prisma 7 cannot express `CREATE UNIQUE INDEX … WHERE active
+  = 1`, so dev and prod would agree only while a human kept them agreeing — in a repo whose own
+  history includes a migration headed "Pending" two hundred lines above a Status section saying
+  it was applied.
+
+### ~~The original recommendation, kept as a record of being wrong~~
+
+~~The image ships `/usr/bin/mc-image-helper`, wired to `MODRINTH_MODPACK` by
+`/image/scripts/start-deployModrinth`, and it handles real `.mrpack` files including the
+`overrides/` tree, installs the mod loader from the pack, and filters client-only mods via a
+curated 104-slug exclude list at `/image/modrinth-exclude-include.json`. Driving it would be an
+`.env` patch plus `create --force-recreate`, exactly what `applyServiceEnv` already does.~~
+
+Those capabilities are real and the 104-slug list is a genuinely useful artifact — it is the
+`env.server` half and the hash half that do not hold up, and the `start: false` behaviour that
+makes the whole shape unprovable here.
 
 ### Pack facts that are not bugs
 
