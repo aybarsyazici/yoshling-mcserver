@@ -40,6 +40,17 @@ interface Dependency {
 
 export function ModCard({ mod }: ModCardProps) {
   const [showDetail, setShowDetail] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  /**
+   * The route's own refusal sentence, held while the override dialog is open.
+   *
+   * `/api/mods/install` already answered 409 `{error:"client-only", serverSide, decidedBy}`
+   * and already accepted `allowClientOnly` — and **nothing read either**, because the route
+   * had no caller at all. The sentence is not re-written here: `refusal` is composed in the
+   * route from `CLIENT_ONLY_CONSEQUENCE`, which exists because this exact claim was once
+   * stated twice and the two copies disagreed about whether a client-only jar is harmless.
+   */
+  const [clientOnlyRefusal, setClientOnlyRefusal] = useState<string | null>(null);
   const [showPackDialog, setShowPackDialog] = useState(false);
   const [modpacks, setModpacks] = useState<SimpleModpack[]>([]);
   const [selectedPack, setSelectedPack] = useState("");
@@ -59,6 +70,55 @@ export function ModCard({ mod }: ModCardProps) {
         if (data.dependencies) setDependencies(data.dependencies);
       })
       .catch(() => {});
+  }
+
+  /**
+   * Install this one mod on the server.
+   *
+   * `allowClientOnly` is only ever sent from the dialog below — the one that appears *after*
+   * the route has refused and said why. Sending it by default would turn the refusal into a
+   * control that is broken in a new way, which is the same argument the version guard's
+   * `confirm` is built on.
+   */
+  async function install(allowClientOnly = false) {
+    setInstalling(true);
+    try {
+      const res = await fetch("/api/mods/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modrinthId: mod.project_id,
+          slug: mod.slug,
+          name: mod.title,
+          ...(allowClientOnly ? { allowClientOnly: true } : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        setClientOnlyRefusal(null);
+        // The route's own sentence, not a paraphrase: it carries the caveats — "no checksum
+        // was published, so it could not be verified", and the client-only warning on an
+        // overridden install — and a friendlier local copy would drop exactly those.
+        toast.success(`${mod.title} — ${data.message || "installed"}`);
+        return;
+      }
+
+      if (res.status === 409 && data.error === "client-only") {
+        setClientOnlyRefusal(data.refusal || data.message || "");
+        return;
+      }
+
+      setClientOnlyRefusal(null);
+      // `message` first: the incompatible-version 409 puts its explanation there and leaves
+      // `error` as the bare code `"incompatible"`.
+      toast.error(data.message || data.error || `Couldn't install ${mod.title}`);
+    } catch {
+      setClientOnlyRefusal(null);
+      toast.error(`Couldn't reach the server to install ${mod.title}. Nothing was changed.`);
+    } finally {
+      setInstalling(false);
+    }
   }
 
   async function openPackDialog() {
@@ -226,22 +286,70 @@ export function ModCard({ mod }: ModCardProps) {
                 </Badge>
               ))}
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">
                 {formatDownloads(mod.downloads)} downloads
               </span>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={(e) => { e.stopPropagation(); openPackDialog(); }}
-                className="shadow-sm"
-              >
-                + Add to Pack
-              </Button>
+              <div className="flex items-center gap-1.5">
+                {/* Secondary, and still here: a pack is how you stage a set of mods to apply
+                    together, which is a different job from putting one jar on the server. */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={(e) => { e.stopPropagation(); openPackDialog(); }}
+                >
+                  Add to pack
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={installing}
+                  onClick={(e) => { e.stopPropagation(); install(); }}
+                  className="shadow-sm"
+                >
+                  {installing ? "Installing..." : "Install"}
+                </Button>
+              </div>
             </div>
           </div>
         </CardContent>
       </Card>
+
+      {/*
+        The client-only override. The 409 has carried `serverSide` and `decidedBy` since the
+        side filter was added (2026-10-01) with no UI reading them, so both the refusal and
+        the way past it were unreachable from the dashboard.
+
+        `decidedBy` is deliberately NOT rendered: its values are `version-environment` /
+        `project-server-side` / `file-env`, which are names for our own signal ordering, and
+        the sentence above already says which publisher made the claim ("this build declares
+        `client_only`" vs "Modrinth lists this project as server-side unsupported") — which is
+        the part a user can check.
+      */}
+      <Dialog
+        open={clientOnlyRefusal !== null}
+        onOpenChange={(open) => { if (!open) setClientOnlyRefusal(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Install {mod.title} anyway?</DialogTitle>
+            <DialogDescription>{clientOnlyRefusal}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setClientOnlyRefusal(null)}>
+              Cancel
+            </Button>
+            {/* `destructive`, because the stated consequence includes a server that does not
+                start — the same weight the modpack apply's confirm carries. */}
+            <Button
+              variant="destructive"
+              disabled={installing}
+              onClick={() => install(true)}
+            >
+              {installing ? "Installing..." : "Install it anyway"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showPackDialog} onOpenChange={setShowPackDialog}>
         <DialogContent>

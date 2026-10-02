@@ -117,6 +117,89 @@ from `doDaylightCycle` to `advance_time`) and nobody has measured what each new 
 grouped under "Other", with their live value and no help — annotation is additive here, never
 a filter. Adding help for them is real work left undone, not a bug.
 
+## Installing one mod
+
+`POST /api/mods/install` + the **Install** button on every search result
+(`src/components/mod-card.tsx`), wired 2026-10-02.
+
+**The route existed, hardened and tested, with no caller at all** — its own comment said so,
+and `mod-install-routes.test.ts` used that as the argument for covering it anyway. So the only
+way to put one jar on the server was to make a one-mod pack and apply it, which tars the world
+and deletes every installed mod first. Add-to-pack stays, as the *secondary* action: staging a
+set of mods to apply together is a different job from installing one.
+
+Three things came with the wiring, each closing a gap that was already in the code.
+
+### The search facet defaults to the server's own version
+
+`/api/mods/search` passed `serverSide: true` and set `versions:` **only when a modpack was
+selected**, so the default grid — the one that now carries an Install button on every card —
+mixed every Minecraft version Modrinth publishes into a 26.1.2 Fabric server's results, and
+`/api/mods/install` then refused them one at a time with "No compatible version found".
+
+- The route reads `ServerConfig` (the same row `/api/settings` GET projects) and defaults both
+  facets from it.
+- It **answers with `filter: {mcVersion, loader}`**, so the page states what was actually
+  faceted rather than inferring it from the request it made. `null` there is the difference
+  between "no mods exist for this server" and "no mods matched your search", and the empty
+  state names the filter instead of blaming the modpack selector that is not set.
+- **Widening is the literal `any`**, sent only by the "show all versions" control. An omission
+  must never mean "every version" again, which is the whole bug. The precedence —
+  nothing / `any` / a selected pack's own target, where the pack wins — is in
+  `src/lib/mod-search-filter.ts` rather than inline, because reaching it through the component
+  means driving a base-ui combobox behind a 300 ms debounce.
+- **The loader is lowercased.** The facet is a Modrinth *category slug* (`fabric`, `forge`,
+  `neoforge`); `ServerConfig.modLoader` holds whatever was saved and `/api/settings` uppercases
+  it for compose's `TYPE`, so both spellings genuinely exist in this app. `categories:FABRIC`
+  matches nothing and the symptom is an empty browser with no stated cause.
+
+### Both single-mod writers now hold `files:minecraft`
+
+`POST /api/mods/install` and `DELETE /api/mods/[id]` took **no resource at all**, while 23
+handlers across 18 other route files already take this lane through `fileLaneBusy`. They could
+therefore interleave with `mods.apply`, which holds the lane for the whole of a 166-mod install
+— a window that opens by deleting *every* installed jar:
+
+- an **install** that lands inside it is not in the apply's plan, so it is not among the files
+  the apply re-downloads, and it survives the wipe: the pack boots with a stranger in it;
+- a **remove** racing the apply's own `removeMod` makes the loser throw (`removeMod` reads the
+  row first and throws `Mod not found` once it is gone), so the apply pushes
+  `"<name>: could not be removed"` into `errors` and names a failure for a jar that *was*
+  deleted. A reported fault that did not happen costs the same to chase as a real one.
+
+Both are sub-second writes, so they take the lane through `fileLaneBusy` and enter no
+operation record of their own — the discipline `docs/OPERATIONS.md` sets out for config writers.
+
+### The client-only refusal is a dialog, with the override
+
+The 409 carried `serverSide` and `decidedBy` and accepted `allowClientOnly`, and **nothing read
+any of it**: the refusal and its only exit were both unreachable from the dashboard. It is now
+a named dialog ("Install *name* anyway?") stating the consequence, with a `destructive`
+"Install it anyway".
+
+- The 409 also carries **`refusal`** — `message` minus the "send allowClientOnly" instruction —
+  so the dialog renders the sentence verbatim. `CLIENT_ONLY_CONSEQUENCE` cannot be imported into
+  a client component (`mod-admission.ts` pulls in `node:crypto`), and the alternative was a
+  second hand-written copy of the one sentence that constant exists to keep single: this route
+  once stated the consequence twice and the two copies disagreed about whether a client-only jar
+  is harmless.
+- **`decidedBy` is deliberately not rendered.** Its values (`version-environment`,
+  `project-server-side`, `file-env`) name our own signal ordering, while `reason` already says
+  which publisher made the claim — "this build declares `client_only`" versus "Modrinth lists
+  this project as server-side unsupported" — which is the part a user can check.
+- The lane 409 is **not** mistaken for it. The dialog opens only on `error === "client-only"`;
+  offering an override for a busy lane would re-send the same request into the same held lane
+  and refuse again, which reads as a broken button.
+
+Covered by `src/lib/__tests__/mods-file-lane.test.ts` (the lane held for real by a parked
+operation, not a stubbed `fileLaneBusy`), `src/lib/__tests__/mods-search-route.test.ts` (the
+facet array Modrinth would have received, with the real `buildFacets`),
+`src/lib/__tests__/mod-search-filter.test.ts`, `tests/mod-card.test.tsx` and
+`tests/mod-browser.test.tsx`.
+
+**Not verified against a live server.** Every claim above is about code and is pinned by tests;
+nobody has yet pressed Install on the box and watched a jar appear in `mods/`.
+
 ## Modpacks — and why we are NOT delegating to the image
 
 > **This section used to say the opposite.** It argued that
