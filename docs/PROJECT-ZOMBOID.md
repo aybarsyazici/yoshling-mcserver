@@ -476,13 +476,23 @@ Working and verified in production:
 - `Map=` carries all 22 maps and **16 register cells** (was 2 before the scanner
   fix).
 - The Workshop update watcher: detection, in-game announcement while players are
-  connected, and the automatic restart-when-empty — all three exercised for real.
+  connected, and the automatic restart-when-empty — all three exercised for real, and
+  now **observed running completely unattended in production.** 2026-10-01 18:10 CEST it
+  found `[B42] I Don't Need A Lighter` had updated, saw the server empty, and restarted
+  to apply it with nobody watching. The evidence is a one-second correlation: the
+  container's `StartedAt` is `16:10:30Z` and the watcher's own `appliedAt` is
+  `16:10:31Z`, with `[pz-updates] applying (server restart): [B42] I Don't Need A
+  Lighter` in the web log. Still healthy 16 hours later — `lastError: ""`,
+  `pendingIds: []`, last check `2026-10-02T07:55:32Z`.
 - 12 GB heap; peak RSS 9.7 GB of 16 GB.
 
 Outstanding:
 
-- **`pz.yoshling.xyz` DNS record** (DNS-only / grey-cloud → the box) does not exist
-  yet. Players use the raw IP `89.58.50.155:16261`. Needs the Cloudflare dashboard.
+- ~~**`pz.yoshling.xyz` DNS record** does not exist yet~~ — **it does.** Resolved
+  2026-10-02: `pz.yoshling.xyz` → `89.58.50.155`, as do `mc` and `7dtd` (all DNS-only /
+  grey-cloud, correctly bypassing Cloudflare, which carries only HTTP). This entry sat
+  under "Outstanding" while CLAUDE.md said the opposite — two docs disagreeing, with the
+  stale one telling players to use a raw IP they did not need.
 - The mod defects in [Known mod defects](#known-mod-defects) that are tagged for
   removal — none applied yet; they want one batched restart.
 - `MuscleStrainFactor` is still at the vanilla `0.7`; a player has asked for it to
