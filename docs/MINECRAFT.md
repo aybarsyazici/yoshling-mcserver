@@ -173,6 +173,51 @@ write is often not a write at all. Logic is in `src/lib/mc-bans.ts`.
 a ban is an RCON `ban <name>`, and there is no "set the ban list to exactly this" command — a
 whole-list endpoint would have to diff and then issue N commands, each able to fail separately.
 
+### Verified on the live container, 2026-10-02
+
+Ban → the game answers `There are 1 ban(s):zz_selftest_01 was banned by Rcon: …` → the file the
+game parses carries a **real UUID** (`95911851-7751-3f09-a457-de4586d1fe86`, not the `uuid: ""`
+that locked everyone out in September) → pardon → `{verified:true, contradicted:false,
+noop:false}` with *"the running server applied it, and reading its ban list back confirms it"* →
+game and file both empty again. The name is lowercased by the game and matching is
+case-insensitive, so the read-back still recognised `ZZ_SelfTest_01`.
+
+Two refusals are worth knowing because both look like bugs and are not: a 20-character name is
+rejected (Minecraft's limit is 16), and `DELETE` takes `?kind=&target=` **query parameters**, not
+a body — a body gives `Expected kind to be "player" or "ip"`.
+
+### `banlist` with 2+ bans cannot be parsed — and the obvious fix is wrong
+
+**The hard limit of the live cross-check, and it belongs to the server.** Measured by banning
+three throwaway names and hexdumping the reply: 151 bytes, **zero newlines**.
+
+```
+There are 3 ban(s):zz_fix_a was banned by Rcon: fixture capturezz_fix_c was banned by Rcon: …
+```
+
+`RconConsoleSource.sendSystemMessage` appends every feedback message to one buffer with no
+separator — the same thing that makes `help gamerule` arrive as one 5 KB line. So one entry's
+reason runs straight into the next entry's name: `fixture capture` + `zz_fix_c` is the literal
+`capturezz_fix_c`, and **nothing in the reply says where the boundary was.** A single ban parses,
+which is why every manual test passed.
+
+**Walking the reply globally for each `(\S+) was banned by ` does not fix it — it makes it
+worse.** That was tried against this exact reply: it produces three entries, which *satisfies*
+the `entries.length === count` cross-check, named `zz_fix_a`, `capturezz_fix_c` and
+`capturezz_fix_b`. An honest refusal becomes a confidently wrong answer about who is banned.
+The real reply is committed at `src/lib/__tests__/fixtures/mc-banlist-players.txt` and two tests
+pin the refusal; the global walk turns them red.
+
+So `parseBanlist` stays line-anchored and refuses any reply whose entry count disagrees with its
+own header. The cost is that `liveReadState` reads `unreadable` and `banDrift` returns `null`
+whenever more than one ban exists — the **files stay authoritative and are read directly**, so
+the list on screen is right; what is lost is the second opinion. For a read-back whose only job
+is to decide whether a ban is genuinely in effect, declining to answer is the correct failure.
+
+Line-anchoring also buys a real security property on builds that *do* separate lines: the line
+boundary says where an entry ends, so a reason containing the literal `" was banned by "` cannot
+forge an entry for someone who is not banned.
+
 ### The path is chosen on a live RCON socket, not on `docker inspect`
 
 The game holds both ban lists **in memory** and rewrites the json from that memory whenever a

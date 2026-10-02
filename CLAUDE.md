@@ -641,12 +641,24 @@ connect **directly to the box IP `89.58.50.155`**:
   `help gamerule` reply has been captured and is a test fixture** — 5 KB, no newlines, 58
   rules each listed twice; it is parsed by the suite. The first version of this shipped a
   parser that read **one** rule out of it and a route that answered 200 with that one rule,
-  so what is still unexercised on the box is the *write* path: no `gamerule` write has been
-  sent to the live container from the dashboard.
+  and the write path is now **exercised on the live container too** (2026-10-02): the GET
+  reads all **58** rules in **0.787 s** (58 RCON round trips, against a 4 s budget), a write
+  lands and is confirmed by an independent `rcon-cli` read, a camelCase id is refused with
+  *"not one of the 58 game rules this server just listed, so nothing was sent"*, and
+  `random_tick_speed=banana` is refused with the current value so the control can snap back.
+  Production also confirms two things this file already claimed: `mob_griefing` is `false`
+  with nothing in this app having set it, and `command_blocks_work = true` against
+  `enable-command-block=false` in the file.
   **Ban management was added 2026-10-01** (`/api/server/bans` + a card on the MC settings
   page), closing the whitelist/ops/bans set. It is routed on a live RCON socket rather than
-  on `docker inspect`, reads every outcome back, and **has not been run against the live
-  server** — depth in [`docs/MINECRAFT.md`](docs/MINECRAFT.md#bans).
+  on `docker inspect` and reads every outcome back. **Exercised end to end on the live
+  container 2026-10-02**: ban → the game reports it → the file carries a real UUID
+  (`95911851-…`, *not* the `uuid: ""` that used to lock everyone out) → pardon → verified by
+  read-back → files and game both empty again. **One hard limit, and it is the server's:**
+  `banlist` sends no separator between entries, so a reply with two or more bans cannot be
+  parsed and the live cross-check honestly answers "cannot confirm". The files stay
+  authoritative. Measured, with the real reply committed as a fixture, and the obvious fix is
+  wrong — see [`docs/MINECRAFT.md`](docs/MINECRAFT.md#bans).
 - **The mod installers now filter by side and verify downloads** (2026-10-01,
   `src/lib/mod-admission.ts`, tested). Two holes, both the house defect class. Every pack
   mod went into the *server's* mods dir regardless of side — a large pack is 30–50%

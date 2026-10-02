@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   BAN_FOREVER,
   DEFAULT_BAN_REASON,
@@ -788,6 +790,71 @@ describe("parseBanlist — a forged entry must never read as a ban", () => {
   });
 });
 
+/**
+ * **The real reply, from the real server** — and the reason this feature's live cross-check
+ * has a hard limit. Three bans on the live 26.1.2 container, captured 2026-10-02: 151 bytes,
+ * **zero newlines**, each reason running straight into the next name.
+ *
+ * The feature shipped believing `banlist` was newline-separated. It is not, and the damage
+ * was not a wrong answer — the `entries.length === count` cross-check refused — but it meant
+ * the live half reported every list of two or more bans as unreadable. Only banning two
+ * throwaway names on the live server and hexdumping the reply showed it; one ban parses,
+ * because one entry needs no separator.
+ *
+ * These tests pin the refusal **and** pin why the obvious fix is wrong, because that fix was
+ * attempted: walking the reply globally for every `(\S+) was banned by ` yields three entries
+ * here, which satisfies the cross-check, under the names `zz_fix_a`, `capturezz_fix_c` and
+ * `capturezz_fix_b` — "fixture capture" and "zz_fix_c" joined with no space. A confidently
+ * wrong answer in place of an honest refusal.
+ *
+ * Asserted against the committed bytes rather than a hand-written sample, because every
+ * hand-written sample in this file has newlines in it and so agrees with the broken reading —
+ * the same trap the game-rules fixtures fell into.
+ */
+describe("parseBanlist — the reply production actually sends", () => {
+  const FIXTURE = readFileSync(
+    join(__dirname, "fixtures", "mc-banlist-players.txt"),
+    "utf-8"
+  );
+
+  it("is the shape that broke it: no newlines, three bans", () => {
+    expect(FIXTURE).not.toContain("\n");
+    expect(FIXTURE.length).toBe(151);
+    expect(FIXTURE).toContain("There are 3 ban(s):");
+  });
+
+  /** The boundary is unrecoverable, so the only honest answer is to refuse. */
+  it("refuses it rather than guessing where one entry ends and the next begins", () => {
+    const r = parseBanlist(FIXTURE);
+    expect(r.count).toBe(3);
+    expect(r.recognised).toBe(true);
+    expect(r.separated).toBe(false);
+    expect(r.entries).toEqual([]);
+    expect(banlistUsable(r)).toBe(false);
+  });
+
+  it("says 'cannot confirm' downstream, about everyone, including names that are really there", () => {
+    const r = parseBanlist(FIXTURE);
+    expect(banlistLists(r, "zz_fix_a")).toBeNull();
+    expect(banlistLists(r, "nobody")).toBeNull();
+    expect(liveReadState(r)).toBe("unreadable");
+    expect(banDrift(["zz_fix_a", "zz_fix_b", "zz_fix_c"], r)).toBeNull();
+  });
+
+  /**
+   * The single-ban case still works, which is why this went unnoticed: every manual test
+   * anybody ran had one ban in it.
+   */
+  it("still reads a single-ban reply, which is why nobody noticed", () => {
+    const one = parseBanlist("There are 1 ban(s):zz_fix_a was banned by Rcon: fixture capture");
+    expect(one.separated).toBe(true);
+    expect(one.entries).toEqual([
+      { target: "zz_fix_a", source: "Rcon", reason: "fixture capture" },
+    ]);
+    expect(banlistLists(one, "zz_fix_a")).toBe(true);
+  });
+});
+
 describe("parseBanlist", () => {
   it("reads an empty list", () => {
     const r = parseBanlist("There are no bans");
@@ -825,11 +892,12 @@ describe("parseBanlist", () => {
    * cross-checked against the parse, and a mismatch drops the entries rather than
    * publishing a greedy mis-read as fact.
    */
-  it("refuses to publish entries from a run-together reply", () => {
-    const r = parseBanlist(
-      "There are 2 ban(s):Notch was banned by Rcon: Griefingjeb_ was banned by Server: Testing"
-    );
-    expect(r.count).toBe(2);
+  it("refuses to publish entries when fewer arrived than the server declared", () => {
+    // The truncation case, and the one that actually happens: `banlist` enumerates, so a
+    // long list passes the 4096-byte RCON packet limit and a short read lands here. The
+    // server says three; one arrived.
+    const r = parseBanlist("There are 3 ban(s):Notch was banned by Rcon: Griefing");
+    expect(r.count).toBe(3);
     expect(r.separated).toBe(false);
     expect(r.entries).toEqual([]);
     expect(r.recognised).toBe(true);
@@ -890,10 +958,8 @@ describe("banlistUsable", () => {
    * a *recognised* reply whose entries ran together. Dropping `separated` from `banlistUsable`
    * leaves this green and re-opens every question below to a reply nobody can read.
    */
-  it("refuses a recognised reply whose entries could not be told apart", () => {
-    const together = parseBanlist(
-      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
-    );
+  it("refuses a recognised reply that is short of its own declared count", () => {
+    const together = parseBanlist("There are 3 ban(s):Notch was banned by Rcon: Griefing");
     expect(together.recognised).toBe(true);
     expect(together.separated).toBe(false);
     expect(banlistUsable(together)).toBe(false);
@@ -988,10 +1054,11 @@ describe("banlistLists", () => {
   });
 
   /** A run-together reply answers nothing about any single target — not even a "no". */
-  it("answers null for a recognised reply whose entries ran together", () => {
-    const together = parseBanlist(
-      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
-    );
+  it("answers null for a recognised reply that is short of its own count", () => {
+    const together = parseBanlist("There are 3 ban(s):Notch was banned by Rcon: Griefing");
+    // Not even about Notch, whose line DID arrive: an incomplete list is evidence about
+    // nobody, and answering "yes" for the part that made it is how a short read becomes a
+    // confident wrong answer.
     expect(banlistLists(together, "Notch")).toBe(null);
     expect(banlistLists(together, "Steve")).toBe(null);
   });
@@ -1207,10 +1274,8 @@ describe("banDrift", () => {
   });
 
   /** A recognised reply whose entries ran together is no more comparable than no reply. */
-  it("answers null for a run-together reply", () => {
-    const together = parseBanlist(
-      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
-    );
+  it("answers null for a reply short of its own declared count", () => {
+    const together = parseBanlist("There are 3 ban(s):Notch was banned by Rcon: Griefing");
     expect(together.recognised).toBe(true);
     expect(together.separated).toBe(false);
     expect(banDrift(["Notch", "1.2.3.4"], together)).toBe(null);
@@ -1251,9 +1316,7 @@ describe("liveReadState", () => {
    * is what the card used to do.
    */
   it("separates a reply that arrived and could not be parsed from no reply at all", () => {
-    const together = parseBanlist(
-      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
-    );
+    const together = parseBanlist("There are 3 ban(s):Notch was banned by Rcon: Griefing");
     expect(liveReadState(together)).toBe("unreadable");
     expect(liveReadState(together)).not.toBe(liveReadState(null));
   });

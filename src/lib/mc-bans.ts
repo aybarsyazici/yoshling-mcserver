@@ -647,6 +647,37 @@ export interface BanlistLine {
   reason: string;
 }
 
+/**
+ * **A `banlist` reply with two or more bans cannot be parsed, and that is a fact about the
+ * server, not a gap here.** Measured on the live 26.1.2 container 2026-10-02 by banning three
+ * throwaway names and hexdumping the reply — 151 bytes, **zero newlines**:
+ *
+ *   `There are 3 ban(s):zz_fix_a was banned by Rcon: fixture capturezz_fix_c was banned by …`
+ *
+ * `RconConsoleSource.sendSystemMessage` appends every feedback message to one buffer with no
+ * separator (the same thing that makes `help gamerule` arrive as one 5 KB line). So one
+ * entry's reason runs straight into the next entry's name: `fixture capture` followed by
+ * `zz_fix_c` is the eight characters `capturezz_fix_c`, and **nothing in the reply says where
+ * the boundary was**. One ban parses, because one entry needs no separator.
+ *
+ * **Do not "fix" this by walking the reply globally.** That was tried: matching every
+ * `(\S+) was banned by ` occurrence yields three entries for the reply above — enough to
+ * satisfy the `entries.length === count` cross-check — named `zz_fix_a`, `capturezz_fix_c` and
+ * `capturezz_fix_b`. It turns an honest refusal into a confidently wrong answer, which is
+ * strictly worse and is this project's named defect class. The committed fixture
+ * `__tests__/fixtures/mc-banlist-players.txt` is the real reply, kept so the next person can
+ * see why before trying it.
+ *
+ * What this costs, and why it is acceptable: the live cross-check degrades to "cannot
+ * confirm" (`liveReadState` → `unreadable`, `banDrift` → `null`) whenever more than one ban
+ * exists. The ban *files* remain authoritative and are read directly, so the list shown is
+ * correct; what is lost is the second opinion. Refusing to answer is the right failure for a
+ * read-back whose whole job is to decide whether a ban is really in effect.
+ *
+ * Line-anchored on purpose: where the reply *is* newline-separated, the line boundary says
+ * where an entry ends, so a reason may safely contain the literal " was banned by " and a
+ * crafted reason cannot forge a second entry.
+ */
 const BANLIST_ENTRY = /^(\S+) was banned by (.+?): ([\s\S]*)$/;
 
 export function parseBanlist(raw: string): BanlistReply {
