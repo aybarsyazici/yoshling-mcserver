@@ -120,7 +120,11 @@ than one-off fixes:
   that did not happen".
 - **`assertResourceFree()` / `fileLaneBusy()`** is how a sub-second writer joins the
   resource lanes without entering a record of its own (a record would double-toast).
-  Seven config/settings routes use it; a new config writer should.
+  **25 handlers across 20 route files** use it (`grep -rl fileLaneBusy src/app/api`); this
+  said "seven" and had been right at the time. Any new short writer should — and *writer* is
+  broader than "config": `/api/mods/install` and `/api/mods/[id]` joined on 2026-10-02
+  because they write into the Minecraft mods directory that `mods.apply` is busy emptying
+  (see [`MINECRAFT.md`](MINECRAFT.md#both-single-mod-writers-now-hold-filesminecraft)).
 - **Pre-emption is global, so every confirm dialog must be.** `liveFileOperations()` +
   `namedFileOperations()` in `operation-ui.ts` are the one definition. `powerBlocker`
   stays per-world — that is the *disable* decision and it is correct.

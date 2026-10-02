@@ -469,7 +469,7 @@ export function Modpacks() {
               <CardContent>
                 {pack.mods.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    No mods yet. Add mods from the Browse tab using the &quot;+ Add to Pack&quot; button.
+                    No mods yet. Add mods from the Browse tab with &quot;Add to pack&quot;.
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">

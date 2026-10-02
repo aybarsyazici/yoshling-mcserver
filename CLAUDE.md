@@ -703,6 +703,18 @@ connect **directly to the box IP `89.58.50.155`**:
     the real operation registry — and `tests/modpack-report.test.tsx` renders the report
     dialog. Written against eleven named mutants; see
     [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+  - **`/api/mods/install` finally has a caller** (2026-10-02): an **Install** button on every
+    search result, with add-to-pack demoted to secondary. The route was written, hardened and
+    tested with *nothing calling it*, so the only way to install one jar was to make a one-mod
+    pack and apply it — which tars the world and deletes every installed mod first. Three gaps
+    closed with it: the search facet now defaults to the server's own version and loader
+    (it listed mods for every Minecraft version ever against a 26.1.2 server, and widening is
+    now the explicit literal `any`); `/api/mods/install` and `/api/mods/[id]` now hold
+    `files:minecraft` so neither can interleave with `mods.apply`'s delete loop; and the
+    client-only 409 — whose `serverSide`, `decidedBy` and `allowClientOnly` opt-in nothing had
+    ever read — is a named dialog that states the consequence and offers the override.
+    **Not yet pressed against the live container.** Depth:
+    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#installing-one-mod).
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the

@@ -266,7 +266,11 @@ const SURFACES: Surface[] = [
     where: "Browse mods (via mod-browser.tsx)",
     render: () => void render(<ModBrowser />),
     ready: "Sodium",
-    install: ["+ Add to Pack"],
+    // Both install-capability controls on a search card. The label changed from
+    // "+ Add to Pack" to "Add to pack" in the same batch (CLAUDE.md's copy rule), and
+    // "Install" is the new primary action — which the increment that added it left ungated,
+    // so it is pinned here from both directions.
+    install: ["Add to pack", "Install"],
     remove: [],
     always: [],
   },

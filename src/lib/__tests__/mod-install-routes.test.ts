@@ -899,9 +899,11 @@ describe("the pre-install backup", () => {
  * **The mutant:** the client-only refusal and its `allowClientOnly` opt-in replaced with
  * `if (false)`, so a client-only jar installs and answers 200 `{success: true}`.
  *
- * This route has no UI caller today and that is precisely the argument for testing it:
- * leaving the hole open in one of the two installers is how the power control ended up
- * with three copies and two missing fixes.
+ * This route had **no UI caller** when these tests were written, and that was precisely the
+ * argument for testing it: leaving the hole open in one of the two installers is how the power
+ * control ended up with three copies and two missing fixes. It has one since 2026-10-02 — the
+ * Install button on every search result — and the refusal and its override are rendered in
+ * `tests/mod-card.test.tsx`. The assertions below are unchanged and still describe the route.
  */
 describe("/api/mods/install refuses a client-only mod", () => {
   const sodium = {
