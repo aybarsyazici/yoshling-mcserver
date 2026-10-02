@@ -5,22 +5,6 @@ import { hasPermission } from "@/lib/permissions";
 import { containerIsRunning, tailContainerLog } from "@/lib/game-manager";
 import { classifyRconFailure, rconFailureMessage } from "@/lib/rcon-failure";
 
-/**
- * "The server isn't running" is the most ordinary reason a console command fails, and
- * it used to surface as `500 {"error":"RCON error: getaddrinfo ENOTFOUND minecraft"}` —
- * a raw DNS error for an expected state, with no hint that the fix is "press Power on".
- * The GET above already has a comment about not rendering docker's error text as if the
- * game had said it; the POST never got the same treatment.
- *
- * The classification moved to `src/lib/rcon-failure.ts`, because the single sentence it
- * used to produce was wrong for one of the two failures it matched: `/timeout/i` caught
- * `rcon.ts`'s own `new Error("timeout")`, which means the socket **opened** and the game
- * did not answer — a server that is demonstrably present being told to press Power on, on
- * an already-running container, which is a documented no-op that toasts success. That
- * module splits the two and the handler below asks `containerIsRunning` so the sentence
- * can be true in all four combinations.
- */
-
 export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
@@ -48,6 +32,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: `Failed to read the log: ${msg}` }, { status: 500 });
   }
 }
+
+/**
+ * "The server isn't running" is the most ordinary reason a console command fails, and
+ * it used to surface as `500 {"error":"RCON error: getaddrinfo ENOTFOUND minecraft"}` —
+ * a raw DNS error for an expected state, with no hint that the fix is "press Power on".
+ * The GET above already has a comment about not rendering docker's error text as if the
+ * game had said it; the POST never got the same treatment.
+ *
+ * The classification moved to `src/lib/rcon-failure.ts`, because the single sentence it
+ * used to produce was wrong for one of the two failures it matched: `/timeout/i` caught
+ * `rcon.ts`'s own `new Error("timeout")`, which means the socket **opened** and the game
+ * did not answer — a server that is demonstrably present being told to press Power on, on
+ * an already-running container, which is a documented no-op that toasts success. That
+ * module splits the two and the handler below asks `containerIsRunning` so the sentence
+ * can be true in all four combinations.
+ */
 
 export async function POST(request: NextRequest) {
   const session = await auth();

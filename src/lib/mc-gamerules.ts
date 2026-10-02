@@ -8,9 +8,9 @@
  * `enable-command-block` and `allow-nether` and names the rule that replaced each one (see
  * `MC_GAME_RULE_REPLACEMENTS` in `mc-properties.ts`, measured 2026-10-01 against 26.1.2).
  * It then told the operator to go type `gamerule <x> false` into the console, because there
- * was no control. So the dashboard could *detect* a setting it could not change, for 48-odd
- * rules none of which it listed. Production proves someone did it by hand anyway:
- * `server.properties` says `enable-command-block=false` while the world says
+ * was no control. So the dashboard could *detect* a setting it could not change, for the 58
+ * rules the deployed build has, none of which it listed. Production proves someone did it by
+ * hand anyway: `server.properties` says `enable-command-block=false` while the world says
  * `command_blocks_work = true`, and `mob_griefing` is reported false on the live server
  * with nothing in this app having set it.
  *
@@ -24,7 +24,7 @@
  * `command_blocks_work`.
  *
  * A hardcoded id list would therefore be the project's defect class in a new costume: on
- * the live build, 48 queries for rules that do not exist, every one answered `Incorrect
+ * the live build, 58 queries for rules that do not exist, every one answered `Incorrect
  * argument`, and a panel that renders empty while looking like it merely has nothing to
  * say. And 1.21.4 is still on the volume and still selectable in the version dropdown, so
  * there is no single correct spelling to hardcode either.
@@ -47,12 +47,22 @@
  * ## Provenance of the defaults, stated rather than implied
  *
  * **The `default` column is published vanilla behaviour for 1.21.x. It was NOT read off
- * this deployment** — nothing in this change talked to the box. It drives one soft hint
- * ("not the vanilla default", which is how a hand-edited rule like `mob_griefing` becomes
- * visible) and nothing else: no write, no refusal and no ordering depends on it, so a
- * wrong entry misleads a label and cannot misapply a setting. The types are not in that
- * category — `type` is taken from the **live value** by `inferGameRuleType`, so the
- * control rendered for a rule is decided by what the game said, not by this file.
+ * this deployment.** It drives one soft hint ("not the vanilla default", which is how a
+ * hand-edited rule like `mob_griefing` becomes visible) and nothing else: no write, no
+ * refusal and no ordering depends on it, so a wrong entry misleads a label and cannot
+ * misapply a setting. The types are not in that category — `type` is taken from the **live
+ * value** by `inferGameRuleType`, so the control rendered for a rule is decided by what the
+ * game said, not by this file.
+ *
+ * **The column is optional, and five entries deliberately leave it empty**: the four rules
+ * 26.x created out of `server.properties` keys (`pvp`, `spawn_monsters`,
+ * `command_blocks_work`, `allow_entering_nether_using_portals`) have no 1.21.x behaviour to
+ * publish, because they were not game rules in 1.21.x — claiming one for them was a label
+ * asserting a fact nobody had checked. And `playersNetherPortalCreativeDelay` was written
+ * here as `1` while the deployed registry reports `0`. A rule with no default renders no
+ * hint, which is the honest outcome: "unknown" and "matches" have to stay distinguishable.
+ * The rule for adding one is therefore the rule for every claim in this repo — **verify a
+ * default or state none.**
  *
  * To re-measure defaults against a build, on a world nobody has edited:
  *   docker exec yoshling-mc rcon-cli "help gamerule"      # the ids this build has
@@ -69,15 +79,25 @@ export interface McGameRuleMeta {
    */
   id: string;
   type: McGameRuleType;
-  /** Published vanilla default for 1.21.x — see the provenance note above. */
-  default: string;
+  /**
+   * Published vanilla default for 1.21.x — see the provenance note above.
+   *
+   * **Optional, and absent means "no default is claimed for this rule".** It is not a
+   * convenience: the four rules 26.x created out of `server.properties` keys did not exist in
+   * 1.21.x, so the column's own provenance sentence cannot be true of them, and
+   * `playersNetherPortalCreativeDelay` was written here as `1` against a deployed registry
+   * that reports `0`. Stating a default for those was the project's defect class with the
+   * sign flipped — a confident claim with nothing behind it — so they state none and the
+   * panel renders no hint for them.
+   */
+  default?: string;
   group: string;
   /** One line, plain, in the imperative-free "what this does" voice the rest of the app uses. */
   help: string;
 }
 
 /**
- * Group order for the panel. 48 rules in one flat grid is the thing the properties editor
+ * Group order for the panel. 58 rules in one flat grid is the thing the properties editor
  * was just fixed for ("a flat alphabetical grid of ~58 bare labels"), so this ships grouped
  * from the start.
  */
@@ -177,7 +197,9 @@ export const MC_GAME_RULES: McGameRuleMeta[] = [
     help: "How many layers of snow may build up while it is snowing." },
   { id: "playersNetherPortalDefaultDelay", type: "int", default: "80", group: "World & blocks",
     help: "Ticks a player stands in a Nether portal before travelling." },
-  { id: "playersNetherPortalCreativeDelay", type: "int", default: "1", group: "World & blocks",
+  // No default: this was written here as "1" and the deployed registry reports 0. Nothing in
+  // this repo has measured which is right for which build, so it claims neither.
+  { id: "playersNetherPortalCreativeDelay", type: "int", group: "World & blocks",
     help: "The same delay, for a player in creative mode." },
 
   // ── Players ───────────────────────────────────────────────────────────────
@@ -218,13 +240,21 @@ export const MC_GAME_RULES: McGameRuleMeta[] = [
 
   // ── Rules 26.x created out of server.properties keys ──────────────────────
   // Ids measured over RCON on 2026-10-01 against 26.1.2; see MC_GAME_RULE_REPLACEMENTS.
-  { id: "pvp", type: "boolean", default: "true", group: "Damage & death",
+  //
+  // **None of these four states a default, and that is the point.** They did not exist as
+  // game rules in 1.21.x, so "published vanilla default for 1.21.x" — the only provenance
+  // this column has — cannot be true of them. The previous version claimed `true` for all
+  // four on exactly that basis. What their 26.x defaults are is a measurement nobody here
+  // has made, and the `server.properties` key each replaced is not the same thing (that
+  // file's default is what the *file* ships with, not what the rule initialises to in a
+  // world created without it).
+  { id: "pvp", type: "boolean", group: "Damage & death",
     help: "Players can hurt each other. On 26.x this took over from the server.properties key of the same name." },
-  { id: "spawn_monsters", type: "boolean", default: "true", group: "Mobs & spawning",
+  { id: "spawn_monsters", type: "boolean", group: "Mobs & spawning",
     help: "Hostile mobs spawn. On 26.x this took over from server.properties spawn-monsters." },
-  { id: "command_blocks_work", type: "boolean", default: "true", group: "Commands & admin",
+  { id: "command_blocks_work", type: "boolean", group: "Commands & admin",
     help: "Command blocks run at all. On 26.x this took over from server.properties enable-command-block." },
-  { id: "allow_entering_nether_using_portals", type: "boolean", default: "true", group: "World & blocks",
+  { id: "allow_entering_nether_using_portals", type: "boolean", group: "World & blocks",
     help: "Nether portals take players to the Nether. On 26.x this took over from server.properties allow-nether." },
 ];
 
@@ -270,39 +300,142 @@ export function gameRuleMeta(id: string): McGameRuleMeta | null {
 }
 
 /**
+ * One `gamerule <id>` mention anywhere in a reply, with the `minecraft:` namespace optional.
+ *
+ * `(?:^|[^A-Za-z0-9_])` so `gamerules notACommand` cannot match (the word has to end where
+ * `gamerule` ends) without requiring the `/` that a line pasted without it would lack.
+ * `(?=\s|$)` is the boundary that makes a malformed id a skip instead of a truncation.
+ */
+const GAME_RULE_MENTION =
+  /(?:^|[^A-Za-z0-9_])gamerule\s+(?:minecraft:)?([A-Za-z][A-Za-z0-9_]*)(?=\s|$)/g;
+
+/**
  * The rule ids in a `help gamerule` reply.
  *
- * Brigadier's `getSmartUsage` returns one entry per child of the `gamerule` node — one per
- * rule — and `HelpCommand` prints each as `/gamerule <that usage>`, so the reply is a block
- * of lines shaped like:
+ * ## There are no newlines in that reply. Measured.
  *
- *   /gamerule announceAdvancements [<value>]
- *   /gamerule mob_griefing [<value>]
+ * This parser split on `\n` first, and that was wrong in the most expensive available way:
+ * it returned **one** id from a reply listing 58 rules, the route answered 200 with that one
+ * rule, and the panel rendered as if the build had one game rule.
+ * `src/lib/__tests__/fixtures/mc-help-gamerule.txt` is the real reply, captured from the
+ * deployed 26.1.2 server on 2026-10-01: **5,082 bytes, zero newline characters.**
+ * `RconConsoleSource.sendSystemMessage` appends every feedback message to one buffer with no
+ * separator, so brigadier's 116 usage lines arrive as one run-together string:
  *
- * **Anything that does not match is skipped rather than guessed at**, which is the one rule
- * this parser follows. A placeholder (`/gamerule <rule>`), a wrapped line, a `Unknown or
- * incomplete command` refusal and a modded id with punctuation in it all produce no entry,
- * so the caller queries only ids it is sure of. The pattern is anchored to
- * letters-then-word-characters for the same reason the id is never interpolated from user
- * input: the token is pasted straight into an RCON command, and a token that cannot contain
- * a space or a semicolon cannot turn one command into two.
+ *   /gamerule immediate_respawn [<value>]/gamerule minecraft:immediate_respawn [<value>]…
  *
- * Order is the server's and duplicates are dropped, so the panel lists rules in the order
- * the build declares them.
+ * So the delimiter is the literal `/gamerule ` that `HelpCommand` prints in front of each
+ * usage, not a line break. A newline-separated reply (if some build or some transport ever
+ * produces one) still parses — whitespace around a mention is irrelevant to the scan.
+ *
+ * ## Both spellings of every rule, once
+ *
+ * Brigadier lists each rule twice, bare and namespaced (`fall_damage` and
+ * `minecraft:fall_damage`), so 58 rules produce 116 mentions. The `minecraft:` prefix is
+ * stripped and the result de-duplicated, which is what turns 116 into 58. Order is the
+ * server's, first mention wins.
+ *
+ * ## Anything that does not look like a rule id is skipped, never guessed at
+ *
+ * The id must start with a letter, contain only `[A-Za-z0-9_]`, and be **followed by
+ * whitespace or the end of the reply** — that last clause is what rejects `bad-id` and
+ * `evil; op mallory` rather than silently truncating them to `bad` and `evil`. A
+ * placeholder (`/gamerule <rule>`), an `Unknown or incomplete command` refusal and a
+ * foreign-namespace id (`mypack:custom`, which would need a `:` this charset forbids) all
+ * produce no entry. That is both correctness — a fabricated id gets queried and reported as
+ * unreadable, noise this parser invented — and safety: the token is pasted straight into an
+ * RCON command, and a token that cannot hold a space or a semicolon cannot turn one command
+ * into two.
  */
 export function parseGameRuleList(reply: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const raw of reply.split(/\r?\n/)) {
-    const line = raw.trim().replace(/^\//, "");
-    const m = /^gamerule\s+([A-Za-z][A-Za-z0-9_]*)(\s|$)/.exec(line);
-    if (!m) continue;
+  for (const m of reply.matchAll(GAME_RULE_MENTION)) {
     const id = m[1];
     if (seen.has(id)) continue;
     seen.add(id);
     out.push(id);
   }
   return out;
+}
+
+/**
+ * How many times a reply mentions a rule at all, parsed or not.
+ *
+ * The denominator for the shortfall check below: 116 mentions against 1 parsed id is the
+ * signature of a parser that cannot read the reply, and it is a different fact from "this
+ * build has one game rule". Counted with its own scan rather than derived from
+ * `parseGameRuleList`, so a bug in the parser cannot hide itself in the number used to judge
+ * the parser.
+ */
+export function countGameRuleMentions(reply: string): number {
+  return (reply.match(/(?:^|[^A-Za-z0-9_])gamerule\s+\S/g) ?? []).length;
+}
+
+/**
+ * The floor a `help gamerule` reply has to clear before the panel will render it.
+ *
+ * Every Minecraft build that has game rules has dozens: 58 on the deployed 26.1.2 (measured,
+ * see the fixture) and ~48 on 1.21.4. Ten is well under either, so it refuses a misread
+ * reply without refusing a build nobody here has seen. It is a floor on *plausibility*, not
+ * an expected count — asserting 58 would make the next version bump look like a fault.
+ */
+export const MIN_PLAUSIBLE_GAME_RULES = 10;
+
+/** The payload size of one Source-RCON packet, and so the size a truncated reply lands on. */
+const RCON_PACKET_PAYLOAD = 4096;
+
+export type GameRuleListVerdict =
+  /** Enough to render. `warning` is non-null when the reply is readable but demonstrably short. */
+  | { ok: true; warning: string | null }
+  /** Too little to render, and the message says what was actually read. */
+  | { ok: false; error: string };
+
+/**
+ * Judge a parsed rule list against the reply it came out of.
+ *
+ * This exists because the failure it catches was **HTTP 200 with one rule and no warning** —
+ * this project's named defect class, "reports success after doing nothing or the wrong
+ * thing". Two compounding bugs produced it: the newline split above, and `sendCommand`
+ * truncating the reply at 4096 bytes. Either one alone still produces a short list, so the
+ * check is on the evidence rather than on the cause:
+ *
+ * - **Fewer than `MIN_PLAUSIBLE_GAME_RULES` parsed** → refuse, naming the parsed count, the
+ *   reply's size and how many times it says `gamerule`. "We read 1 rule out of a
+ *   5,082-character reply that mentions gamerule 116 times" is checkable; "this build has no
+ *   game rules" is a cause this code cannot establish and would be false.
+ * - **A reply exactly `RCON_PACKET_PAYLOAD` long** → warn, because that is the single-packet
+ *   cliff and not a number a server produces by coincidence. It matters on its own: a
+ *   truncated `help gamerule` still yields ~46 ids, which clears the floor, so without this
+ *   the panel would quietly be missing a dozen rules.
+ */
+export function assessGameRuleList(ids: string[], reply: string): GameRuleListVerdict {
+  const mentions = countGameRuleMentions(reply);
+  const size = `${reply.length}-character`;
+
+  if (ids.length < MIN_PLAUSIBLE_GAME_RULES) {
+    return {
+      ok: false,
+      error:
+        `Read ${ids.length} game ${ids.length === 1 ? "rule" : "rules"} out of the server's ` +
+        `${size} reply to "${MC_GAME_RULE_LIST_COMMAND}", which mentions "gamerule" ` +
+        `${mentions} ${mentions === 1 ? "time" : "times"}. Every Minecraft build has dozens, ` +
+        `so this is the dashboard failing to read the reply rather than a build without game ` +
+        `rules. Run "${MC_GAME_RULE_LIST_COMMAND}" in the console to see it raw.`,
+    };
+  }
+
+  if (reply.length === RCON_PACKET_PAYLOAD) {
+    return {
+      ok: true,
+      warning:
+        `The server's reply is exactly ${RCON_PACKET_PAYLOAD} characters, the most one RCON ` +
+        `packet carries, so it was almost certainly cut off — rules past the cut are missing ` +
+        `from this list. ${ids.length} were read.`,
+    };
+  }
+
+  return { ok: true, warning: null };
 }
 
 /**
@@ -319,6 +452,14 @@ export function parseGameRuleList(reply: string): string[] {
  * Returning null for everything else is load-bearing, not politeness: a rule this build does
  * not have answers `Incorrect argument for command`, and anything that coerced that into a
  * value would invent a setting. The caller reports such a rule as unread.
+ *
+ * **This one does split on newlines, and that is not an inconsistency with
+ * `parseGameRuleList` above.** Minecraft concatenates feedback messages with no separator, so
+ * a reply carrying many of them has no line breaks — which is why the list parser cannot use
+ * them. A `gamerule <id>` query produces exactly **one** feedback message, so there is nothing
+ * to separate here; the line split only tolerates stray `\r\n` off the socket. If a caller
+ * ever batches several `gamerule` queries into one RCON command, this needs the same
+ * delimiter-scanning treatment the list parser got.
  */
 export function parseGameRuleReply(reply: string): { id: string; value: string } | null {
   for (const raw of reply.split(/\r?\n/)) {
@@ -348,18 +489,46 @@ export function inferGameRuleType(value: string): McGameRuleType {
 }
 
 /**
- * Is this value the published vanilla default? `null` means the table has no entry, which
- * is different from "yes" and must stay different — an unknown rule has to render without
- * the hint, not with a wrong one.
+ * Which **input** to render — a finer question than `inferGameRuleType`, and the two are
+ * deliberately separate.
+ *
+ * `inferGameRuleType` answers "which of the two things brigadier can parse is this", and the
+ * route needs exactly that to validate a submitted value. This answers "can the control show
+ * the value the game reported", and the two disagree in one case that was a dead end:
+ *
+ * A modded rule holding something that is neither `true`/`false` nor an integer got
+ * `type: "int"` and therefore `<input type="number">`, and **React renders a number input
+ * with a non-numeric value as empty**. So the row showed a blank box, and because the Set
+ * button only appears when the draft differs from the live value — and the draft *was* the
+ * live value — there was no way to submit anything either. A rule you could neither read nor
+ * write, rendered as if it were blank.
+ *
+ * `"text"` shows the real value and lets it be edited. A non-integer typed into it is still
+ * refused by `checkGameRuleValue` with a message naming the problem, which is the visible
+ * degradation that case always deserved.
+ */
+export function gameRuleInputMode(value: string): "switch" | "number" | "text" {
+  if (value === "true" || value === "false") return "switch";
+  return /^-?\d+$/.test(value.trim()) ? "number" : "text";
+}
+
+/**
+ * Is this value the published vanilla default? `null` means **no default is known** for this
+ * rule, which is different from "yes" and must stay different — it has to render without the
+ * hint, not with a wrong one.
+ *
+ * Two ways to get `null`, and both are real: a rule the table has never heard of, and a rule
+ * the table lists with no `default` because none has been verified (the four 26.x rules and
+ * `playersNetherPortalCreativeDelay` — see the provenance note at the top).
  *
  * This is what makes a hand-edited rule visible. `mob_griefing` is reported false on
  * production with nothing in this app having set it; that is a row the panel can point at
  * only because the default is written down.
  */
 export function isDefaultGameRuleValue(id: string, value: string): boolean | null {
-  const meta = gameRuleMeta(id);
-  if (!meta) return null;
-  return meta.default === value.trim();
+  const expected = gameRuleMeta(id)?.default;
+  if (expected === undefined) return null;
+  return expected === value.trim();
 }
 
 export type GameRuleValueCheck =
@@ -434,7 +603,14 @@ export function gameRuleCommand(id: string, value?: string): string {
   return `gamerule ${id} ${value}`;
 }
 
-/** The command that enumerates the rules this build has. */
+/**
+ * The command that enumerates the rules this build has.
+ *
+ * **It must be sent with `sendCommandLong`, not `sendCommand`.** Its reply is 5,082 bytes on
+ * 26.1.2 and one RCON packet carries 4096, and `rcon-client` keeps the first packet and
+ * discards the rest — measured through the live dashboard, which saw the reply cut at exactly
+ * 4096 and lost a dozen rules with nothing saying so.
+ */
 export const MC_GAME_RULE_LIST_COMMAND = "help gamerule";
 
 /**

@@ -1,14 +1,20 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   MC_GAME_RULES,
   MC_GAME_RULE_GROUPS,
   MC_GAME_RULE_LIST_COMMAND,
   MC_GAME_RULE_OTHER_GROUP,
+  MIN_PLAUSIBLE_GAME_RULES,
+  assessGameRuleList,
   canonicalGameRuleId,
   checkGameRuleValue,
+  countGameRuleMentions,
   doStrippedGameRuleId,
   gameRuleCommand,
   gameRuleControlHint,
+  gameRuleInputMode,
   gameRuleLabel,
   gameRuleMeta,
   groupGameRules,
@@ -20,8 +26,16 @@ import {
 import { MC_GAME_RULE_REPLACEMENTS, MC_PROPERTIES_VERIFIED_FOR } from "../mc-properties";
 
 /**
- * A `help gamerule` reply in the form brigadier produces it: `HelpCommand` prints one line
- * per child of the `gamerule` node, each `/gamerule <usage>`.
+ * Small hand-written replies, for the per-case assertions that would be unreadable against
+ * 5 KB of real output.
+ *
+ * **These are newline-separated and the real reply is not.** That sentence used to read "one
+ * line per child of the `gamerule` node", stated as fact, and it is the false claim that cost
+ * the most in this feature: the parser was written to split on `\n`, these fixtures agreed
+ * with it, and it returned **one** id from the deployed server's 58-rule reply while a
+ * 580-line suite stayed green. The real thing is in
+ * `describe("the help gamerule reply this server actually sends")` below — read that first,
+ * and treat these as what they are, convenient shapes the parser also has to tolerate.
  *
  * Written in **26.1 snake_case**, because that is what the deployed build answers — the
  * measurement is in `mc-properties.ts`: `keepInventory` and `doDaylightCycle` both reply
@@ -114,6 +128,185 @@ describe("discovering which rules this build has", () => {
 
   it("names the command it parses, so the route and this test cannot disagree", () => {
     expect(MC_GAME_RULE_LIST_COMMAND).toBe("help gamerule");
+  });
+
+  it("strips the minecraft: namespace and collapses the two spellings into one rule", () => {
+    // Brigadier lists every rule twice, bare and namespaced. Without stripping, the panel
+    // shows 116 rows for 58 rules and queries each one twice.
+    expect(
+      parseGameRuleList("/gamerule fall_damage [<value>]/gamerule minecraft:fall_damage [<value>]")
+    ).toEqual(["fall_damage"]);
+    // The namespaced form alone still yields the writable id.
+    expect(parseGameRuleList("/gamerule minecraft:pvp [<value>]")).toEqual(["pvp"]);
+  });
+
+  it("skips a foreign namespace rather than inventing a bare id for it", () => {
+    // `mypack:custom` needs a `:` that `gameRuleCommand`'s charset forbids, and whether
+    // brigadier would answer the bare `custom` is not something this repo has measured. The
+    // parser's one rule applies: skip, do not guess. It must NOT yield "mypack".
+    expect(parseGameRuleList("/gamerule mypack:custom_rule [<value>]")).toEqual([]);
+  });
+});
+
+/**
+ * ## The real reply, from the deployed server
+ *
+ * `fixtures/mc-help-gamerule.txt` is `help gamerule` as 26.1.2 actually answered it, captured
+ * from production on 2026-10-01. It is the strongest test available here and it exists because
+ * the hand-written fixtures above — plausible, newline-separated, and wrong about the one
+ * property that mattered — let a parser that returned **one** id from a 58-rule reply pass a
+ * 580-line suite.
+ *
+ * Two facts about it that no invented fixture had:
+ *
+ * - **zero newline characters.** `RconConsoleSource.sendSystemMessage` appends each feedback
+ *   message to one buffer with no separator, so the whole thing is one run-together string.
+ *   The parser split on `\n`, found one "line", and matched the first mention on it.
+ * - **5,082 bytes**, which is past the 4096 one RCON packet carries, so the discovery read
+ *   has to go through `sendCommandLong`. Through `sendCommand` the reply arrived cut at
+ *   exactly 4096 — two compounding bugs, each sufficient on its own to make the panel lie.
+ */
+describe("the help gamerule reply this server actually sends", () => {
+  const FIXTURE = readFileSync(
+    path.join(__dirname, "fixtures", "mc-help-gamerule.txt"),
+    "utf-8"
+  );
+
+  it("is one run-together string with no newlines, and bigger than one RCON packet", () => {
+    // The two properties the parser and the transport each have to survive. Asserted on the
+    // fixture itself so a future edit to it cannot quietly remove the thing it is here for.
+    expect(FIXTURE).not.toContain("\n");
+    expect(FIXTURE.length).toBe(5082);
+    expect(FIXTURE.length).toBeGreaterThan(4096);
+  });
+
+  it("yields 58 rules", () => {
+    const ids = parseGameRuleList(FIXTURE);
+    expect(ids).toHaveLength(58);
+    // Not just the count: a parser that returned 58 of the wrong thing would pass that alone.
+    expect(new Set(ids).size).toBe(58);
+    expect(ids[0]).toBe("immediate_respawn");
+    expect(ids).toContain("fall_damage");
+    expect(ids).toContain("allow_entering_nether_using_portals");
+    expect(ids).toContain("universal_anger");
+    expect(ids).toContain("water_source_conversion");
+    expect(ids).toContain("advance_time");
+    // snake_case on this build, and no namespaced duplicate survived the de-dup.
+    expect(ids.some((id) => id.includes(":"))).toBe(false);
+    expect(ids.filter((id) => id === "fall_damage")).toHaveLength(1);
+  });
+
+  it("every id it yields is safe to interpolate into an RCON command", () => {
+    // The whole write path's injection guard is "the id came from the server's own list", so
+    // the list had better not contain anything `gameRuleCommand` would refuse.
+    for (const id of parseGameRuleList(FIXTURE)) {
+      expect(() => gameRuleCommand(id), id).not.toThrow();
+      expect(gameRuleCommand(id, "true"), id).toBe(`gamerule ${id} true`);
+    }
+  });
+
+  /**
+   * How much of the live build the help table can actually describe — a **measurement**, not
+   * a target.
+   *
+   * The 26.1 rename was not mechanical, so a third of the live ids have no entry:
+   * `advance_time` is not reachable from `doDaylightCycle` by any canonical form, nor
+   * `spawn_mobs` from `doMobSpawning`, nor `raids` from `disableRaids` (which is also
+   * inverted). Those rows still render — grouped under "Other", with their live value and no
+   * help, because annotation here is additive and never a filter.
+   *
+   * Pinned so the number is visible rather than silent, and so a change that breaks canonical
+   * matching shows up as "described dropped below 34" instead of as a quietly emptier panel. The
+   * bound is one-sided on purpose: adding entries should not fail a test.
+   */
+  it("describes 34 of the 58, and the rest still render under Other", () => {
+    const ids = parseGameRuleList(FIXTURE);
+    const described = ids.filter((id) => gameRuleMeta(id) !== null);
+    expect(described.length).toBeGreaterThanOrEqual(34);
+    // Nothing is lost: every live id lands in exactly one group.
+    const grouped = groupGameRules(ids).flatMap((g) => g.ids);
+    expect(grouped.sort()).toEqual([...ids].sort());
+    const other = groupGameRules(ids).find((g) => g.title === MC_GAME_RULE_OTHER_GROUP);
+    expect(other?.ids.length).toBe(ids.length - described.length);
+  });
+
+  it("counts the 116 mentions behind those 58 rules", () => {
+    // Each rule twice, bare and namespaced. This is the denominator the shortfall check uses,
+    // and it is what makes "we read 1 of these" demonstrably a parser failure.
+    expect(countGameRuleMentions(FIXTURE)).toBe(116);
+  });
+
+  it("passes the plausibility floor with no warning", () => {
+    expect(assessGameRuleList(parseGameRuleList(FIXTURE), FIXTURE)).toEqual({
+      ok: true,
+      warning: null,
+    });
+  });
+
+  /**
+   * What the broken parser did, pinned.
+   *
+   * Splitting on newlines over a reply with none leaves one "line" and matches its first
+   * mention: exactly one id. The route then answered 200 with it. This asserts the shortfall
+   * check catches that, which is the half of the fix that stops a future regression being
+   * silent rather than merely wrong.
+   */
+  it("refuses the one-rule read the newline split produced, naming what it read", () => {
+    const verdict = assessGameRuleList(["immediate_respawn"], FIXTURE);
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) throw new Error("unreachable");
+    expect(verdict.error).toContain("Read 1 game rule");
+    expect(verdict.error).toContain("5082-character");
+    expect(verdict.error).toContain("116 times");
+    // It must not name a cause it has not established.
+    expect(verdict.error).not.toMatch(/no game rules|renamed/i);
+  });
+
+  it("warns rather than passing silently when the reply landed on exactly one packet", () => {
+    // A `help gamerule` truncated at 4096 still parses to ~46 ids, which clears the floor —
+    // so without this the panel would be quietly missing a dozen rules. 4096 is not a length
+    // a server produces by coincidence.
+    const cut = FIXTURE.slice(0, 4096);
+    const verdict = assessGameRuleList(parseGameRuleList(cut), cut);
+    expect(verdict.ok).toBe(true);
+    if (!verdict.ok) throw new Error("unreachable");
+    expect(verdict.warning).toContain("4096");
+    expect(verdict.warning).toMatch(/cut off/);
+  });
+});
+
+describe("the floor a rule list has to clear", () => {
+  /** A plausible list, so the floor can be tested without the fixture's own length. */
+  const plausible = (n: number) =>
+    Array.from({ length: n }, (_, i) => `/gamerule rule_${i} [<value>]`).join("");
+
+  it("refuses a list shorter than any real build's", () => {
+    for (const n of [0, 1, 5, MIN_PLAUSIBLE_GAME_RULES - 1]) {
+      const reply = plausible(n);
+      expect(assessGameRuleList(parseGameRuleList(reply), reply).ok, `${n} rules`).toBe(false);
+    }
+  });
+
+  it("accepts a list at the floor, so an unseen build is not refused for being small", () => {
+    const reply = plausible(MIN_PLAUSIBLE_GAME_RULES);
+    expect(assessGameRuleList(parseGameRuleList(reply), reply)).toEqual({
+      ok: true,
+      warning: null,
+    });
+  });
+
+  it("stays well under both builds this box has, so neither trips it", () => {
+    // 58 on 26.1.2 (measured) and ~48 on 1.21.4. A floor anywhere near those would make the
+    // next version bump look like a fault.
+    expect(MIN_PLAUSIBLE_GAME_RULES).toBeLessThan(40);
+  });
+
+  it("says nothing about a cause when the reply is empty", () => {
+    const verdict = assessGameRuleList([], "");
+    expect(verdict.ok).toBe(false);
+    if (verdict.ok) throw new Error("unreachable");
+    expect(verdict.error).toContain("Read 0 game rules");
+    expect(verdict.error).not.toMatch(/powered off|renamed|no game rules on/i);
   });
 });
 
@@ -265,11 +458,12 @@ describe("joining a discovered id to what this module knows about it", () => {
 });
 
 describe("the table's internal consistency", () => {
-  it("declares a default that matches its own declared type", () => {
+  it("declares a default that matches its own declared type, where it declares one", () => {
     // A `default` of "yes" on a boolean, or "lots" on an int, renders a "not the vanilla
     // default" hint on every single row forever — a wrong label on the one annotation whose
     // whole job is spotting a hand-edit.
     for (const rule of MC_GAME_RULES) {
+      if (rule.default === undefined) continue;
       if (rule.type === "boolean") {
         expect(["true", "false"], rule.id).toContain(rule.default);
       } else {
@@ -283,8 +477,51 @@ describe("the table's internal consistency", () => {
     // actually picks the control. They have to agree on the default, or the table is
     // describing a different rule than the one the panel renders.
     for (const rule of MC_GAME_RULES) {
+      if (rule.default === undefined) continue;
       expect(inferGameRuleType(rule.default), rule.id).toBe(rule.type);
     }
+  });
+
+  /**
+   * The provenance rule, enforced instead of described.
+   *
+   * The `default` column's only stated provenance is "published vanilla behaviour for
+   * 1.21.x". Four entries claimed `true` under that sentence for rules that **did not exist**
+   * in 1.21.x — `pvp`, `spawn_monsters`, `command_blocks_work` and
+   * `allow_entering_nether_using_portals` are what 26.x created when it moved those
+   * `server.properties` keys — and a fifth claimed `1` for
+   * `playersNetherPortalCreativeDelay` where the deployed registry reports `0`. Five labels
+   * asserting facts nobody had checked, in a panel whose purpose is telling an operator what
+   * their world is actually set to.
+   *
+   * So: state a default or state none, and this is the assertion that makes re-adding one of
+   * these five a red test rather than a plausible-looking line in a table.
+   */
+  it("claims no default for the rules whose default has never been verified", () => {
+    const unverified = [
+      "pvp",
+      "spawn_monsters",
+      "command_blocks_work",
+      "allow_entering_nether_using_portals",
+      "playersNetherPortalCreativeDelay",
+    ];
+    for (const id of unverified) {
+      const meta = gameRuleMeta(id);
+      expect(meta, id).not.toBe(null);
+      expect(meta?.default, id).toBeUndefined();
+    }
+  });
+
+  it("renders no 'not the vanilla default' hint for a rule with no default", () => {
+    // `null`, not `false`. `false` is what drives the hint, so returning it for an unverified
+    // rule would put "Not the vanilla default (undefined)" under four rows on the live build.
+    expect(isDefaultGameRuleValue("pvp", "true")).toBe(null);
+    expect(isDefaultGameRuleValue("pvp", "false")).toBe(null);
+    expect(isDefaultGameRuleValue("playersNetherPortalCreativeDelay", "0")).toBe(null);
+    // And still answers for a rule that does declare one, so the hint has not been disabled
+    // wholesale.
+    expect(isDefaultGameRuleValue("mob_griefing", "false")).toBe(false);
+    expect(isDefaultGameRuleValue("mob_griefing", "true")).toBe(true);
   });
 
   it("files every rule under a declared group", () => {
@@ -328,6 +565,42 @@ describe("which control a rule gets", () => {
     expect(inferGameRuleType("True")).toBe("int");
     expect(inferGameRuleType("")).toBe("int");
     expect(inferGameRuleType("sometimes")).toBe("int");
+  });
+
+  /**
+   * `gameRuleInputMode` is a finer question than `inferGameRuleType`, and the dead end it
+   * removes was a row you could neither read nor write.
+   *
+   * A modded rule holding something that is neither `true`/`false` nor an integer got
+   * `type: "int"` and therefore `<input type="number">` — and React renders a number input
+   * whose value is non-numeric as **empty**. The draft then equalled the live value, so the
+   * Set button (which only appears when they differ) never appeared either. A blank box with
+   * no way to submit, indistinguishable from a rule with no value.
+   */
+  it("keeps a value a number field cannot show out of a number field", () => {
+    expect(gameRuleInputMode("sometimes")).toBe("text");
+    expect(gameRuleInputMode("")).toBe("text");
+    expect(gameRuleInputMode("True")).toBe("text");
+    expect(gameRuleInputMode("1.5")).toBe("text");
+    expect(gameRuleInputMode("1e3")).toBe("text");
+  });
+
+  it("still uses a switch and a number field for the two kinds vanilla has", () => {
+    expect(gameRuleInputMode("true")).toBe("switch");
+    expect(gameRuleInputMode("false")).toBe("switch");
+    expect(gameRuleInputMode("3")).toBe("number");
+    expect(gameRuleInputMode("-1")).toBe("number");
+    expect(gameRuleInputMode("65536")).toBe("number");
+  });
+
+  it("agrees with inferGameRuleType on everything brigadier can actually parse", () => {
+    // The two must not drift: whatever the UI offers has to be a value the route's own check
+    // accepts, or the control is a trap. They only differ on values neither accepts.
+    for (const v of ["true", "false", "0", "-7", "2147483647"]) {
+      const mode = gameRuleInputMode(v);
+      expect(mode === "switch" ? "boolean" : "int", v).toBe(inferGameRuleType(v));
+      expect(checkGameRuleValue(v, inferGameRuleType(v)).ok, v).toBe(true);
+    }
   });
 });
 
@@ -417,8 +690,10 @@ describe("building the RCON command", () => {
 
   it("accepts exactly what checkGameRuleValue produces", () => {
     // The two have to agree or a legal value throws on its way out. Checked over every
-    // declared default, which is the set of values the table itself claims are legal.
+    // declared default, which is the set of values the table itself claims are legal — five
+    // entries declare none (see "claims no default…" above) and have no value to check.
     for (const rule of MC_GAME_RULES) {
+      if (rule.default === undefined) continue;
       const checked = checkGameRuleValue(rule.default, rule.type);
       expect(checked.ok, rule.id).toBe(true);
       expect(() => gameRuleCommand(rule.id, (checked as { value: string }).value)).not.toThrow();

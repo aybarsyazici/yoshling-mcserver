@@ -12,10 +12,10 @@ import { Switch } from "@/components/ui/switch";
 import { useOperations } from "@/components/operations-provider";
 import { blockedReason, powerBlocker } from "@/lib/operation-ui";
 import {
+  gameRuleInputMode,
   gameRuleLabel,
   gameRuleMeta,
   groupGameRules,
-  inferGameRuleType,
   isDefaultGameRuleValue,
 } from "@/lib/mc-gamerules";
 
@@ -25,8 +25,8 @@ import {
  * Until this existed the dashboard could *detect* that a `server.properties` key had moved
  * to a game rule and refuse to write it — `/api/server/properties` does exactly that for
  * four keys — and then had to tell the operator to type `gamerule <x> false` into the
- * console, for 48-odd rules none of which it listed. Somebody was doing it by hand:
- * `mob_griefing` is false on the live server and nothing in this app set it.
+ * console, for the 58 rules the deployed build has, none of which it listed. Somebody was
+ * doing it by hand: `mob_griefing` is false on the live server and nothing in this app set it.
  *
  * ## Every row shows what the game said, never what was typed
  *
@@ -93,15 +93,13 @@ export function McGameRules({ tint }: { tint: string }) {
         // reads as "this world has no game rules" — the failure `zomboid-quick-settings.tsx`
         // records as worse than an error, because blank fields look like data.
         //
-        // The 403 is reworded because the route answers the bare "Forbidden" every route here
-        // answers, and "Forbidden" on its own does not say what was forbidden or that reading
-        // is the part you lack. The route's own message wins for every other status — a 503
-        // naming a powered-off server is more useful than anything this file could invent.
-        setError(
-          res.status === 403
-            ? "Reading the game rules needs admin or mod access — each one is a command run on the server."
-            : data.error || "Couldn't read the game rules."
-        );
+        // The route's own message always wins, for every status. There used to be a 403
+        // override here saying "reading the game rules needs admin or mod access", written
+        // when the GET required `settings.read`. It does not any more — the read is gated on
+        // world access like the properties editor above it — so the only 403 left is
+        // `gameGate`'s "No access to this server", and the override would have named the
+        // wrong reason for it.
+        setError(data.error || "Couldn't read the game rules.");
         setValues(null);
         return;
       }
@@ -149,7 +147,20 @@ export function McGameRules({ tint }: { tint: string }) {
         toast.error(message);
         return;
       }
-      setPhases((p) => ({ ...p, [id]: { kind: "confirmed", value: data.value ?? value } }));
+      // `confirmed` is only ever entered with the route's read-back, never with `value`.
+      // This was `data.value ?? value`, directly under a comment saying the rendered value is
+      // never the one that was typed — so on a 200 whose body somehow lacked `value` the row
+      // would have displayed "The server reports <what you clicked>", which is precisely the
+      // claim the route makes a second RCON query to avoid. A 200 without a read-back is a
+      // shape this route does not produce; if it ever does, the row says so.
+      if (typeof data.value !== "string") {
+        const message =
+          "The server accepted it but reported no value back, so this is unconfirmed.";
+        setPhases((p) => ({ ...p, [id]: { kind: "failed", message } }));
+        toast.warning(message);
+        return;
+      }
+      setPhases((p) => ({ ...p, [id]: { kind: "confirmed", value: data.value } }));
       toast.success(
         data.changed
           ? `${id} is ${data.value}.`
@@ -267,7 +278,7 @@ export function McGameRules({ tint }: { tint: string }) {
                   {group.ids.map((id) => {
                     const value = values[id];
                     const meta = gameRuleMeta(id);
-                    const type = inferGameRuleType(value);
+                    const mode = gameRuleInputMode(value);
                     const phase = phases[id] ?? { kind: "idle" };
                     const draft = drafts[id] ?? value;
                     const atDefault = isDefaultGameRuleValue(id, value);
@@ -279,7 +290,7 @@ export function McGameRules({ tint }: { tint: string }) {
                           <span className="font-mono text-[10px] text-muted-foreground">{id}</span>
                         </Label>
 
-                        {type === "boolean" ? (
+                        {mode === "switch" ? (
                           /*
                             `checked` is the read-back and there is deliberately no optimistic
                             local state behind it, so the switch does not move until the game
@@ -305,9 +316,19 @@ export function McGameRules({ tint }: { tint: string }) {
                           </div>
                         ) : (
                           <div className="flex items-center gap-1.5">
+                            {/*
+                              `type` follows the live value, not the rule's brigadier type.
+                              It was a flat `type="number"` for everything non-boolean, and a
+                              modded rule holding something that is neither — React renders a
+                              number input with a non-numeric value as EMPTY — showed a blank
+                              box whose draft equalled the live value, so the Set button never
+                              appeared either. Unreadable and unwritable, looking like a rule
+                              with no value. A text box shows it and lets it be edited;
+                              `checkGameRuleValue` still refuses a non-integer, by name.
+                            */}
                             <Input
                               className="h-8 text-xs"
-                              type="number"
+                              type={mode === "number" ? "number" : "text"}
                               value={draft}
                               disabled={busy}
                               onChange={(e) =>
@@ -360,10 +381,15 @@ export function McGameRules({ tint }: { tint: string }) {
                           How a rule somebody set by hand becomes visible. Hedged to "the
                           vanilla default" because that column is published 1.21.x behaviour
                           and was not read off this deployment — see `mc-gamerules.ts`.
+
+                          `atDefault === false` is already enough: it is null for a rule with
+                          no verified default (which five table entries deliberately have, plus
+                          every rule the table has never heard of), so no hint renders rather
+                          than one naming `undefined`.
                         */}
-                        {atDefault === false && meta && (
+                        {atDefault === false && (
                           <p className="text-[11px] leading-snug text-muted-foreground">
-                            Not the vanilla default ({meta.default}).
+                            Not the vanilla default ({meta?.default}).
                           </p>
                         )}
                       </div>

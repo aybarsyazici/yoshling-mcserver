@@ -1,4 +1,5 @@
 import { Rcon } from "rcon-client";
+import { rconCommandLong } from "@/lib/rcon-long";
 
 /**
  * Source-RCON transport, shared by every game that speaks it: Minecraft
@@ -81,6 +82,23 @@ function minecraftTarget(): RconTarget {
 
 export async function sendCommand(command: string, timeoutMs?: number): Promise<string> {
   return rconCommand(minecraftTarget(), command, timeoutMs);
+}
+
+/**
+ * The same thing for a reply that will not fit in one 4096-byte RCON packet.
+ *
+ * `rcon-client` resolves on the **first** packet and discards the rest, which is measured:
+ * `help gamerule` on 26.1.2 is 5,099 bytes and arrived through `sendCommand` truncated at
+ * exactly 4096 — a third of the game rules missing, with nothing saying so. See
+ * `src/lib/rcon-frame.ts` for the framing and why the shared cached socket is deliberately
+ * not reused here.
+ *
+ * **Use this for any Minecraft command that enumerates** (`help gamerule` today). Short
+ * control commands — `list`, `difficulty`, `save-all`, one `gamerule <id>` query — stay on
+ * the cached socket, which is the right transport for a poll that runs every few seconds.
+ */
+export async function sendCommandLong(command: string, timeoutMs = 9000): Promise<string> {
+  return rconCommandLong(minecraftTarget(), command, { timeoutMs });
 }
 
 export async function getPlayerList(): Promise<{
