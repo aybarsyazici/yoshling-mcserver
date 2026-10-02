@@ -346,6 +346,75 @@ makes the whole shape unprovable here.
 neither can install no matter how often it is re-imported, and the apply refuses with an
 honest version mismatch. That is a fact about those packs. Do not "fix" it.
 
+## Archives: `world`, and `mods` only where it matters — 2026-10-02
+
+Two shapes of Minecraft archive now exist, and the rule is in `src/lib/mc-archive.ts`:
+
+| archive | members | written by |
+|---|---|---|
+| routine backup | `world` | `createMinecraft` in `backup-create.ts`, by hand or on the schedule |
+| pre-apply rollback point | `world` **and** `mods` | `/api/mods/install-modpack` |
+
+**What was wrong.** `install-modpack` tarred `-C MC_DIR world` and then `removeMod`-ed
+**every** installed jar, and the ledger labelled that archive a *"Rollback point"*. So it
+preserved the one directory the apply never touches and nothing of what it destroys — the
+mods directory was archived nowhere in this app — and `removeMod` deletes the
+`InstalledMod` row along with the jar, so after an apply there was no record left of what
+had been installed either. It had not hurt yet only because production has three mods
+totalling 5.8 MB.
+
+**The dangerous half is the restore, not the tar.** `/api/server/backups` extracts *every*
+member into a `.restore-*` staging dir, asserts the shape, renames the member(s) into place
+and `rm -rf`s the staging dir in a `finally`. Before this change it renamed **only**
+`world` — so a two-member archive would have restored, answered `{success: true}`, and
+**silently discarded the mods** on the way out. Adding `mods` to the tar without that is
+strictly worse than the original bug, which is why both halves are one module and one
+commit. If you ever add a third member, add it to `MC_ARCHIVE_MEMBERS` and nowhere else.
+
+Four properties worth not breaking:
+
+- **A legacy one-member archive restores world-only and leaves the live `mods/`
+  untouched.** Every archive on the box is `-C MC_DIR world`, and deleting the mod set
+  because the archive has nothing to put there would make the first restore after this
+  change wipe it.
+- **Routine backups stay world-only.** They run on a schedule against a 217 MB world;
+  folding in an unchanged mods directory would grow every archive and the retention
+  pressure with it, for a copy of something nothing is about to delete. `createMinecraft`
+  writes the member list **once** and reads it twice — the `tar` arguments and the
+  manifest's `members` — because the listing answers off the manifest and never opens the
+  tar, so the two drifting apart is what tells somebody a restore brings their jars back
+  when it would not.
+- **The pre-apply archive goes through `sealArchive`** (exported from `backup-create.ts`
+  for this; it is the one caller outside that module). Written raw it had no
+  checksum, so the listing read `verifiable: false` and a restore could not refuse a
+  corrupt one; it never reached the durable journal; and it sat outside the retention
+  policy while `listArchives` counted it anyway — consuming a `keep` slot that protects a
+  real restore point and standing as a prune candidate itself.
+- **The members are probed, not assumed.** `tar -czf … world mods` exits non-zero on a
+  member that is not there and `install-modpack` treats a failed tar as fatal, so a
+  hardcoded `mods` would refuse every apply on a server that has never installed one. A
+  server with jars but no world yet gets a **mods-only** archive, and the restore accepts
+  it — there is still something to lose there, and an archive the restore refuses would be
+  a rollback point in name only.
+
+`GET /api/server/backups` reports `includesMods` off the manifest's `members` and the list
+renders a `· mods incl.` badge for it. Both shapes sit in the same list under names that
+both end in `.tar.gz`, so nothing else said which one undoes a modpack apply.
+`manifestIncludesMods` answers **false** for an archive that recorded no members — not
+"unknown" — and that is a measurement, not a guess: every archive written before this was
+one member.
+
+Tests: `src/lib/__tests__/mc-archive.test.ts` and `backup-create-minecraft.test.ts` use
+**real `tar` in a temp directory** and assert the bytes that landed, because the member that
+goes missing does so between `tar -xzf` and `rename` and a fake tar cannot show it;
+`mc-backups-route.test.ts` drives the route, so the wiring is pinned as well as the helper;
+`tests/backup-mods-badge.test.tsx` renders the list.
+
+**Still true, and not fixed here:** `create` snapshots a live world, so a manual backup
+taken while people play can be torn. And nothing archives `config/`, `logs/` or the
+`server.properties` next to them — `mods` was added because it is the directory an apply
+*destroys*, which is a narrower claim than "a Minecraft backup is complete".
+
 ## Bans
 
 `/api/server/bans` (GET list, POST add one, DELETE remove one) + `McBansCard` on the settings

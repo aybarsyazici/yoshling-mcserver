@@ -151,8 +151,19 @@ describe("a corrupt jar is never written to the mods directory", () => {
     // nothing conjoined that could switch it off.
     expect(source).toMatch(/\n {2}if \(refusal\) \{\n/);
     // And it must be decided before anything is backed up or deleted.
-    expect(source.indexOf("modsDirRefusal")).toBeLessThan(source.indexOf('op.step("Backing the world up first")'));
-    expect(source.indexOf("modsDirRefusal")).toBeLessThan(source.indexOf('op.step("Removing the current mods")'));
+    //
+    // The landmark is the backup phase's **first** act — the probe for what there is to
+    // archive — rather than its `op.step`, which used to be the literal
+    // `op.step("Backing the world up first")` and is now built from the members found.
+    // `indexOf` answers -1 for a string that is not there, and -1 is less than everything,
+    // so a landmark that stops existing silently satisfies both of these: the `>= 0` check
+    // is what makes that a failure instead.
+    const refusalAt = source.indexOf("modsDirRefusal");
+    const probedAt = source.indexOf("archiveMembersPresent(MC_DIR)");
+    const removedAt = source.indexOf('op.step("Removing the current mods")');
+    expect([refusalAt, probedAt, removedAt].every((i) => i >= 0)).toBe(true);
+    expect(refusalAt).toBeLessThan(probedAt);
+    expect(refusalAt).toBeLessThan(removedAt);
   });
 
   /**
