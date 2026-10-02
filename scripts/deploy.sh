@@ -188,7 +188,16 @@ docker compose up -d --no-deps "$SERVICE"
 if [ -n "$VERIFY" ] && [ "$SERVICE" = "web" ]; then
   sleep 8
   echo "==> verifying '$VERIFY' is in the running image, not just in git"
-  if docker exec yoshling-web-1 sh -c "grep -rql -- '$VERIFY' /app/.next/server 2>/dev/null | head -1" >/dev/null; then
+  # `grep -rqF`, with NO pipe. This was `grep -rql … | head -1`, and a pipeline's exit status
+  # is its LAST command's — `head -1` exits 0 on empty input, so the test succeeded whether or
+  # not grep matched. Measured 2026-10-02: the invented string `zzzz_definitely_not_present_9f3a`
+  # reported "found". **This guard had never once failed**, in the one script written to stop a
+  # correct checkout sitting in front of a stale image — the house defect class inside the tool
+  # built to prevent it.
+  #
+  # `-F` as well as `-q`: a verify string is a literal, and one containing `.` or `(` was being
+  # read as a pattern, so `modsDirRefusal(plan,` would have matched text that is not it.
+  if docker exec yoshling-web-1 grep -rqF -- "$VERIFY" /app/.next/server; then
     echo "    found"
   else
     echo "deploy: '$VERIFY' is NOT in the built bundle — the checkout is right but" >&2
