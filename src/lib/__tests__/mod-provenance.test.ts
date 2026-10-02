@@ -189,6 +189,42 @@ describe("provenanceSentence", () => {
 });
 
 describe("packHeadline", () => {
+  /**
+   * **A recorded apply is not evidence the pack is still there.** This returned the pack's
+   * name with `named: true` from the Activity row alone, and the surface renders that under an
+   * eyebrow reading "Pack on the server" — so a pack whose jars had all since been removed one
+   * at a time went on being claimed as the running set. The row says what happened once;
+   * `counts.fromPack` says what is there now, and a header is about now.
+   */
+  it("does not claim a pack is on the server when none of its jars are", () => {
+    const counts = provenanceCounts({
+      mods: [entry({ fileName: "ours.jar", source: "manual" })],
+    });
+    const head = packHeadline(applied(), counts);
+    expect(head.named).toBe(false);
+    expect(head.title).toContain("none of it is left");
+    // It still says which pack and when, because that is the useful part of the record.
+    expect(head.detail).toContain("Aybars");
+  });
+
+  /**
+   * "Added on its own" is a claim about provenance, and an untracked jar has none — this
+   * dashboard did not put it there and cannot say who did. The headline may only speak for the
+   * rows it has.
+   */
+  it("does not call untracked jars 'added on their own'", () => {
+    const all = provenanceCounts({ mods: [untracked("stranger.jar")] });
+    const head = packHeadline(null, all);
+    expect(head.detail).not.toMatch(/added on its own|added one at a time/i);
+    expect(head.detail).toMatch(/none of them installed from here/i);
+
+    // And the mixed case names the strangers rather than folding them in.
+    const mixed = provenanceCounts({
+      mods: [entry({ fileName: "ours.jar", source: "manual" }), untracked("stranger.jar")],
+    });
+    expect(packHeadline(null, mixed).detail).toMatch(/no record of/i);
+  });
+
   it("names the pack, when it was applied and by whom", () => {
     const counts = provenanceCounts({ mods: [entry({ fileName: "a.jar", source: "pack" })] });
     const head = packHeadline(applied(), counts);

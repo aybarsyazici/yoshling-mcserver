@@ -395,9 +395,13 @@ Three of those exist because a mutation went green:
   file — over the `CREATE TABLE` taken out of `20260519104842_init` rather than a hand-written
   approximation.
 
-A fourth mutation found a live defect: `removing === mod.id` is `true` for an untracked entry,
-because `removing` is `null` when nothing is being removed and an untracked `id` is also
-`null`. It was invisible only because the button is gated on `mod.id` as well.
+A fourth mutation found a **latent** defect, not a live one, and the difference is worth
+keeping straight: `removing === mod.id` is `true` for an untracked entry, because `removing`
+is `null` when nothing is being removed and an untracked `id` is also `null`. Nothing was
+ever visible on screen — the control is gated on `mod.id` too, so it never rendered for an
+untracked row in the first place. The `mod.id != null &&` is defence in depth against a
+future edit that drops the outer gate, which is worth having and is not a bug that shipped.
+The first version of this paragraph called it live; a reviewer checked and it was not.
 
 ## The mods page is one surface — 2026-10-02
 

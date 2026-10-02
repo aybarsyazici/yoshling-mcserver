@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { reconcileMods, type InstalledModRow } from "@/lib/mod-inventory";
 
@@ -122,14 +122,56 @@ describe("a jar on disk with no row", () => {
     expect(inv.mods).toHaveLength(3);
   });
 
+  /**
+   * `readdir` order is unspecified, and a listing that reorders between two reads looks like
+   * something changed.
+   *
+   * **The reader is injected rather than trusted.** This test used to create three jars and
+   * assert the sorted order back — and it was vacuous on every machine it ran on: APFS returns
+   * a small directory in lexicographic order already, so deleting the `.sort()` left it green.
+   * Production is **ext4**, where the order is hash-derived. The one filesystem the bug would
+   * show on was the one no test ran on, which is the whole failure mode in miniature.
+   */
   it("sorts them, so two readings of the same directory agree", async () => {
-    // `readdir` order is not specified. A listing that reorders between two reads looks
-    // like something changed.
     await jar("zz.jar");
     await jar("aa.jar");
     await jar("mm.jar");
-    const inv = await reconcileMods([], MODS);
+
+    // Deliberately reversed, so the assertion is about this module's sort and not the host's.
+    const unsorted: typeof readdir = (async (dir: string, options?: unknown) => {
+      const real = await readdir(dir, options as never);
+      return (real as unknown[]).slice().reverse();
+    }) as typeof readdir;
+
+    const inv = await reconcileMods([], MODS, { readdirImpl: unsorted });
     expect(inv.untracked).toEqual(["aa.jar", "mm.jar", "zz.jar"]);
+  });
+
+  /** The same property for `ignored`, which the band renders in the order given. Same
+   *  vacuousness on APFS, same injected reader. */
+  it("sorts the non-jar files too", async () => {
+    await writeFile(path.join(MODS, "zz.txt"), "x", "utf-8");
+    await writeFile(path.join(MODS, "aa.cfg"), "x", "utf-8");
+    const unsorted: typeof readdir = (async (dir: string, options?: unknown) => {
+      const real = await readdir(dir, options as never);
+      return (real as unknown[]).slice().reverse();
+    }) as typeof readdir;
+    const inv = await reconcileMods([], MODS, { readdirImpl: unsorted });
+    expect(inv.ignored).toEqual(["aa.cfg", "zz.txt"]);
+  });
+
+  /** And the injected reader really is reaching the code — otherwise the test above is still
+   *  measuring the filesystem. */
+  it("reads through the injected reader, so the test above means what it says", async () => {
+    await jar("only.jar");
+    let called = 0;
+    const counting: typeof readdir = (async (dir: string, options?: unknown) => {
+      called += 1;
+      return readdir(dir, options as never);
+    }) as typeof readdir;
+
+    await reconcileMods([], MODS, { readdirImpl: counting });
+    expect(called).toBe(1);
   });
 });
 

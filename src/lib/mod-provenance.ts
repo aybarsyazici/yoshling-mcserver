@@ -118,6 +118,23 @@ export function packHeadline(
   pack: AppliedPack | null,
   counts: ProvenanceCounts
 ): PackHeadline {
+  // **A recorded apply is not evidence the pack is still on the server.** This returned
+  // `named: true` with the pack's name from the Activity row alone, under an eyebrow reading
+  // "Pack on the server" — so a pack whose jars had all since been removed went on being
+  // claimed as the running set. The row says what happened once; `counts.fromPack` says what
+  // is there now, and the header has to be about now.
+  if (pack && counts.fromPack === 0) {
+    return {
+      title: `${pack.name} was applied, and none of it is left`,
+      detail:
+        `Applied ${shortDate(pack.appliedAt)}` +
+        (pack.appliedByName ? ` by ${pack.appliedByName}` : "") +
+        `, but no jar in the folder is recorded as coming from it. Either they were removed ` +
+        `one at a time, or a restore replaced them.`,
+      named: false,
+    };
+  }
+
   if (pack) {
     const bits: string[] = [`Applied ${shortDate(pack.appliedAt)}`];
     if (pack.appliedByName) bits.push(`by ${pack.appliedByName}`);
@@ -145,7 +162,14 @@ export function packHeadline(
     detail:
       counts.jars === 0
         ? "Nothing is installed. Add a mod, or apply a pack to install a whole set."
-        : `Every jar on this server was added on its own, not by a pack.`,
+        : // "added on its own" is a claim about provenance, and an untracked jar has none —
+          // this dashboard did not put it there and cannot say who did. Only speak for the
+          // rows it has.
+          counts.untracked === counts.jars
+          ? `${pluralise(counts.jars, "jar")} in the folder, none of them installed from here.`
+          : counts.untracked > 0
+            ? `Added one at a time rather than by a pack, plus ${pluralise(counts.untracked, "jar")} this dashboard has no record of.`
+            : `Every jar on this server was added on its own, not by a pack.`,
     named: false,
   };
 }

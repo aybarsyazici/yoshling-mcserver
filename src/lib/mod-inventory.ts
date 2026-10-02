@@ -179,11 +179,29 @@ export interface InstalledReading extends ModInventory {
 export async function reconcileMods(
   rows: readonly InstalledModRow[],
   modsDir: string,
-  opts: { hash?: boolean; actorNames?: Readonly<Record<string, string>> } = {}
+  opts: {
+    hash?: boolean;
+    actorNames?: Readonly<Record<string, string>>;
+    /**
+     * The directory reader, for tests only.
+     *
+     * `readdir` order is unspecified, and this module sorts because a listing that reorders
+     * between two reads looks like something changed. That sort could not be *tested*,
+     * though: the dev machines here are APFS, where `readdir` already comes back in
+     * lexicographic order for a small directory, so deleting the sort left the test named
+     * "sorts them, so two readings of the same directory agree" green. **Production is
+     * ext4**, where the order is hash-derived — the one place the bug would appear is the
+     * one place no test ran.
+     *
+     * So the reader is injectable and the sort is asserted against a deliberately
+     * unsorted listing, rather than against whatever the host filesystem happens to do.
+     */
+    readdirImpl?: typeof readdir;
+  } = {}
 ): Promise<ModInventory> {
   const hash = opts.hash === true;
   const actorNames = opts.actorNames ?? {};
-  const listing = await listModsDir(modsDir);
+  const listing = await listModsDir(modsDir, opts.readdirImpl);
 
   const onDisk = new Set(listing.jars);
   const claimed = new Set<string>();
@@ -288,11 +306,12 @@ function isoOf(value: Date | string): string | null {
 }
 
 async function listModsDir(
-  modsDir: string
+  modsDir: string,
+  readdirImpl: typeof readdir = readdir
 ): Promise<{ present: boolean; jars: string[]; ignored: string[] }> {
   let entries;
   try {
-    entries = await readdir(modsDir, { withFileTypes: true });
+    entries = await readdirImpl(modsDir, { withFileTypes: true });
   } catch (e) {
     // **ENOENT only.** A directory that is not there is "nothing installed"; an EACCES or
     // an EIO is a thing we cannot read, and answering "nothing installed" to that would

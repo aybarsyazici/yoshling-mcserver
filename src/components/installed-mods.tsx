@@ -279,9 +279,20 @@ export function InstalledMods() {
           <p className="text-xs text-muted-foreground">{verdict(state)}</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {/* `POST /api/mods/install` checks `mods.install`, and the dialog this opens is
-              where that request is made from. */}
-          {can.modsInstall && <Button onClick={() => setAddOpen(true)}>Add a mod</Button>}
+          {/* **Not gated — searching Modrinth is a read.** The old page had a `Browse mods`
+              tab open to everyone, and making this button the only door to `ModBrowser` took
+              that away from a MEMBER: a capability lost by a redesign meant to stop offering
+              capabilities nobody has. The *install* is gated where the request is made, on the
+              card (`mod-card.tsx` takes `canInstall`), so a MEMBER can look and cannot write.
+
+              The label changes with the capability instead, because "Add a mod" is a promise
+              to someone who cannot. */}
+          <Button
+            variant={can.modsInstall ? "default" : "outline"}
+            onClick={() => setAddOpen(true)}
+          >
+            {can.modsInstall ? "Add a mod" : "Browse mods"}
+          </Button>
           {!hashed && counts.jars > 0 && (
             <Button
               variant="outline"
@@ -361,11 +372,18 @@ export function InstalledMods() {
           </p>
         </Band>
       )}
+      {/* "Nothing is wrong" is only true when there is also nothing expecting the folder.
+          With rows in the database and no directory, every one of them is `missing` and the
+          band above says "The server will not load it" — so this printed a reassurance
+          directly underneath a problem. Gated on there being nothing to be wrong. */}
       {!modsDirPresent && (
         <Band tone="muted" kind="no-dir" heading="There is no mods folder on the server yet">
           <p>
             Minecraft creates it on first start, and installing a mod creates it too.
-            Nothing is wrong.
+            {missing.length === 0
+              ? " Nothing is wrong."
+              : ` ${pluralise(missing.length, "mod")} on this list expects it, which is why ` +
+                `${missing.length === 1 ? "it is" : "they are"} shown as missing above.`}
           </p>
         </Band>
       )}

@@ -376,19 +376,39 @@ function Consequences({ counts }: { counts: ProvenanceCounts }) {
       <p className="font-medium">What happens to the mods on the server now</p>
       <ul className="mt-1 list-inside list-disc space-y-1 text-muted-foreground">
         <li>
+          {/* **The apply deletes rows, not the directory.** It loops `InstalledMod` and calls
+              `removeMod` per row, so a jar with no row — `counts.untracked` — is left exactly
+              where it is. This said "All N jars in the mods folder are removed first" over
+              `counts.jars`, which *includes* the untracked ones, so the review promised a
+              clean-out it does not perform and then the pack boots alongside the survivors.
+              Counting only what is actually removed, and naming the rest. */}
           {counts.jars === 0 ? (
             <>Nothing is installed, so nothing is removed.</>
+          ) : counts.jars - counts.untracked === 0 ? (
+            <>
+              Nothing this dashboard installed is in the folder, so it removes nothing — but
+              the {pluralise(counts.untracked, "jar")} it has no record of will still be there
+              afterwards, loading alongside the pack.
+            </>
           ) : (
             <>
-              All {pluralise(counts.jars, "jar")} in the mods folder are removed first
+              The {pluralise(counts.jars - counts.untracked, "jar")} this dashboard installed
               {counts.ownInstall > 0 && (
                 <>
                   {" "}
                   — including the {pluralise(counts.ownInstall, "mod")} added one at a time
                   rather than by a pack
                 </>
+              )}{" "}
+              {counts.jars - counts.untracked === 1 ? "is" : "are"} removed first.
+              {counts.untracked > 0 && (
+                <>
+                  {" "}
+                  The {pluralise(counts.untracked, "jar")} it has no record of{" "}
+                  {counts.untracked === 1 ? "stays" : "stay"} where{" "}
+                  {counts.untracked === 1 ? "it is" : "they are"}.
+                </>
               )}
-              .
             </>
           )}
         </li>

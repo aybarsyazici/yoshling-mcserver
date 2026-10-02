@@ -454,6 +454,27 @@ describe("an empty server", () => {
     expect(band("missing")).toBeNull();
     expect(band("untracked")).toBeNull();
   });
+
+  /**
+   * **"Nothing is wrong" was printed unconditionally**, so with rows in the database and no
+   * directory the page said it directly underneath a `missing` band reading "The server will
+   * not load it". Every row is missing in that state — the folder they name is not there — so
+   * the reassurance is exactly backwards. Reassurance has to be conditional on there being
+   * nothing to reassure about.
+   */
+  it("does not reassure when rows are expecting the folder that is absent", async () => {
+    inventory = inv([entry({ fileName: MINIMAP, state: "missing", sizeBytes: null })], {
+      modsDirPresent: false,
+    });
+    setup();
+    render(<InstalledMods />);
+    await waitFor(() => expect(text()).toMatch(/no mods folder/i), WAIT);
+
+    expect(text()).not.toMatch(/Nothing is wrong/i);
+    // And it says why, rather than only withholding the reassurance.
+    expect(text()).toMatch(/1 mod on this list expects it/i);
+    expect(band("missing")).not.toBeNull();
+  });
 });
 
 describe("what is in the folder but is not a mod", () => {

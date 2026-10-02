@@ -175,21 +175,21 @@ function button(name: string | RegExp): HTMLButtonElement | null {
   return screen.queryByRole("button", { name }) as HTMLButtonElement | null;
 }
 
-function open(over: Partial<GamesState> = {}) {
+function open(over: Partial<GamesState> = {}, counts: ProvenanceCounts = COUNTS) {
   setup(over);
   render(
     <ChangePackDialog
       open
       onOpenChange={() => {}}
-      counts={COUNTS}
+      counts={counts}
       onApplied={() => {}}
     />
   );
 }
 
 /** Render, find the pack, choose it, and wait for its preview to land. */
-async function review(over: Partial<GamesState> = {}) {
-  open(over);
+async function review(over: Partial<GamesState> = {}, counts: ProvenanceCounts = COUNTS) {
+  open(over, counts);
   await waitFor(() => expect(screen.queryByText(REMOTE_PACK.title)).not.toBeNull(), WAIT);
   fireEvent.click(screen.getByRole("button", { name: "Choose this pack" }));
   await waitFor(() => expect(text()).toMatch(/This pack needs/), WAIT);
@@ -339,8 +339,29 @@ describe("the review states what is knowable and declines what is not", () => {
     // "This will remove every mod currently installed" is true and says nothing about
     // whether that is three jars or eighty-one, or how many somebody put there by hand.
     await review();
-    expect(text()).toMatch(/All 3 jars in the mods folder are removed first/);
+    expect(text()).toMatch(/The 3 jars this dashboard installed/);
     expect(text()).toMatch(/including the 3 mods added one at a time/);
+    expect(text()).toMatch(/are removed first/);
+  });
+
+  /**
+   * **The apply deletes rows, not the directory.** It loops `InstalledMod` and calls
+   * `removeMod` per row, so a jar with no row is left exactly where it is. The copy said
+   * "All N jars in the mods folder are removed first" over a count that *includes* the
+   * untracked ones, promising a clean-out it does not perform — and then the pack boots
+   * alongside the survivors with nothing having said so.
+   *
+   * The default fixture has `untracked: 0`, which is why the assertion above could not tell
+   * the two versions apart.
+   */
+  it("does not promise to remove jars it has no row for", async () => {
+    await review({}, { ...COUNTS, jars: 5, untracked: 2, ownInstall: 3 });
+    // Three, not five.
+    expect(text()).toMatch(/The 3 jars this dashboard installed/);
+    expect(text()).not.toMatch(/All 5 jars/);
+    // And the two survivors are named as such, since they will load alongside the pack.
+    expect(text()).toMatch(/2 jars it has no record of/);
+    expect(text()).toMatch(/stay where they are/);
   });
 
   it("says that applying also saves the pack", async () => {
