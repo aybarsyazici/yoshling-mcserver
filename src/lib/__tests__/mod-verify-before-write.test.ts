@@ -136,12 +136,23 @@ describe("a corrupt jar is never written to the mods directory", () => {
    * `unverified`. None of those tests can see which one this route picks, so the choice
    * itself needs a guard or it regresses silently and the request still answers 409.
    */
-  it("marks the all-client-only refusal as a rejection, not a settled step", async () => {
+  it("routes the empty-plan refusal through op.reject, not a settled step", async () => {
     const source = await text("app/api/mods/install-modpack/route.ts");
-    const reason = "No mod in this pack runs on a server";
-    expect(source).toContain(reason);
-    // The reason string must be the argument to `op.reject`, not to a settle.
-    expect(source).toMatch(new RegExp(`op\\.reject\\(\\s*\`${reason}\``));
+    // The wording moved into `modsDirRefusal` (tested behaviourally in mod-plan.test.ts)
+    // precisely so that a recheck could not silence the guard by editing an inline `if`.
+    // What has to hold *here* is that whatever it returns becomes a rejection: `op.reject`
+    // gives outcome `failed`, while a settle would make a refused apply read as a completed
+    // one with a count of zero.
+    expect(source).toContain("modsDirRefusal(plan, modpack.mods.length)");
+    expect(source).toMatch(/op\.reject\(\s*refusal\s*\)/);
+    // **The guard expression itself, verbatim.** Asserting only that the pieces are present
+    // is not enough: `if (false && refusal)` keeps every string this test looks for and
+    // passed all 1102 tests when tried. The condition has to be exactly the refusal, with
+    // nothing conjoined that could switch it off.
+    expect(source).toMatch(/\n {2}if \(refusal\) \{\n/);
+    // And it must be decided before anything is backed up or deleted.
+    expect(source.indexOf("modsDirRefusal")).toBeLessThan(source.indexOf('op.step("Backing the world up first")'));
+    expect(source.indexOf("modsDirRefusal")).toBeLessThan(source.indexOf('op.step("Removing the current mods")'));
   });
 
   /**

@@ -14,7 +14,7 @@ import {
   unrecognisedEnvironmentSentence,
   type SkippedMod,
 } from "@/lib/mod-admission";
-import { planModpackInstall, type PackMod } from "@/lib/mod-plan";
+import { modsDirRefusal, planModpackInstall, type PackMod } from "@/lib/mod-plan";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { mkdir, rm, stat } from "fs/promises";
@@ -325,10 +325,16 @@ async function applyModpack(
   // and *"Installing the modpack failed after 2 steps: No mod in this pack runs on a
   // server."*, which is the true sentence; the route keeps its own 409, which is exactly
   // what `reject` is documented for.
-  if (plan.items.length === 0) {
+  // `modsDirRefusal`, not an inline `if`. A recheck replaced this condition with
+  // `if (false)` and all 835 tests passed — and with it gone the route goes straight on to
+  // tar the world, `removeMod` every installed jar, download nothing, and answer 200
+  // `{success:true}`. The decision lives in `mod-plan.ts` so that it is asserted rather than
+  // trusted; see `src/lib/__tests__/mod-plan.test.ts`.
+  const refusal = modsDirRefusal(plan, modpack.mods.length);
+  if (refusal) {
     // Nothing has been backed up or deleted yet — same ordering argument as the
     // no-download-source branch above — so this refusal costs nothing.
-    op.reject(`No mod in this pack runs on a server`);
+    op.reject(refusal);
     return {
       value: NextResponse.json(
         {

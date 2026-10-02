@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { planModpackInstall, type PackMod } from "../mod-plan";
+import {
+  modsDirRefusal,
+  planModpackInstall,
+  type ModPlan,
+  type PackMod,
+  type PlanItem,
+} from "../mod-plan";
 import { serverSideVerdict } from "../mod-admission";
 import type { ModrinthVersion } from "../modrinth";
 
@@ -305,5 +311,88 @@ describe("the rest of the plan's bookkeeping", () => {
       sideFor: realSide,
     });
     expect(plan).toEqual({ items: [], skipped: [], errors: [], unrecognised: [], total: 0 });
+  });
+});
+
+/**
+ * **The guard between an empty plan and a wiped mods directory.**
+ *
+ * An adversarial recheck replaced `if (plan.items.length === 0)` in
+ * `/api/mods/install-modpack` with `if (false)` and all 835 tests passed. The route's steps
+ * run backup → remove → download, so with that branch gone an all-client-only pack tars the
+ * ~215 MB world, deletes every installed jar, downloads nothing, and answers HTTP 200
+ * `{success:true}`. That is the house defect class — reports success after doing the wrong
+ * thing — with the worst blast radius available in this codebase.
+ *
+ * `modsDirRefusal` exists so the decision is asserted instead of trusted, and these tests
+ * are what notices if it is weakened.
+ */
+describe("modsDirRefusal — nothing destructive on an empty plan", () => {
+  const plan = (over: Partial<ModPlan>): ModPlan => ({
+    items: [],
+    skipped: [],
+    errors: [],
+    unrecognised: [],
+    total: 0,
+    ...over,
+  });
+
+  const item = (): PlanItem => ({
+    kind: "direct",
+    mod: mod({ name: "Something", downloadUrl: "https://example.invalid/a.jar" }),
+    url: "https://example.invalid/a.jar",
+  });
+
+  it("refuses when every mod in the pack is client-only", () => {
+    const refusal = modsDirRefusal(
+      plan({ skipped: [{ name: "Sodium", why: "client-only" }, { name: "Iris", why: "client-only" }] as never }),
+      2
+    );
+    expect(refusal).toBeTruthy();
+    expect(refusal).toMatch(/client-only/i);
+  });
+
+  /**
+   * The distinction that makes the refusal useful. An empty plan because Modrinth was
+   * unreachable must NOT be reported as "this pack has nothing for a server" — the operator's
+   * next move is completely different, and the confident wrong cause is the failure mode this
+   * project keeps paying for.
+   */
+  it("says resolution failed, not client-only, when nothing was skipped", () => {
+    const refusal = modsDirRefusal(plan({ errors: ["Sodium: lookup failed", "Create: lookup failed"] }), 2);
+    expect(refusal).toBeTruthy();
+    expect(refusal).not.toMatch(/client-only/i);
+    expect(refusal).toMatch(/could be resolved/i);
+  });
+
+  it("separates the mixed case, naming both counts", () => {
+    const refusal = modsDirRefusal(
+      plan({ skipped: [{ name: "Sodium", why: "client-only" }] as never, errors: ["Create: lookup failed"] }),
+      2
+    );
+    expect(refusal).toMatch(/could be resolved/i);
+    expect(refusal).toContain("1 of 2");
+  });
+
+  it("refuses a pack with no mods recorded at all", () => {
+    expect(modsDirRefusal(plan({}), 0)).toBeTruthy();
+  });
+
+  /** The permissive half. One installable mod is enough to proceed; otherwise the guard
+   * would block every legitimate apply and would be "safe" in the useless sense. */
+  it("permits the apply as soon as one mod is installable", () => {
+    expect(modsDirRefusal(plan({ items: [item()], total: 1 }), 1)).toBeNull();
+    // Even alongside skips and errors — a partial apply is a real outcome, not a refusal.
+    expect(
+      modsDirRefusal(
+        plan({
+          items: [item()],
+          skipped: [{ name: "Sodium", why: "client-only" }] as never,
+          errors: ["Create: lookup failed"],
+          total: 2,
+        }),
+        3
+      )
+    ).toBeNull();
   });
 });

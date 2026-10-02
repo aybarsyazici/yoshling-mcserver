@@ -135,3 +135,40 @@ export async function planModpackInstall(input: {
     total: serverModTotal(input.mods.length, skipped.length),
   };
 }
+
+/**
+ * **May this plan touch the mods directory at all?**
+ *
+ * The one guard between an empty plan and destruction, and the reason it is a function
+ * rather than an `if` in the route: an adversarial recheck replaced
+ * `if (plan.items.length === 0)` in `/api/mods/install-modpack` with `if (false)` and all
+ * 835 tests passed. With that branch gone the route goes on to tar the ~215 MB world,
+ * delete **every installed jar** via `removeMod`, download nothing, and answer HTTP 200
+ * `{success:true}`. The steps are ordered backup → remove → download, so an empty plan
+ * reaching them is not a wasted apply, it is a wipe that reports success — the house
+ * defect class with the worst available blast radius.
+ *
+ * `null` means proceed. A string is the refusal, and it has to distinguish the two ways a
+ * plan empties out, because the operator's next move is different:
+ *
+ * - **every mod is client-only.** Nothing is wrong; this pack has nothing for a server.
+ * - **every mod failed to resolve.** Something *is* wrong — a version mismatch, Modrinth
+ *   unreachable — and the errors name it.
+ *
+ * Conflating them is how "no mod in this pack runs on a server" would get told to someone
+ * whose network was down.
+ */
+export function modsDirRefusal(plan: ModPlan, packSize: number): string | null {
+  if (plan.items.length > 0) return null;
+  if (packSize === 0) return "This modpack has no mods recorded.";
+  if (plan.skipped.length === packSize) {
+    return "No mod in this pack runs on a server — every one of them is client-only.";
+  }
+  if (plan.skipped.length === 0) {
+    return `None of the ${packSize} mods in this pack could be resolved, so nothing was changed.`;
+  }
+  return (
+    `None of this pack's server mods could be resolved, so nothing was changed. ` +
+    `(${plan.skipped.length} of ${packSize} are client-only and were never attempted.)`
+  );
+}
