@@ -239,13 +239,20 @@ export async function checkForUpdates(): Promise<
  * closing and leaving one unverified writer behind would re-seed it the moment an
  * update button appears.
  *
- * The download order below matters and is now correct for the first time: it deletes the
- * installed jar *before* fetching the replacement, so a corrupt download used to leave
- * the mod gone and the bad bytes written. `downloadVerifiedJar` throws before any write,
- * so a mismatch now leaves the old jar deleted and nothing in its place — still not
- * ideal, but a missing mod is a loader error that names itself, where a silently corrupt
- * one is not. Reordering the unlink after the download is the real fix and belongs with
- * whichever route first needs this.
+ * **The order below is delete-then-fetch, and it is still the wrong way round.** It
+ * `unlink`s the installed jar and only afterwards downloads the replacement, so anything
+ * that goes wrong in between leaves the mod gone.
+ *
+ * What changed is not the order — it is the verification. `downloadVerifiedJar` hashes the
+ * bytes and throws before anything is written, so a corrupt download now leaves the old jar
+ * deleted and *nothing* in its place, where it used to leave the old jar deleted and the bad
+ * bytes written under the new name. That is an improvement and not a fix: a missing mod is a
+ * loader error that names itself, while a silently corrupt one is not. Moving the `unlink`
+ * below the download is the real fix and belongs with whichever route first needs this.
+ *
+ * (An earlier version of this comment opened by calling the order "correct for the first
+ * time" and closed by saying reordering it was the real fix. Both halves cannot be true;
+ * the code does delete first, so that is what this now says.)
  */
 export async function updateMod(
   modId: string,

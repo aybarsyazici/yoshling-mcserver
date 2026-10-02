@@ -44,13 +44,21 @@ export interface ModrinthVersion {
    * until 2026-10-01.
    *
    * A single string, **not** the `env: {client, server}` object the `.mrpack` format
-   * uses. Measured against `/v2/project/<id>/version` across 160 versions of the 40
-   * most-downloaded mods: present on 160 of 160, with six distinct values
-   * (`client_only`, `client_or_server_prefers_both`, `client_or_server`,
-   * `client_only_server_optional`, `client_and_server`, `unknown`), plus `server_only`
-   * observed directly on LuckPerms. `src/lib/mod-admission.ts` owns the mapping and
-   * records the counts; it is optional here only so a cached or older response that
-   * lacks it falls through to the project-level `server_side` instead of crashing.
+   * uses. Measured against `/v2/project/<id>/version` across **527 projects / 2,751
+   * versions**: present on 2,751 of 2,751, with **ten** distinct values. The enum, each
+   * value's count and what each one says about the *server* live in
+   * `ENVIRONMENT_TO_SERVER` in `src/lib/mod-admission.ts`, which owns the mapping — do not
+   * copy the list here, because two copies of an enum Modrinth can extend is how one of
+   * them goes stale.
+   *
+   * **Do not re-narrow this.** It said six values over 160 versions of the 40
+   * most-downloaded mods, and that sample *missed three of the ten* — including
+   * `singleplayer_only`, the one value whose absence changes an answer from skip to
+   * install, on exactly the kind of mod the filter exists to exclude. The sampling that
+   * found them is written out next to the table.
+   *
+   * Optional here only so a cached or older response that lacks the field falls through to
+   * the project-level `server_side` instead of crashing.
    */
   environment?: string;
 }
