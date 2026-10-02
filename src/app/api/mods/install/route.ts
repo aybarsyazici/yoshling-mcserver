@@ -125,6 +125,9 @@ export async function POST(request: NextRequest) {
     name,
     version: selectedVersion,
     userId: session.user.id,
+    // One mod, one request — so `"manual"`, and the Installed page can tell this jar from
+    // the ones a pack apply put there. The pack's own writer passes `"pack"`.
+    source: "manual",
   });
 
   return NextResponse.json({

@@ -33,6 +33,18 @@ model InstalledMod {
   installedBy String
   installedAt DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  /// How this row got here: "pack" (a modpack apply) or "manual" (one mod, one request).
+  /// Nullable because the three rows on production predate the column; they are backfilled
+  /// to "manual", which is true of them — each was installed on its own, before any pack
+  /// was ever applied. `reconcileMods` reads anything else as "not recorded".
+  source String?
+
+  /// The Modrinth version id the jar was downloaded from. Both writers have it in hand at
+  /// the moment they create the row and neither used to keep it, so "which build is this"
+  /// could only be answered by the version *number*, which is a publisher's free text.
+  /// Nullable: pre-existing rows have none, and the Technic path has no Modrinth version.
+  versionId String?
 }
 
 model ServerConfig {

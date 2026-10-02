@@ -15,7 +15,7 @@ import {
 import { toast } from "sonner";
 import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
 
-interface ModpackResult {
+export interface ModpackResult {
   project_id: string;
   slug: string;
   title: string;
@@ -26,11 +26,41 @@ interface ModpackResult {
   categories: string[];
 }
 
-export function ModpackBrowserModrinth({ onImported }: { onImported: () => void }) {
+export function ModpackBrowserModrinth({
+  onImported,
+  onChoose,
+}: {
+  /** Called after a successful `POST /api/modpacks/import`. Unused in choose mode. */
+  onImported?: () => void;
   /**
-   * The fourth write control on `/minecraft/mods`, on its other sub-tab. Included with the
-   * three on the My Modpacks tab because leaving it would mean the page still offered a
-   * MEMBER one button that answers 403 — `POST /api/modpacks/import` checks `mods.install`.
+   * Choose a pack instead of saving it.
+   *
+   * **One search implementation, two jobs.** The Change pack sheet needs to find a pack on
+   * Modrinth and then *review* it before applying; the saved-sets section needs to put one
+   * on the shelf. Those differ by one button, and a second copy of a debounced Modrinth
+   * search with its own card markup is how two surfaces start disagreeing about what the
+   * list means. When this is set, the per-card action reads "Choose this pack" and calls
+   * back; nothing is written here.
+   *
+   * **Ungated, unlike Import, and that is a decision rather than an oversight.** Choosing a
+   * pack fetches `GET /api/modpacks/preview`, which is a read that deliberately answers a
+   * MEMBER — it is the comparison between what a pack needs and what this server runs, which
+   * is information and not a write. Gating it would also make the Apply gate behind it
+   * untestable: a mutation that removed `can.modsInstall` from the Apply button survived,
+   * because the MEMBER test never reached the step the button is on. The gate that stops a
+   * read-only account getting here at all is `Change pack` on the page itself.
+   */
+  onChoose?: (pack: ModpackResult) => void;
+}) {
+  /**
+   * The fourth write control on `/minecraft/mods`, originally on its own sub-tab. Included
+   * with the three on the saved-sets surface because leaving it would mean the page still
+   * offered a MEMBER one button that answers 403 — `POST /api/modpacks/import` checks
+   * `mods.install`.
+   *
+   * **The same flag gates the choose action**, deliberately: choosing leads to an apply,
+   * which checks the same capability. One boolean, two labels, so a role that cannot write
+   * is offered neither.
    */
   const { can } = useGames(CAPABILITY_POLL_MS);
   const [query, setQuery] = useState("");
@@ -42,6 +72,25 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
   const [importing, setImporting] = useState<string | null>(null);
   const [minDownloads, setMinDownloads] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
+  /**
+   * Off by default, and only ever turned on by the control below.
+   *
+   * The pack search used to be unfiltered: it listed every modpack Modrinth publishes
+   * against a 26.1.2 Fabric server, and the apply then refused each one on a version
+   * mismatch. The route defaults the facet to the server's own version now, and widening is
+   * a word the request carries (`version=any`) rather than an omission — the same shape as
+   * the mod browser.
+   */
+  const [allVersions, setAllVersions] = useState(false);
+  /** What the route says it actually faceted on. Not inferred from the request. */
+  const [filter, setFilter] = useState<{ mcVersion: string | null; loader: string | null } | null>(
+    null
+  );
+
+  /** `null` when no version facet was applied, so the two cases cannot be confused. */
+  const filterLabel = filter?.mcVersion
+    ? `MC ${filter.mcVersion}${filter.loader ? ` / ${filter.loader}` : ""}`
+    : null;
 
   const search = useCallback(
     async (newOffset = 0) => {
@@ -50,6 +99,7 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
       if (query) params.set("q", query);
       params.set("offset", String(newOffset));
       params.set("sort", sortBy);
+      if (allVersions) params.set("version", "any");
 
       try {
         const res = await fetch(`/api/modpacks/search?${params.toString()}`);
@@ -57,7 +107,7 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
         let hits = data.hits || [];
 
         if (minDownloads && parseInt(minDownloads) > 0) {
-          hits = hits.filter((h: any) => h.downloads >= parseInt(minDownloads));
+          hits = hits.filter((h: ModpackResult) => h.downloads >= parseInt(minDownloads));
         }
 
         if (newOffset === 0) {
@@ -67,13 +117,14 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
         }
         setTotalHits(data.total_hits || 0);
         setOffset(newOffset);
+        setFilter(data.filter ?? null);
       } catch {
         setResults([]);
       } finally {
         setLoading(false);
       }
     },
-    [query, sortBy, minDownloads]
+    [query, sortBy, minDownloads, allVersions]
   );
 
   useEffect(() => {
@@ -92,18 +143,20 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
       if (res.ok) {
         const data = await res.json();
         toast.success(`Imported "${pack.title}" with ${data.mods.length} mods`);
-        onImported();
+        onImported?.();
       } else {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         toast.error(data.error || "Failed to import");
       }
+    } catch {
+      toast.error(`Couldn't reach the server to import "${pack.title}". Nothing was saved.`);
     } finally {
       setImporting(null);
     }
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
         <div className="flex-1">
           <Input
@@ -134,6 +187,39 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
         </div>
       </div>
 
+      {/* Stated from the route's answer, never from the request — `filter` is what was
+          actually faceted on, and nothing is claimed until a response has arrived. */}
+      {filter !== null && (
+        <div className="flex flex-wrap items-center gap-2">
+          {filterLabel ? (
+            <Badge variant="secondary" className="gap-1.5">
+              Packs for {filterLabel}
+              <button
+                onClick={() => setAllVersions(true)}
+                className="ml-1 underline hover:text-foreground"
+              >
+                show all versions
+              </button>
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="gap-1.5">
+              Packs for every Minecraft version
+              {/* Offered only when widening is what caused it: with no `ServerConfig` row
+                  there is no version to narrow back to, and a button that would change
+                  nothing is worse than no button. */}
+              {allVersions && (
+                <button
+                  onClick={() => setAllVersions(false)}
+                  className="ml-1 underline hover:text-foreground"
+                >
+                  only this server&apos;s version
+                </button>
+              )}
+            </Badge>
+          )}
+        </div>
+      )}
+
       {loading && results.length === 0 ? (
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -143,7 +229,23 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
       ) : results.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <p className="text-lg">No modpacks found</p>
-          <p className="text-sm mt-1">Try a different search term</p>
+          {/* Name the filter rather than guessing at the cause: an empty list under a
+              version facet nobody asked for is the most confusing state this can reach. */}
+          <p className="text-sm mt-1">
+            {filterLabel
+              ? `Nothing matched this search for ${filterLabel}.`
+              : "Try a different search term"}
+          </p>
+          {filterLabel && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => setAllVersions(true)}
+            >
+              Show packs for all versions
+            </Button>
+          )}
         </div>
       ) : (
         <>
@@ -154,48 +256,61 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
             {results.map((pack) => (
               <div
                 key={pack.project_id}
-                className="flex flex-col p-4 rounded-xl border-2 border-border/50 hover:border-[#cba6f7] hover:shadow-[0_0_15px_rgba(203,166,247,0.3)] transition-all duration-300 cursor-pointer"
-                onClick={() => setDetailId(pack.project_id)}
+                className="flex flex-col rounded-xl bg-card/60 p-4 ring-1 ring-border transition-colors hover:ring-[var(--tint)]/60 focus-within:ring-2 focus-within:ring-[var(--tint)]"
               >
-                <div className="flex items-start gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDetailId(pack.project_id)}
+                  className="-m-1 flex items-start gap-3 rounded-lg p-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--tint)]"
+                >
                   {pack.icon_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={pack.icon_url}
                       alt=""
                       className="h-11 w-11 rounded-lg object-cover ring-1 ring-border/50"
                     />
                   ) : (
-                    <div className="h-11 w-11 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-bold text-primary">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-[var(--tint)]/10 text-xs font-bold text-[var(--tint)]">
                       {pack.title[0]}
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-sm truncate">{pack.title}</h3>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="truncate text-sm font-semibold">{pack.title}</h3>
                     <p className="text-xs text-muted-foreground">by {pack.author}</p>
                   </div>
-                </div>
-                <p className="text-xs text-muted-foreground line-clamp-2 mt-2 leading-relaxed">
+                </button>
+                <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                   {pack.description}
                 </p>
-                <div className="flex flex-wrap gap-1 mt-2">
+                <div className="mt-2 flex flex-wrap gap-1">
                   {pack.categories.slice(0, 3).map((cat) => (
                     <Badge key={cat} variant="secondary" className="text-[10px] font-normal">
                       {cat}
                     </Badge>
                   ))}
                 </div>
-                <div className="flex items-center justify-between mt-3 pt-3 border-t border-border/50">
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/50 pt-3">
                   <span className="text-xs text-muted-foreground">
                     {formatDownloads(pack.downloads)} downloads
                   </span>
-                  {can.modsInstall && (
-                    <Button
-                      size="sm"
-                      disabled={importing === pack.project_id}
-                      onClick={(e) => { e.stopPropagation(); handleImport(pack); }}
-                    >
-                      {importing === pack.project_id ? "Importing..." : "Import"}
+                  {/* Choosing is a read (see `onChoose`); importing writes a `Modpack` row
+                      and `POST /api/modpacks/import` checks `mods.install`, so only that
+                      one is gated. */}
+                  {onChoose ? (
+                    <Button size="sm" onClick={() => onChoose(pack)}>
+                      Choose this pack
                     </Button>
+                  ) : (
+                    can.modsInstall && (
+                      <Button
+                        size="sm"
+                        disabled={importing === pack.project_id}
+                        onClick={() => handleImport(pack)}
+                      >
+                        {importing === pack.project_id ? "Importing..." : "Import"}
+                      </Button>
+                    )
                   )}
                 </div>
               </div>

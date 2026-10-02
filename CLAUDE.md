@@ -201,7 +201,10 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   per world, only the running world's branch lit), one card per world the viewer
   can see, hand-off confirm, RAM budget. A viewer with no worlds gets a "No
   worlds yet" screen instead.
-- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings
+- `/minecraft/*` — MC overview, mods, server (controls/monitor/console/files), backups, settings.
+  **`/minecraft/mods` is one surface, not tabs** — the pack as a header, the installed list
+  grouped by where each jar came from, saved sets below, and the two Modrinth searches as
+  dialogs (`Add a mod`, `Change pack`). See [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 - `/7dtd/*` — 7DTD overview, server (controls/monitor/console/files), backups, settings
 - `/zomboid/*` — PZ overview, mods, server (controls/monitor/console/files), backups, settings
 - Backups are their own sidebar page per game (`/{game}/backups`), not a server tab.
@@ -213,7 +216,12 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   hides entries for worlds the viewer can't see.
 - API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
   `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
-  `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`.
+  `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`. `/api/modpacks/preview` is the one
+  that answers "what does this pack need, and can this server run it" **without writing a
+  `Modpack` row** — a read, so it answers a MEMBER, and it shares its version choice with
+  `/api/modpacks/import` (`src/lib/modpack-resolve.ts`) because a preview that resolved a
+  different build from the import behind it would make the comparison somebody read not the
+  comparison that was applied.
 - **Minecraft game rules are `/api/server/gamerules`** (the Game rules panel on MC
   settings) — the only config surface in the app that reads and writes the **running game**
   rather than a file. Two properties to keep, both load-bearing: **the rule ids are
@@ -504,6 +512,18 @@ ALTER TABLE "User" ADD COLUMN "games" TEXT NOT NULL DEFAULT '';
 UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 ```
 
+**NOT YET APPLIED** — migration `20261002143000_add_installed_mod_provenance`. Two
+nullable columns on `InstalledMod` so the Installed page can say which jars a modpack
+apply put there. **The `WHERE` on the backfill is the part not to drop**: without it, a
+second paste after the next pack apply rewrites every `'pack'` row to `'manual'`.
+Reasoning and what reads it: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+
+```sql
+ALTER TABLE "InstalledMod" ADD COLUMN "source" TEXT;
+ALTER TABLE "InstalledMod" ADD COLUMN "versionId" TEXT;
+UPDATE "InstalledMod" SET "source" = 'manual' WHERE "source" IS NULL;
+```
+
 ### 7 Days to Die specifics
 
 > **Read [`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md) first for anything 7DTD.**
@@ -717,6 +737,35 @@ connect **directly to the box IP `89.58.50.155`**:
     ever read — is a named dialog that states the consequence and offers the override.
     **Not yet pressed against the live container.** Depth:
     [`docs/MINECRAFT.md`](docs/MINECRAFT.md#installing-one-mod).
+  - **The Installed tab stopped reciting the database** (2026-10-02).
+    `GET /api/mods/installed` was `db.installedMod.findMany()` and there was **no `readdir`
+    anywhere in the mod code**, so "what is installed" was the app's memory of its own
+    writes rather than a reading of the directory the server loads from. It now reconciles
+    the two and answers three groups — `matched`, `untracked` (a jar with no row),
+    `missing` (a row with no jar) — **by file name, never by count**, because "2 untracked
+    jars" sends somebody to the file browser to guess which two. `InstalledMod` gains
+    `source` (`"pack"` / `"manual"`, written by both writers) and `versionId`, so "which of
+    these did the pack put there" is answerable for the first time —
+    **needs the hand-applied migration above**. Hashing is opt-in (`?hash=1`) and
+    `stat` is not; the reasoning, and the three mutants that went green before the tests
+    were fixed, are in
+    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02).
+    **Not yet read against the live container** — on production the DB and disk agreed when
+    last counted (3 rows, 3 jars), so there is no known drift for it to find there yet.
+  - **`/minecraft/mods` is one page, with the pack as a header** (2026-10-02). It was
+    three tabs — Browse mods / Installed / Modpacks — the last holding two sub-tabs, which
+    put every write on the page inside a nested tab and the install instructions in the
+    *collection's* empty state. Searching Modrinth is an **action** now (`Add a mod`,
+    `Change pack`), the list of what is on the server is the page, and saved sets are a
+    section below. **Change pack shows the comparison before the button**: a new
+    `GET /api/modpacks/preview` resolves what a pack needs *without writing a `Modpack`
+    row*, so a version mismatch is a refusal you can read rather than a toast that
+    disappears — which matters because COBBLEVERSE and `Hoplite` can never install here and
+    production already carries nine rows for six packs from attempts. A modpack apply also
+    writes **one `apply_modpack` `Activity` row** at last (its 166 `installMod` calls wrote
+    the leaves and not the act), which is what lets the header name the pack. No schema
+    change. Full shape, and why there is deliberately **no "Remove pack"**:
+    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#the-mods-page-is-one-surface--2026-10-02).
 - **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
   `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
   `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
@@ -810,7 +859,10 @@ Genuinely open:
 
 - **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11**, so on a
   26.1.2 server neither can install no matter how often it is re-imported. The apply
-  refuses with an honest version mismatch. Not a bug — a fact about those packs.
+  refuses with an honest version mismatch. Not a bug — a fact about those packs. Since
+  2026-10-02 it is also a fact you can **see before trying**: `Change pack` shows what a
+  pack needs beside what the server runs and refuses the Apply, instead of delivering the
+  409 as a four-second toast after another `Modpack` row has been created.
 - **`create` still snapshots a live world**, so a manual backup taken while people play
   can be torn. The automatic ones refuse while anyone is connected; a manual one is the
   operator's call.

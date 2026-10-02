@@ -126,9 +126,14 @@ screen saying why. None of the four components read a session.
 
 `/api/games/status`'s existing `can` projection now carries **`modsInstall`** and
 **`modsRemove`** beside the three power booleans and `settings`. No new endpoint, no second
-poller: `useGames` already polls this one, and the four components read it (`mod-card.tsx`
-takes it as a required prop from `mod-browser.tsx`, because "Load More" appends 20 cards at a
-time and a hook per card would be 20, 40, 60 pollers for one boolean).
+poller: `useGames` already polls this one, and the components read it (`mod-card.tsx` takes
+it as a required prop from `mod-browser.tsx`, because "Load More" appends 20 cards at a time
+and a hook per card would be 20, 40, 60 pollers for one boolean).
+
+**Two of the controls moved when the page became one surface**, and the gate moved with
+them: `Add a mod` and `Change pack` are buttons on `installed-mods.tsx` now, and
+`tests/mods-surfaces.test.tsx`'s row for that file lists both. **If you move a control, the
+test that asserts a MEMBER cannot see it has to follow it, not be deleted.**
 
 Three things worth not re-deriving:
 
@@ -153,7 +158,9 @@ Three things worth not re-deriving:
 - **An unreachable "Import from Modrinth" dialog in `modpacks.tsx`** — 66 lines plus
   `handleImport`, `searchModrinch` and five state hooks. `setShowImport(true)` was never
   called anywhere, so `open={showImport}` was permanently false and nothing in it could run.
-  The working import lives in `modpack-browser-modrinth.tsx`, on the page's other sub-tab.
+  The working import lives in `modpack-browser-modrinth.tsx` — which was the page's other
+  sub-tab at the time and is the "Import a pack from Modrinth" toggle in the saved-sets
+  section since the page became one surface.
 - **`model ModRequest` and `User.modRequests`** in `prisma/schema.prisma`: zero rows in
   production, zero references outside the generated client. This is the other half of the
   cleanup `permissions.ts` records, which deleted `mods.request` for guarding "a request
@@ -165,16 +172,25 @@ Three things worth not re-deriving:
 
 - The banner and the install confirm both advised **deleting the world folder** before
   switching packs — on the page whose own install archives the world first precisely so the
-  save survives (`/api/mods/install-modpack` runs `tar -czf … -C MC_DIR world` and refuses to
-  continue if it fails). Both now state the two checkable facts instead: every installed jar
-  is removed, and the rollback archive's only member is `world`, so **the mods folder is not
-  in it**.
+  save survives, and refuses to continue if that fails. Both state the checkable facts
+  instead: every installed jar is removed, and the archive is taken first.
+  **The replacement was itself wrong within the week** — it said the archive's only member
+  is `world`, "so the mods folder is not in it", which stopped being true on 2026-10-02 when
+  the apply started tarring `world` **and** `mods`. Corrected, and now pinned against
+  `MC_ARCHIVE_MEMBERS` rather than against itself; see
+  [Archives](#archives-world-and-mods-only-where-it-matters--2026-10-02).
 - `Download All` toasted `success("Starting download of N mods...")` for a loop that
   synthesises up to 166 anchor clicks — a claim about what the browser did with them, which
   the code cannot observe. It now says what it asked for and names the per-mod Download links
   as the recovery.
-- The page subtitle promised "install with one click". Nothing on this page installs a single
-  mod: `/api/mods/install` exists and has **no caller anywhere in the tree**.
+- The page subtitle promised "install with one click". Nothing on this page installed a
+  single mod at the time: `/api/mods/install` existed with **no caller anywhere in the
+  tree**. It has one since 2026-10-02, so the subtitle names installing again — but still
+  not as "one click", because an install can open a client-only confirm dialog.
+- `modpacks.tsx` pointed at a tab that did not exist, twice in a row: first "import from the
+  Modrinth/Technic tabs" (the Technic tab was removed in `e718acd`), then "from the Modrinth
+  tab" (gone when the page became one surface). Naming a place rather than a control is what
+  made the same sentence wrong twice — it says what a set *is* now.
 
 ## Installing one mod
 
@@ -242,10 +258,11 @@ What that means for the race above, precisely:
 | the apply is running, then an install/remove arrives | **yes** — 409 naming the lane, nothing written |
 | an install is already in flight when the apply starts | **no** — the apply does not wait for it |
 
-The second case stays open and is cheap to live with: increment 4's reconcile *reports* a jar on
-disk with no row as `untracked` and names it, and increment 6's `refuseIfPreempted` calls shorten
-the window. Saying "neither can interleave" was the overstatement — a reviewer disproved it with
-a direct probe, with an install mid-download and an apply started on top.
+The second case stays open and is cheap to live with: **`/api/mods/installed` now reports a jar
+on disk with no row as `untracked` and names it** — see "What is installed is now a reading"
+below — and a `refuseIfPreempted` call would shorten the window. Saying "neither can interleave"
+was the overstatement — a reviewer disproved it with a direct probe, with an install mid-download
+and an apply started on top.
 
 ### The client-only refusal is a dialog, with the override
 
@@ -276,6 +293,335 @@ facet array Modrinth would have received, with the real `buildFacets`),
 
 **Not verified against a live server.** Every claim above is about code and is pinned by tests;
 nobody has yet pressed Install on the box and watched a jar appear in `mods/`.
+
+## What is installed is now a reading, not a memory — 2026-10-02
+
+`GET /api/mods/installed` reconciles the `InstalledMod` rows against `MC_DIR/mods` and
+answers three named groups. Logic in `src/lib/mod-inventory.ts`, rendered by
+`src/components/installed-mods.tsx`.
+
+**It was `db.installedMod.findMany()` and nothing else, and there was no `readdir` anywhere
+in the mod code.** So the tab headed "Installed" showed what the app last remembered
+writing, which is a different claim from what the server will load. Production agrees today
+(3 rows, 3 jars, 5.8 MB) — but nothing had ever looked, so *"they agree"* was not something
+anybody could know, and this app's named defect class is exactly the one that produces.
+
+| group | means | what it is called by |
+|---|---|---|
+| `matched` | a row, and the jar it names is in the directory | file name |
+| `untracked` | a jar in the directory that no row names | file name — the only name it has |
+| `missing` | a row whose jar is not in the directory | file name, with the mod's name in the list |
+
+**The groups are names, never counts, and that is the whole point.** "2 untracked jars"
+sends somebody to the file browser to guess which two; the only reason to take the reading
+is to be told. They are also **derived from the one `mods` list** by filter rather than
+accumulated beside it, so a reader that trusts `untracked` and a reader that filters `mods`
+cannot get different answers. There are four ordinary ways the two sides part:
+
+- someone dropped a jar in with the file browser;
+- `removeMod`'s `unlink` hit `ENOENT` (it is swallowed), so the row went and the jar did not
+  — or the reverse;
+- a restore replaced `mods` from an archive whose manifest carried no `installedMods`, so
+  the whole set is on disk with nothing naming it. `/api/server/backups` already says so and
+  points here;
+- an install landed inside a `mods.apply` window — the half `fileLaneBusy` cannot cover, see
+  the table above.
+
+Four things worth not re-deriving:
+
+- **Hashing is opt-in (`?hash=1`), `stat` is not.** No digest can change the reconcile
+  verdict, and there is nothing to compare one against: `checkIntegrity` verifies a download
+  against Modrinth's sha512 *before* the jar is written and keeps no column. So a hash here
+  answers "are these two jars the same bytes" — which is a real question, because the two
+  writers name files differently (`installMod` uses Modrinth's filename, the Technic path
+  writes `<slug>.jar`) and Fabric loading one mod twice is a crash. The page reports a
+  duplicate pair by name. `stat` stays unconditional: one syscall, and a 0-byte jar is a torn
+  download worth seeing without asking.
+- **A missing `mods/` directory is "nothing installed", not an error** — and the catch is
+  **ENOENT-only**. Swallowing an EACCES would report every installed mod as missing and every
+  jar as absent, which is the read-nothing-report-success shape again. Pinned by a test that
+  points the reconcile at a path whose parent is a file (ENOTDIR).
+- **Classification is `!isDirectory()`, not `isFile()`.** `readdir` does not follow links, so
+  a jar reached through a symlink answers `isSymbolicLink()` and the server loads it anyway.
+  A directory called `extracted.jar` is the case worth excluding. Anything that is not a
+  `.jar` goes in `ignored` — listed, so nothing is silently dropped, but never called an
+  untracked *mod*, because `.DS_Store` is not one.
+- **Only names `readdir` returned are ever joined onto the directory.** A row carrying
+  `../../something` fails the presence check, stays `missing` and is never opened.
+
+### Provenance: `source` and `versionId`
+
+Two nullable columns on `InstalledMod`, migration
+`20261002143000_add_installed_mod_provenance`.
+
+- **`source`** is `"pack"` or `"manual"`, written at both writers —
+  `/api/mods/install-modpack` (both its paths, including the Technic direct-create) and
+  `/api/mods/install`. Before it, "which of these jars did the pack put there" was not
+  answerable at all: after an apply the only record of the difference was in whoever had been
+  watching. **`installMod`'s parameter is required, not defaulted** — a default would let a
+  third caller silently inherit somebody else's provenance, which is worse than no column.
+- **`versionId`** is the Modrinth version id. Both writers had it in hand and discarded it;
+  `version` is `version_number`, a publisher's free text that does not identify a build.
+  Absent on the Technic path, which has no Modrinth version.
+- Both nullable because the three production rows predate them. The migration backfills
+  `source = 'manual'`, which is **true of those rows** and not a default standing in for one:
+  each was installed on its own, before any pack had ever been applied. A row with no source
+  renders "source not recorded" rather than being labelled either way — a restore puts rows
+  back from an archive that never carried provenance.
+- The backfill is `WHERE "source" IS NULL`. The hand-apply is a human pasting SQL into a
+  container and the one that gets pasted twice is the one that read as having failed;
+  without the guard a second run after the next pack apply would rewrite every `'pack'` row
+  to `'manual'` and undo the column's purpose.
+
+### Tests, and two mutants that survived first
+
+`src/lib/__tests__/mod-inventory.test.ts` (real files in a temp directory — a faked `readdir`
+is a second place to write down the answer being tested),
+`mods-installed-route.test.ts` (the route over a real directory, with only `auth`, Prisma and
+`getModsDir` faked), `tests/installed-mods-reconcile.test.tsx` (the rendering), and
+`mod-provenance-migration.test.ts`.
+
+Three of those exist because a mutation went green:
+
+- **A band that renders `"2 file(s)"` instead of the names passed the entire suite.** Each row
+  prints its own `fileName` a few pixels below, and `document.body.textContent` cannot tell
+  the two apart. Every band now carries `data-band` and the names are asserted *inside* it.
+  **If you add a band, give it a `kind`.**
+- **A verdict line that consults only `untracked` passed too**, so a server with a missing jar
+  was told "every mod on this list has its jar on disk". Pinned from both directions now.
+- **The migration SQL was executed by nothing**, so deleting the whole backfill left 1346
+  tests green. `mod-provenance-migration.test.ts` runs the file verbatim against an in-memory
+  libSQL database — the same client production is read through, no Docker, no network, no
+  file — over the `CREATE TABLE` taken out of `20260519104842_init` rather than a hand-written
+  approximation.
+
+A fourth mutation found a live defect: `removing === mod.id` is `true` for an untracked entry,
+because `removing` is `null` when nothing is being removed and an untracked `id` is also
+`null`. It was invisible only because the button is gated on `mod.id` as well.
+
+## The mods page is one surface — 2026-10-02
+
+`/minecraft/mods` was three tabs — **Browse mods / Installed / Modpacks** — with the last
+holding two sub-tabs of its own. It is one page now: the pack as a header, the installed
+list grouped by where each jar came from, saved sets below, and both Modrinth searches as
+dialogs. `src/app/minecraft/mods/page.tsx` is 100 lines of layout; everything else moved
+into components.
+
+### Why the tab split was wrong, which is not a matter of taste
+
+- **Two of the three tabs were inert until 2026-10-02.** You could not install from Browse
+  (`/api/mods/install` had no caller anywhere in the tree) and could not add from Installed.
+  So the page *opened* on a debounced Modrinth search whose only outcome was adding a mod to
+  a list, and the thing anyone comes here for — what the server will load — was the second
+  tab.
+- **All the power sat in a nested sub-tab**, and the empty state of the *collection* was
+  where the install instructions lived. That is the clearest available proof the hierarchy
+  was inverted.
+- **"Modpacks" with a Modrinth sub-tab nests a *source* under a *collection*** and stacks
+  two different kinds of thing: a set somebody curated here, and somebody else's published
+  artefact. The Modrinth sub-tab was a one-shot importer with no reason to persist as a
+  place — nothing is ever read from it again.
+- **"Modpack" is the wrong word for a `Modpack` row.** A modpack is a published, versioned
+  artefact with a loader and configs; a row here is a label over a list of project ids, and
+  **566 of 569 production rows carry no version pin**. Calling both "modpack" is why
+  `Add to pack` read as "stage for later".
+
+### Provenance is carried by the grouping, not by a badge per row
+
+The list is split into five sections, each with `data-group` on it: `missing`, `untracked`,
+`pack`, `manual`, `unrecorded`. Problems first; a section with no rows does not render.
+
+"Which of these did the pack put there and which did we add ourselves" is the question
+`InstalledMod.source` finally makes answerable — before it, after an apply the only record
+of the difference was in whoever had been watching. **Four identical-looking pills would
+bury the answer it has**, so the claim is the heading and the row carries only its own
+facts. The counting is in `src/lib/mod-provenance.ts`, so the numbers are pinned by unit
+tests rather than by reading a sentence off a page, and
+`jars === fromPack + ownInstall + unrecorded + untracked` holds by construction (a
+`missing` row is **not** a jar — folding it in would report a mod the server will not load
+as installed).
+
+**A group heading and a row a few pixels below it are the same string to
+`document.body.textContent`** — the trap that let a `"2 file(s)"` mutant pass the whole
+suite for the drift bands. Assert names *inside* `[data-group=…]`. **If you add a group,
+give it a `kind`.**
+
+### The pack is a header, and it states two separate facts
+
+`GET /api/mods/installed` carries the reading **plus** the last recorded apply and what the
+server is configured to run (`InstalledReading`). One request, so the header and the list
+cannot disagree about the same server.
+
+| what | kind of claim |
+|---|---|
+| "Vanilla Perfected — applied 2 Oct 2026 by Aybars · 78 of 81 mods installed" | a **record** of an apply |
+| "81 jars in the mods folder — 78 from a pack, 3 added one at a time" | a **measurement** of the directory |
+
+**They are never joined.** `source` is `"pack"` / `"manual"` with no pack id, so "78 jars
+from Vanilla Perfected" is not a sentence the data supports. There is a third header state
+for exactly this reason: *"A pack was applied, but not from here"* — jars whose `source` is
+`"pack"` with no `apply_modpack` row to name. "No pack" would be false and a pack name would
+be invented.
+
+`packVersionNote` reports a pack applied for a Minecraft version the server no longer runs —
+real drift, because the version dropdown can be changed afterwards and the jars do not move
+with it. It answers `null` when there is nothing to compare, the way every settings surface
+here does.
+
+### `apply_modpack`: one durable row, which nothing wrote
+
+`/api/mods/install-modpack` is the most destructive endpoint in the app and it entered **no
+`Activity` row of its own**. Its 166 `installMod` calls each wrote `install_mod`, so the log
+recorded every leaf and not the act — and "which pack is on this server" was answerable from
+nothing durable, since the operation registry keeps a non-`ok` record for six hours and loses
+everything on a web-container restart.
+
+**No schema change.** A modpack apply is exactly the kind of event `Activity` exists for: it
+inherits the `User` relation (so the actor's name resolves without a second lookup) and the
+`details.game` tag `/api/activity` filters on. `src/lib/modpack-applied.ts` owns the action
+constant, the blob builder and the parser; `/api/mods/installed` reads the newest row with a
+`findFirst` (a scan would read the 332 rows a 166-mod apply adds).
+
+Four properties worth not breaking:
+
+- **Written after the mods were replaced, never on a refusal path.** Every `return` above the
+  download loop leaves the mod set untouched, and a log of things that did not happen is a
+  defect this project has fixed twice (`powerOff` returning whether it stopped anything,
+  `powerOn` returning `[]`).
+- **It records `total`, the plan's denominator** — the pack minus the mods positively
+  declared client-only — not `modpack.mods.length`. A mutation swapping them survived the
+  first version of the test, because the fixture it used was a pack whose every mod belonged
+  on a server. A large pack is 30–50% client mods, so the row-count version would record a
+  shortfall on every correct apply.
+- **A failure to write it is a warning, not a fatal.** The jars are already replaced by then.
+  But it is not silent either: with no row the page heads itself "a pack was applied, but not
+  from here", and the warning says why.
+- **Both `formatAction` renderers were taught the action.** `/activity`'s and
+  `game-overview.tsx`'s both end in a `default` that prints bare underscored words, and that
+  fallback has already produced three documented defects (`backup_restore`, `backup_failed`,
+  `set_gamerule`). `tests/activity-modpack-row.test.tsx` renders the first and reads the
+  second's map.
+
+### Change pack: the comparison before the button
+
+The old route to changing the server's mod set was: Modpacks tab → Modrinth sub-tab →
+**Import** (writes a `Modpack` row) → back to My Modpacks → **Install to Server** → confirm.
+Six steps, and the one fact that decides whether any of it can work arrived at the *end*, as
+a 409 in a toast that lives four seconds. On this box that refusal is the **normal** outcome:
+COBBLEVERSE publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11. Production has **9
+`Modpack` rows for 6 distinct packs**, three of them `(re-imported)` duplicates — that is
+what a flow where looking and taking are the same act produces.
+
+`GET /api/modpacks/preview` answers the same question and **writes nothing**: no `Modpack`,
+no `ModpackMod`, no `Activity`. It is a read, so it gates on session + world access and no
+capability, like `/api/modpacks/search` and `[id]/export`.
+
+**The version choice is shared with the import** (`src/lib/modpack-resolve.ts`,
+`chooseModpackVersion`). This is the load-bearing part: a preview that resolved a *different*
+build from the import behind it would be worse than no preview, because the comparison
+somebody read would not be the comparison that was applied. Pinned as a drift guard — both
+routes driven over the same stubbed Modrinth data and asserted to **agree** — because a
+mutation replacing the import's call with `versions[0]` survived everything else:
+`/api/modpacks/import` had no behavioural test of any kind.
+
+What the review states, and what it declines to:
+
+| stated | because |
+|---|---|
+| needs MC *x* / loader *y*, against what the server runs, with a verdict | the whole point; `compatibility: null` is a third verdict for "no `ServerConfig` row", never rendered as a disagreement |
+| the versions the pack *does* publish | "it needs 1.21.1" invites "then which build should I pick", and often the answer is "there is none for this server" |
+| how many of its mods carry no pinned version | 566 of 569 production rows — an apply installs each mod's newest matching build, so a set is not reproducible |
+| how many jars are removed, and how many of those were added by hand | "this will remove every mod currently installed" says nothing about whether that is three jars or eighty-one |
+| that applying also saves the pack under Saved sets | it does — `install-modpack` takes a `modpackId`, so this is genuinely import-then-apply |
+| **not** a client-only count | it comes from reading every mod's Modrinth build, which is what the apply does over up to 166 sequential requests. A number here would be that work done in a dialog, or an invention |
+
+`Choose this pack` is **ungated** and `Import` is not, which is a decision: choosing fetches
+the preview, a read that deliberately answers a MEMBER, while importing writes a row. It also
+made the Apply gate testable — with both gated, a mutation removing `can.modsInstall` from
+**Apply this pack** survived, because the MEMBER case never reached the step the button is on.
+A vacuous pass on a gate is worse than no test. The control that keeps a read-only account out
+of this dialog at all is `Change pack` on the page.
+
+### There is deliberately no "Remove pack"
+
+Nothing in this app removes a set of mods as **one** operation. Doing it as N client-side
+`DELETE /api/mods/[id]` calls would be a bulk destructive action with no rollback archive, no
+operation record, and a partial-failure state the page could not report — this project's
+named defect class. Per-row **Remove** is the supported way out of one mod; **Change pack** is
+the supported way to replace the set, and it archives `world` and `mods` first. Pinned by a
+test, so it does not get added by reflex.
+
+### The pack search is faceted now, like the mod search
+
+`/api/modpacks/search` sent `versions:` and `categories:` only when the caller passed them,
+and the one caller never did — so the pack browser listed every modpack Modrinth publishes
+against a 26.1.2 Fabric server. The identical defect `/api/mods/search` was fixed for one
+route along, and it matters more here because a modpack apply is the most destructive endpoint
+in the app. Widening is the literal `any`, the response says what was faceted, and the loader
+facet is lowercased (`ServerConfig.modLoader` holds `FABRIC` or `fabric` depending on who
+wrote it; `categories:FABRIC` matches nothing and the symptom is an empty browser).
+
+### The apply's client half is one module
+
+`src/lib/modpack-apply.ts` holds what the apply's response *means*, because two surfaces apply
+packs now (**Change pack** and **Install to Server**) and the power control already reached
+three copies here with two of them missing a fix. Three things it gets right, each of which
+was wrong once:
+
+- **`res.ok` is not the verdict.** The route answers non-2xx when it could not install every
+  mod. Trusting `res.ok` reported *"Installed 0/166 mods"* in a **green** toast.
+- **A body with no counts is not an apply report** — a 403 opened the dialog as "Installed
+  undefined of undefined mods".
+- **A request that gave up is not a failed apply, and `still-running` is its own case with no
+  counts in it.** `modpacks.tsx` substituted `{installed: 0, total: 0}` there and the report
+  rendered a **destructive-red "Installed 0 of 0 mods"** — a failure headline for an apply
+  that was succeeding at that moment, on exactly the runs long enough (166 sequential fetches,
+  past a ~100 s origin timeout) to reach it.
+
+The report dialog itself is `src/components/apply-report-dialog.tsx`, shared by both. Its
+title is destructive **only** when `installed === 0`; a mutation hard-coding the class survived
+until a test pinned the colour, and the colour is a claim — this repo has already shipped a
+`noop` step that painted every clean backup amber.
+
+### Copy that had gone stale, and the test that was holding it there
+
+The saved-sets banner and the install confirm both said the pre-apply archive *"holds the
+world only, not the mods folder"*. That was true on 2026-09-30 and **stopped being true the
+same week**: `install-modpack` tars `archiveMembersPresent(MC_DIR)` — `world` *and* `mods` —
+and `restoreMinecraftArchive` renames both back. So the page was **understating its own safety
+net**, telling an operator their jars are not recoverable when they are, immediately before
+the button that deletes every one of them.
+
+`tests/mods-surfaces.test.tsx` was asserting the wrong sentence, which is why it survived a
+copy review. It now reads the two members out of `MC_ARCHIVE_MEMBERS` and asserts the new
+wording, so a future change to what an archive holds reddens the test instead of quietly
+making the copy wrong again. **Pin copy against the module that decides it, not against
+itself.**
+
+### The drift guard grew a second predicate
+
+`tests/mods-surfaces.test.tsx` finds every component that writes a mod or a modpack and
+requires it to be in its table. Keyed on a literal `fetch("/api/mods…", {method: "POST"})`,
+it missed `change-pack-dialog.tsx` entirely: that file writes through
+`src/lib/modpack-apply.ts` and contains no write `fetch` at all. The guard matches the shared
+applier's import too now — **if you move a write behind a helper, teach the guard the
+helper.** `COVERED_ELSEWHERE` lets a stepped flow be pinned in its own file and asserts that
+file exists, so "covered elsewhere" is checkable rather than a way to silence the guard.
+
+### What was left alone on purpose
+
+- **The nine `Modpack` rows.** Three `(re-imported)` duplicates and one named `a` with four
+  mods and no target version. Not deleted and not hidden: a set with no pinned versions says
+  so, and a set with no target version says so, because both change what Apply would do.
+- **Pinning `ModpackMod.versionId`.** The preview *counts* the unpinned ones; writing the pins
+  is its own increment.
+- **`checkForUpdates()` still has no route**, so there is no "Check updates" control. A button
+  that does nothing is worse than its absence.
+- **No new animation.** This is a dense reading surface and the shared `Reveal` primitive does
+  not consult `usePrefersReducedMotion`, so adding it would be adding motion a reduced-motion
+  user still gets.
+- **No live verification.** Everything above is about code and is pinned by tests; nobody has
+  opened this page on the box.
 
 ## Modpacks — and why we are NOT delegating to the image
 
@@ -421,6 +767,15 @@ both end in `.tar.gz`, so nothing else said which one undoes a modpack apply.
 `manifestIncludesMods` answers **false** for an archive that recorded no members — not
 "unknown" — and that is a measurement, not a guess: every archive written before this was
 one member.
+
+**The page's copy did not follow this change, and a test was holding it back.** The
+saved-sets banner and the install confirm both still said the archive *"holds the world
+only, not the mods folder"*, and `tests/mods-surfaces.test.tsx` asserted that sentence — so
+for days the page understated its own safety net, telling an operator their jars are not
+recoverable when they are, immediately before the button that deletes every one of them.
+Fixed 2026-10-02, with the assertion rewritten to read `MC_ARCHIVE_MEMBERS` so the next
+change to what an archive holds reddens the test rather than making the copy wrong again.
+**When a module decides what a sentence claims, pin the sentence against the module.**
 
 Tests: `src/lib/__tests__/mc-archive.test.ts` and `backup-create-minecraft.test.ts` use
 **real `tar` in a temp directory** and assert the bytes that landed, because the member that

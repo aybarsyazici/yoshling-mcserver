@@ -132,6 +132,17 @@ let installedNames: string[] = [];
 let directWrites: { path: string; bytes: number }[] = [];
 let sidecarWrites: { path: string; json: string }[] = [];
 let dbRows: string[] = [];
+/** The whole `data` of every direct `installedMod.create`, so provenance is checkable. */
+let dbCreates: Record<string, unknown>[] = [];
+/**
+ * Every `db.activity.create`, so the one durable row an apply writes is checkable.
+ *
+ * Distinct from `activityRows` above, which records the activity the *backup journal* would
+ * have written and exists to prove its absence.
+ */
+let dbActivity: Record<string, unknown>[] = [];
+/** Makes the `apply_modpack` row fail, to pin that a logging failure is not fatal. */
+let activityThrows = false;
 let tarRuns: string[][] = [];
 let tarTimeouts: (number | undefined)[] = [];
 let rmRuns: string[] = [];
@@ -363,10 +374,24 @@ vi.mock("@/lib/db", () => ({
       findFirst: vi.fn(async () => existingInstalled),
       create: vi.fn(async ({ data }: { data: { name: string } }) => {
         dbRows.push(data.name);
+        dbCreates.push(data as Record<string, unknown>);
         return data;
       }),
     },
-    activity: { create: vi.fn(async () => ({})) },
+    /**
+     * Captured, not discarded. A modpack apply writes one `apply_modpack` row and nothing
+     * wrote it before 2026-10-02: the 166 `installMod` calls each wrote `install_mod`, so
+     * the log recorded every leaf and not the act, and "which pack is on this server" was
+     * answerable from nothing durable. `/api/mods/installed` reads this row to head the
+     * mods page, so dropping it is a silent regression on a different surface.
+     */
+    activity: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        if (activityThrows) throw new Error("database is locked");
+        dbActivity.push(data);
+        return data;
+      }),
+    },
   },
 }));
 
@@ -421,6 +446,8 @@ beforeEach(() => {
   directLength = null;
   directBody = Buffer.from("PK\u0003\u0004 pretend this is a jar");
   directOk = true;
+  dbActivity = [];
+  activityThrows = false;
   removedIds = [];
   installedNames = [];
   directWrites = [];
@@ -428,6 +455,7 @@ beforeEach(() => {
   journalled.length = 0;
   activityRows.length = 0;
   dbRows = [];
+  dbCreates = [];
   tarRuns = [];
   tarTimeouts = [];
   rmRuns = [];
@@ -1244,5 +1272,194 @@ describe("/api/mods/install refuses a client-only mod", () => {
     expect((await installSingle(sodium)).status).toBe(401);
     expect(installMod).not.toHaveBeenCalled();
     expect(lookups).toEqual([]);
+  });
+});
+
+/**
+ * **Each writer records which of them wrote the row.**
+ *
+ * `InstalledMod.source` exists so "which of these jars did the pack put there" is
+ * answerable — before it, after an apply the only record of the difference was in whoever
+ * had been watching. Both writers already knew the answer; neither wrote it down.
+ *
+ * `installMod` is faked in this file, so these assert what the **routes** pass. That the
+ * value then reaches the row is `mod-download.test.ts`'s half ("records where the row came
+ * from and which build is on disk"), and the split is deliberate: a route that passes
+ * `"manual"` to a writer that ignores it, and a writer that persists a value no route
+ * sends, are two different bugs.
+ */
+describe("provenance is recorded by whichever writer wrote the row", () => {
+  /** The `source` each `installMod` call carried, in order. */
+  function sources(): unknown[] {
+    return installMod.mock.calls.map(
+      (c) => (c[0] as unknown as { source?: unknown }).source
+    );
+  }
+
+  it("marks a modpack apply's mods as coming from a pack", async () => {
+    specs = [LITHIUM, { name: "Starlight", environment: "server_only" }];
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(installedNames).toEqual(["Lithium", "Starlight"]);
+    expect(sources()).toEqual(["pack", "pack"]);
+  });
+
+  it("marks the direct-download path as coming from a pack too", async () => {
+    // The Technic path writes its own row rather than going through `installMod`, so it is
+    // a second site that can forget — and it is the one with no Modrinth version, so
+    // `versionId` is deliberately absent rather than invented.
+    specs = [{ name: "TechnicThing", url: "https://technic.test/thing.jar" }];
+    directLength = directBody.byteLength;
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(dbCreates).toHaveLength(1);
+    expect(dbCreates[0].source).toBe("pack");
+    expect(dbCreates[0].versionId).toBeUndefined();
+  });
+
+  it("marks a single install as installed on its own", async () => {
+    specs = [LITHIUM];
+    const res = await installSingle({
+      modrinthId: "id-Lithium",
+      slug: "lithium",
+      name: "Lithium",
+    });
+    expect(res.status).toBe(200);
+    expect(sources()).toEqual(["manual"]);
+  });
+
+  it("still says manual when the client-only refusal was overridden", async () => {
+    // The override is the one path where a single install looks unusual; it is still one
+    // mod, one request, and labelling it anything else would make the Installed page
+    // attribute it to a pack that was never applied.
+    specs = [SODIUM];
+    const res = await installSingle({
+      modrinthId: "id-Sodium",
+      slug: "sodium",
+      name: "Sodium",
+      allowClientOnly: true,
+    });
+    expect(res.status).toBe(200);
+    expect(sources()).toEqual(["manual"]);
+  });
+
+  it("never lets the two writers agree on one label", async () => {
+    // The drift guard: a refactor that gives `installMod` a default, or that passes the
+    // same constant from both call sites, makes the column useless while every assertion
+    // above still passes individually. One apply and one install in the same test, so the
+    // two values are compared rather than each checked against a literal.
+    specs = [LITHIUM];
+    await apply();
+    const fromPack = sources();
+    installMod.mockClear();
+    await installSingle({ modrinthId: "id-Lithium", slug: "lithium", name: "Lithium" });
+    const fromInstall = sources();
+    expect(fromPack).not.toEqual(fromInstall);
+    expect(new Set([...fromPack, ...fromInstall]).size).toBe(2);
+  });
+});
+
+describe("an apply records which pack was applied", () => {
+  /**
+   * **One durable row, which nothing wrote until 2026-10-02.**
+   *
+   * `/api/mods/install-modpack` is the most destructive endpoint in the app and it entered
+   * no `Activity` row of its own: its 166 `installMod` calls each wrote `install_mod`, so
+   * the log recorded every leaf and not the act. "Which pack is on this server" was
+   * therefore answerable from nothing durable — the operation registry keeps a non-`ok`
+   * record for six hours and loses everything on a web-container restart.
+   *
+   * `/api/mods/installed` reads this row to head the mods page, so a route that stops
+   * writing it breaks nothing here; it makes a *different* surface say "a pack was applied,
+   * but not from here" about a pack it had just applied.
+   */
+  function appliedRows(): Record<string, unknown>[] {
+    return dbActivity.filter((r) => r.action === "apply_modpack");
+  }
+
+  it("writes the pack, the counts and the version it was applied for", async () => {
+    specs = [LITHIUM, { name: "Starlight", environment: "server_only" }];
+    const res = await apply();
+    expect(res.status).toBe(200);
+
+    expect(appliedRows()).toHaveLength(1);
+    const row = appliedRows()[0];
+    expect(row.userId).toBe("u1");
+    expect(JSON.parse(String(row.details))).toEqual({
+      game: "minecraft",
+      packId: "pack-1",
+      packName: "Test Pack",
+      installed: 2,
+      total: 2,
+      mcVersion: "26.1.2",
+      loader: "fabric",
+    });
+  });
+
+  it("records the plan's denominator, not the pack's row count", async () => {
+    /**
+     * **A mutation survived the first version of this block**: swapping `total` for
+     * `modpack.mods.length` left every assertion green, because the fixture it used was a
+     * pack whose every mod belonged on a server — so the two numbers were the same.
+     *
+     * They are not the same number and the difference is the whole point. `total` is the
+     * plan's denominator — the pack minus the mods positively declared client-only — and a
+     * large pack is 30-50% client mods, so `modpack.mods.length` would make every correct
+     * apply of every real pack record a shortfall it did not have. A pack of three with one
+     * client-only mod and one that fails to resolve gives `installed: 1, total: 2`, against
+     * a row count of 3.
+     */
+    specs = [LITHIUM, SODIUM, { name: "Gone", unresolvable: true }];
+    const res = await apply();
+    expect(res.status).toBe(500);
+    const details = JSON.parse(String(appliedRows()[0].details));
+    expect(details.installed).toBe(1);
+    expect(details.total).toBe(2);
+    // Stated explicitly so the difference cannot be read as incidental.
+    expect(details.total).not.toBe(3);
+  });
+
+  it("carries the world tag the activity filters read", async () => {
+    // `/api/activity` drops rows for worlds the viewer cannot open by reading
+    // `details.game`, and `/minecraft` selects on `details: {contains: "minecraft"}`. An
+    // untagged mod row once leaked to a MOD granted only `zomboid`.
+    specs = [LITHIUM];
+    await apply();
+    expect(JSON.parse(String(appliedRows()[0].details)).game).toBe("minecraft");
+  });
+
+  it("writes nothing when the apply refused and changed nothing", async () => {
+    /**
+     * Every `return` above the download loop leaves the server's mod set untouched, so a
+     * row there would be a log of something that did not happen — a defect this project has
+     * fixed twice (`powerOff` returning whether it stopped anything, `powerOn` returning
+     * `[]`). The all-client-only 409 is the refusal that most looks like an apply.
+     */
+    specs = [SODIUM];
+    const res = await apply();
+    expect(res.status).toBe(409);
+    expect(appliedRows()).toEqual([]);
+  });
+
+  it("writes nothing when the pack targets another version", async () => {
+    packTarget = { mcVersion: "1.21.1", loader: "fabric" };
+    expect((await apply()).status).toBe(409);
+    expect(appliedRows()).toEqual([]);
+  });
+
+  it("still installs the mods when the row cannot be written, and says so", async () => {
+    /**
+     * The jars are already replaced by this point, so a failure to log must not throw the
+     * apply away — but it must not be silent either: with no row the mods page heads itself
+     * "a pack was applied, but not from here", and nobody should have to work out why.
+     */
+    activityThrows = true;
+    specs = [LITHIUM];
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(installedNames).toEqual(["Lithium"]);
+    const warnings = (res.body.warnings ?? []).join(" ");
+    expect(warnings).toMatch(/recording which pack was applied failed/);
+    expect(warnings).toMatch(/database is locked/);
   });
 });
