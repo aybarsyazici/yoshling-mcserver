@@ -33,11 +33,19 @@ headed "Pending" 200 lines above a Status section saying it was applied, and 8
 references pointed at the decommissioned box. **Long files stop being read, and
 then they stop being true.** Keep this one short enough to re-read.
 
+It happened again. By 2026-10-02 this file was **956 lines**, and `## Status` plus the audit
+summary were **284 of them — 30%** — almost entirely history: "closed on date X, listed so
+nobody re-reports it". Every session paid to read the record of finished work. That moved to
+[`docs/CLOSED.md`](docs/CLOSED.md), leaving the *current* state and the *genuinely open* list
+here. **The rule that falls out of doing this twice: a "closed" or "fixed" note belongs in this
+file only until the next thing closes.** After that it is history, and history goes in a doc.
+
 ### Per-game deep docs — load on demand
 
 | Working on | Read first |
 |------------|-----------|
 | **Adding anything that takes more than ~10s**, or touching banners/toasts | **[`docs/OPERATIONS.md`](docs/OPERATIONS.md)** — the operation registry. A route cannot state its own outcome, and that is enforced by the compiler |
+| **Before reporting any defect**, or "was this already fixed?" | **[`docs/CLOSED.md`](docs/CLOSED.md)** — the 2026-09-28 audit and every closed item, with the measurement that closed it. Nothing in it is a to-do |
 | **Any pre-existing bug, or "is this feature actually correct?"** | **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)** — 185 reviewed findings across every route. Check it before assuming a defect is new, and check its §5 before trusting any finding |
 | **Any settings page**, or "does this setting actually apply?" | **[`docs/SETTINGS.md`](docs/SETTINGS.md)** — the three-layer settings architecture, configured-vs-live, and the write discipline every settings route obeys |
 | **Project Zomboid** — mods, maps, `.ini`, Workshop updates, sandbox options, anti-cheat, a log error | **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md)** |
@@ -377,7 +385,7 @@ npm run dev      # dev server (needs .env — see below)
 npm run build    # production build (also the deploy build)
 npm run lint     # eslint (not run during build; pre-existing `any` warnings exist)
 npx tsc --noEmit # typecheck
-npm test         # vitest, 1151 tests, ~2.11s, no Docker/network/server needed
+npm test         # vitest, 1502 tests, ~12.42s, no Docker/network/server needed
 ```
 
 **Run `npm test` before you ship.** It exists because the same classes of defect kept
@@ -675,6 +683,12 @@ connect **directly to the box IP `89.58.50.155`**:
   Production also confirms two things this file already claimed: `mob_griefing` is `false`
   with nothing in this app having set it, and `command_blocks_work = true` against
   `enable-command-block=false` in the file.
+  **The mods feature was revised on 2026-10-02** — one page instead of three tabs, an
+  `Install` button that exists, a rollback that restores the mods it deletes, and an inventory
+  reconciled against the real directory. It also **reversed a recommendation this file used to
+  make** about delegating pack installs to the image. What is still open: pack imports are
+  unpinned, so applying a saved pack installs the newest build of each mod rather than the
+  pack. All of it: **[`docs/MINECRAFT.md`](docs/MINECRAFT.md)**.
   **Ban management was added 2026-10-01** (`/api/server/bans` + a card on the MC settings
   page), closing the whitelist/ops/bans set. It is routed on a live RCON socket rather than
   on `docker inspect` and reads every outcome back. **Exercised end to end on the live
@@ -782,78 +796,22 @@ connect **directly to the box IP `89.58.50.155`**:
 - **MOD now has the same capabilities as ADMIN**, scoped to its granted worlds;
   only `users.manage` is ADMIN-only. See "Roles & per-world access".
 
-### Full audit, 2026-09-28
+### What has already been closed
 
-A 22-agent audit covered every feature and route: **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)**.
-185 findings, each adversarially reviewed. Read its §5 (refuted/downgraded) before
-acting on anything in it — **9 of 13 criticals were downgraded by their own
-verifier**, several findings are simply wrong, and two prescribe fixes that don't
-work. The corrections it produced are already applied throughout this file.
+**[`docs/CLOSED.md`](docs/CLOSED.md)** — the 2026-09-28 audit (185 reviewed findings) and every
+"closed on date X" block, moved out of this file on 2026-10-02. It had grown to 284 lines, 30%
+of this file, and was entirely history: every session paid to read the record of finished work.
+Read it before reporting a defect, because the odds are good it is in there with the
+measurement that closed it. **Two conclusions from the audit still outrank its individual
+findings**, so they stay here:
 
-Two conclusions outrank the individual findings. **The recently-rewritten core is
-good — don't spend time there**; the control lock, reachability states, staged
-`restartGame`, scoped `patchServiceEnv` and `gameGate` all held up, and several
-findings blaming them were refuted by forensics. And **the recurring defect class is
-"reports success after doing nothing or the wrong thing"**, not crashes — so when you
-add anything here, make the success path *prove* it succeeded, the way the memory
-card's configured-vs-live comparison does.
+- **The recently-rewritten core is good — don't spend time there.** The control lock, the
+  reachability states, staged `restartGame`, scoped `patchServiceEnv` and `gameGate` all held
+  up, and several findings blaming them were refuted by forensics.
+- **The recurring defect class is "reports success after doing nothing or the wrong thing"**,
+  not crashes. So when you add anything here, make the success path *prove* it succeeded, the
+  way the memory card's configured-vs-live comparison does.
 
-Outstanding across the project:
-
-**Fixed and deployed 2026-09-28** (kept here only so nobody re-reports them): the MC
-backup shell injection; the public exposure of ports 3000/8080/8081; `install-modpack`
-clobbering compose; restores that never stopped the server; the missing `mem_limit`s
-and log rotation; the Minecraft version mismatch (**Minecraft now boots — verified,
-`Done (1.661s)!`**); `/api/settings` starting a stopped world outside the lock; the
-file-browser GETs exposing `rcon.password`; and the zombie-process leak. Details and
-the per-finding corrections are in
-[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
-
-Still open — and the list is now short enough to state precisely.
-
-**Closed 2026-09-29/30, listed only so nobody re-reports them:** PZ's five-minute
-SIGKILL stop (now ~12 s, exit 0, via RCON `quit`); the app writing `docker-compose.yml`
-(now `.env`, gitignored, survives `git checkout -f` — compose hashes verified identical
-on deploy); no test suite (`npm test`, 1151 tests); no co-residency detection; backups
-having no retention/pruning/checksums/download/schedule; Minecraft's in-game whitelist
-and ops writing `uuid: ""`; the 7DTD `TelnetPassword` (rotated and telnet control
-re-verified end to end); the 224 dead `ModpackMod` rows (re-imported). Details in
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) and
-[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
-
-**Closed 2026-10-01 — the settings revision.** Every settings page now shows **configured
-next to live**: the game is asked what it believes (`showoptions` over RCON for PZ,
-`getgamepref` over telnet for 7DTD, `difficulty`+`list` over RCON for Minecraft) and the
-answer is compared with the file, with "not reported" as a third verdict so an unanswered
-question never renders as a disagreement. Full architecture, coverage numbers and the write
-discipline: **[`docs/SETTINGS.md`](docs/SETTINGS.md)**. Also closed: the PZ sandbox options
-are editable from the dashboard and the writer is **verified against the live 74 KB /
-335-option file** (new inode, hard-linked `.bak`, a real value round-tripped and the file
-returned to its exact starting md5); the `server.properties` help layer; the 7DTD
-`ServerMaxPlayerCount` silent clamp; the XML entity-doubling round trip; and the console
-route calling a busy-but-running server "powered off" (see `src/lib/rcon-failure.ts` —
-`ETIMEDOUT` as a socket code and the bare message `"timeout"` mean opposite things).
-
-**Closed 2026-10-02 — a modpack apply is reversible for the mod set.** `install-modpack`
-tarred the world and then deleted every installed jar, so its "Rollback point" preserved the
-one directory the apply never touches; the mods directory was archived nowhere. It now
-archives `mods` too, **and the restore puts it back** — adding one without the other would
-have reported success while discarding the mods, since the restore renamed only `world` into
-place and deleted the staging dir. Routine backups stay world-only.
-
-**And the inventory goes with the jars**, because the files alone are not a restore: `removeMod`
-deletes each `InstalledMod` row with its file, and a filename carries no Modrinth project id, so
-the apply records the rows **in the archive's manifest before it deletes anything** and the
-restore writes them back. Without that half the jars came back and the Mods page still claimed
-nothing was installed — "reversible for the mod set" was true of the bytes and false of the app's
-record of them, which is the quiet version of the same defect.
-
-**The apply does not prune.** `sealArchive` runs retention by default, which is right for a
-scheduled backup and wrong for an archive taken as a side effect of a destructive operation —
-wired in without the opt-out, pressing Apply deleted other people's restore points. It passes
-`prune: false`; a test fails if that is removed.
-
-Details, and the properties not to break: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 
 Genuinely open:
 

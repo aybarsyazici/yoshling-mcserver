@@ -205,10 +205,18 @@ own response instead.
 
 # The test suite — added 2026-09-30
 
-`npm test` → **1151 tests, ~2.11 s, no Docker, no network, no running server.** (This said 199 and
-the section below said 549 — one file holding two different counts, which is how a number
-stops being read.) That last
-constraint is the point: a suite that needs the box up is a suite nobody runs on a laptop,
+`npm test` → **1502 tests, ~12.4 s, no Docker, no network, no running server.** (This said 199
+and the section below said 549 — one file holding two different counts, which is how a number
+stops being read.)
+
+**The runtime went from ~2.1 s to ~12.4 s on 2026-10-02**, and that is a deliberate trade worth
+knowing about: the mod-inventory and backup-archive suites create real files and run real `tar`
+in temp directories, because the bugs they exist to catch are differences between what the
+database says and what the filesystem holds. A faked `readdir` is a second place to write down
+the answer being tested. 12 seconds is still inside "run it before you ship"; if it reaches a
+minute, split the filesystem suites out rather than faking them.
+
+That last constraint is the point: a suite that needs the box up is a suite nobody runs on a laptop,
 and every fix in this repo had until now been verified by hand against production exactly
 once and then never again.
 
@@ -275,7 +283,7 @@ instead — the sentence no longer depends on each route author choosing `done` 
 
 # Closing the last open items — 2026-09-30
 
-`npm test` is now **1151 tests, ~2.11 s**, still with no Docker, network or server.
+`npm test` is now **1502 tests, ~12.42 s**, still with no Docker, network or server.
 
 ## `game-manager.ts` is testable, and the seam is the point
 
