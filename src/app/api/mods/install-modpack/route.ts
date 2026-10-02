@@ -428,6 +428,11 @@ async function applyModpack(
   const filename = `auto-before-modpack-${stamp}.tar.gz`;
   const archive = path.join(BACKUP_DIR, filename);
   const members = await archiveMembersPresent(MC_DIR);
+  // Read **before** the archive is written, not before the delete loop where it used to be:
+  // the manifest has to carry the inventory, and by the time the loop runs the archive is
+  // already sealed. `removeMod` deletes each row with its file, so this is the only moment
+  // the provenance exists to be recorded.
+  const installedMods = await db.installedMod.findMany();
 
   // The probe runs before the step so the label can name what is actually about to be
   // archived. It said "Backing the world up first" while tarring both, which is the size of
@@ -467,6 +472,12 @@ async function applyModpack(
       // `sealArchive` settles the step above with the size read back off disk, so "we took
       // one" is still evidence rather than an assumption.
       const sealed = await sealArchive(op, {
+        // **No retention from inside an apply.** `sealArchive` prunes by default, which is
+        // right for a scheduled backup and wrong here: this archive is a side effect of a
+        // destructive operation, and pruning from inside it means pressing Apply deletes
+        // somebody else's restore point. The safety net must not take other safety nets
+        // with it. See `sealArchive`'s `prune` option.
+        prune: false,
         game: "minecraft",
         target: archive,
         filename,
@@ -475,6 +486,24 @@ async function applyModpack(
           // Recorded so the listing can say which archives a restore would bring the jars
           // back from — `GET /api/server/backups` reads this, it does not open the tar.
           members,
+          // **The inventory, captured before anything is deleted.** `removeMod` drops the
+          // `InstalledMod` row along with the file, and a filename cannot be mapped back to a
+          // Modrinth project, so without this a rollback restores the jars and leaves the
+          // Mods page disagreeing with the directory. Only written when `mods` is in the
+          // archive, so routine world-only backups say nothing about mods.
+          ...(members.includes("mods") && installedMods.length > 0
+            ? {
+                installedMods: installedMods.map((m: (typeof installedMods)[number]) => ({
+                  modrinthId: m.modrinthId,
+                  slug: m.slug,
+                  name: m.name,
+                  version: m.version,
+                  fileName: m.fileName,
+                  mcVersion: m.mcVersion,
+                  loader: m.loader,
+                })),
+              }
+            : {}),
           ...(actorName ? { startedBy: actorName } : {}),
           // No `flushed`. This route does not ask Minecraft to save first, and
           // `BaseManifest` documents `false` as the specific claim "the server was stopped,
@@ -524,7 +553,6 @@ async function applyModpack(
 
   // Remove all currently installed mods. A jar that survives this loads alongside
   // the new pack, so a failed removal has to be said out loud.
-  const installedMods = await db.installedMod.findMany();
   op.step("Removing the current mods");
   let removed = 0;
   for (const mod of installedMods) {

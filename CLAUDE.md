@@ -788,8 +788,21 @@ tarred the world and then deleted every installed jar, so its "Rollback point" p
 one directory the apply never touches; the mods directory was archived nowhere. It now
 archives `mods` too, **and the restore puts it back** — adding one without the other would
 have reported success while discarding the mods, since the restore renamed only `world` into
-place and deleted the staging dir. Routine backups stay world-only. Details, and the four
-properties not to break: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+place and deleted the staging dir. Routine backups stay world-only.
+
+**And the inventory goes with the jars**, because the files alone are not a restore: `removeMod`
+deletes each `InstalledMod` row with its file, and a filename carries no Modrinth project id, so
+the apply records the rows **in the archive's manifest before it deletes anything** and the
+restore writes them back. Without that half the jars came back and the Mods page still claimed
+nothing was installed — "reversible for the mod set" was true of the bytes and false of the app's
+record of them, which is the quiet version of the same defect.
+
+**The apply does not prune.** `sealArchive` runs retention by default, which is right for a
+scheduled backup and wrong for an archive taken as a side effect of a destructive operation —
+wired in without the opt-out, pressing Apply deleted other people's restore points. It passes
+`prune: false`; a test fails if that is removed.
+
+Details, and the properties not to break: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 
 Genuinely open:
 

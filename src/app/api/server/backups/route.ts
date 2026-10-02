@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { stat, rm, mkdir } from "fs/promises";
@@ -214,6 +215,15 @@ export async function POST(request: NextRequest) {
       // response all come from this one value, so none of them can claim the jars came
       // back when they did not.
       let replaced = "";
+      let restoredMods = 0;
+      // Read the sidecar before stopping the world: it is where the mod inventory lives, and
+      // a failure to read it must not be discovered halfway through a restore. `null` simply
+      // means "no inventory to put back", which is true of every routine world-only archive.
+      //
+      // `mcManifest`, not `readBackupManifest` — see its docstring: a Minecraft archive has no
+      // in-tar manifest member, so the generic helper would spawn a `tar -xzOf` per archive
+      // hunting for something that has never been there.
+      const manifest = await mcManifest(name).catch(() => null);
 
       // A running server holds the world in memory and writes it back on its next
       // autosave, so restoring underneath it changed nothing that survived — and
@@ -237,6 +247,37 @@ export async function POST(request: NextRequest) {
           op.fact({ label: "Archive", value: name });
           op.fact({ label: "Replaced", value: replaced });
           op.fact(integrityFact(integrity));
+
+          // **Put the inventory back with the jars.** `removeMod` deletes each
+          // `InstalledMod` row along with its file, so restoring only the directory left the
+          // Mods page claiming nothing was installed while the jars sat on disk — the files
+          // were reversible and the app's record of them was not, which is a quieter version
+          // of the same defect the restore was fixed for.
+          //
+          // The rows come out of the manifest because they cannot be reconstructed: a
+          // filename does not carry a Modrinth project id. Only an archive taken by a modpack
+          // apply has them; a routine world-only backup has nothing to say about mods and is
+          // left alone.
+          if (result.replaced.includes("mods") && manifest?.installedMods?.length) {
+            const rows = manifest.installedMods;
+            try {
+              await db.installedMod.deleteMany();
+              await db.installedMod.createMany({
+                data: rows.map((m) => ({ ...m, installedBy: session.user.id })),
+              });
+              restoredMods = rows.length;
+              op.fact({ label: "Mod inventory", value: `${rows.length} restored` });
+            } catch (e) {
+              // Not fatal: the jars are already back, which is the part that decides whether
+              // the server boots. Say so rather than failing a restore that worked, and name
+              // the recovery — the next reconcile on the Mods page lists them as untracked.
+              op.fact({
+                label: "Mod inventory",
+                value: `not restored — ${(e as Error).message}`,
+                verdict: "bad",
+              });
+            }
+          }
         },
         {
           kind: "backup.restore",
@@ -256,7 +297,7 @@ export async function POST(request: NextRequest) {
         // hours and "did that restore put the mods back" is a question asked later.
         { action: "backup_restore", details: { name, restartedAfter: restarted, replaced } }
       );
-      return NextResponse.json({ success: true, restarted, checksum: integrity.state, replaced });
+      return NextResponse.json({ success: true, restarted, checksum: integrity.state, replaced, restoredMods });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
       // A restore that started and did not finish is the single most important thing in

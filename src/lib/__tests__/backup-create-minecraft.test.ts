@@ -170,3 +170,34 @@ describe("a routine Minecraft backup", () => {
     expect(await readdir(DIRS.backups).catch(() => [])).toEqual([]);
   });
 });
+
+/**
+ * **A destructive operation must not prune the safety nets it is not responsible for.**
+ *
+ * `sealArchive` runs `applyRetention` by default, which is correct for a scheduled backup.
+ * Increment 3 routed the modpack apply's pre-apply archive through it to gain a manifest and a
+ * journal entry — and silently gained the pruning too, so pressing **Apply** would delete other
+ * archives beyond `keep`. Its own brief said not to change retention behaviour; a reviewer
+ * caught it. The archive is a side effect of a different operation and has no business
+ * enforcing a retention policy.
+ */
+describe("sealArchive's prune option", () => {
+  it("is opt-out, and the modpack apply opts out", async () => {
+    const src = await readFile(
+      new URL("../../app/api/mods/install-modpack/route.ts", import.meta.url),
+      "utf-8"
+    );
+    // The call, and the opt-out inside it — not merely both strings present somewhere.
+    const call = src.slice(src.indexOf("sealArchive(op, {"));
+    const body = call.slice(0, call.indexOf("});"));
+    expect(body).toContain("prune: false");
+  });
+
+  it("still prunes by default, so routine backups are unchanged", async () => {
+    const src = await readFile(new URL("../backup-create.ts", import.meta.url), "utf-8");
+    // `opts.prune === false` and nothing looser: `!opts.prune` would turn an omitted option
+    // into no-pruning and quietly stop every scheduled backup from retaining.
+    expect(src).toContain("opts.prune === false");
+    expect(src).not.toMatch(/if \(!opts\.prune\)/);
+  });
+});

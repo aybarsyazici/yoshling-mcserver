@@ -65,6 +65,28 @@ export interface BaseManifest {
   startedBy?: string;
   automatic?: boolean;
   members?: string[];
+  /**
+   * The `InstalledMod` rows as they were when the archive was written, for an archive whose
+   * members include `mods`.
+   *
+   * The jars alone are not a restore. `removeMod` deletes the row with the file, so a
+   * rollback that only put the files back left the Mods page and the mods directory
+   * disagreeing — "a modpack apply is reversible for the mod set" was true of the bytes and
+   * false of the app's record of them. A filename cannot be mapped back to a Modrinth project,
+   * so the provenance has to be captured *before* the delete rather than reconstructed after.
+   *
+   * Only written by the archive a modpack apply takes before destroying the mod set. Absent on
+   * routine backups, which are world-only and have nothing to say about mods.
+   */
+  installedMods?: {
+    modrinthId: string;
+    slug: string;
+    name: string;
+    version: string;
+    fileName: string;
+    mcVersion: string;
+    loader: string;
+  }[];
 }
 
 export interface ArchiveFile {

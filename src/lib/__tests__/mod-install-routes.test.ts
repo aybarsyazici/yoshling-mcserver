@@ -92,7 +92,16 @@ let config: { mcVersion: string; modLoader: string } | null = {
   modLoader: "fabric",
 };
 /** `InstalledMod` rows the apply is about to delete. */
-let installedRows: { id: string; name: string; fileName: string }[] = [];
+let installedRows: {
+  id: string;
+  name: string;
+  fileName: string;
+  modrinthId?: string;
+  slug?: string;
+  version?: string;
+  mcVersion?: string;
+  loader?: string;
+}[] = [];
 /** Ids whose `removeMod` throws — a jar that survives the wipe has to be said out loud. */
 let removeFailures = new Set<string>();
 /** What `/api/mods/install` finds when it checks for a duplicate. */
@@ -974,6 +983,18 @@ describe("the pre-install backup", () => {
   });
 
   it("records the members in the manifest, so the listing can say a restore brings the jars back", async () => {
+    installedRows = [
+      {
+        id: "m1",
+        name: "Old",
+        fileName: "old.jar",
+        modrinthId: "old-id",
+        slug: "old",
+        version: "1.0.0",
+        mcVersion: "26.1.2",
+        loader: "fabric",
+      },
+    ];
     specs = [LITHIUM];
     await apply();
     // One sidecar, for the archive just written. `GET /api/server/backups` reads `members`
@@ -986,6 +1007,22 @@ describe("the pre-install backup", () => {
     );
     const manifest = JSON.parse(sidecarWrites[0].json);
     expect(manifest.members).toEqual(["world", "mods"]);
+    // **The inventory, captured before the delete loop runs.** `removeMod` drops each
+    // `InstalledMod` row with its file and a filename carries no Modrinth project id, so this
+    // is the only moment the provenance exists to be recorded — and without it the restore
+    // puts the jars back and leaves the Mods page claiming nothing is installed. A mutation
+    // that drops this block from the route left the whole suite green until this assertion.
+    expect(manifest.installedMods).toEqual([
+      {
+        modrinthId: "old-id",
+        slug: "old",
+        name: "Old",
+        version: "1.0.0",
+        fileName: "old.jar",
+        mcVersion: "26.1.2",
+        loader: "fabric",
+      },
+    ]);
     // Written raw this archive had no checksum, so the listing marked it
     // `verifiable: false` and a restore could not refuse a corrupt one. The size goes with
     // it, which is what catches a truncation without reading a byte.
@@ -1030,17 +1067,22 @@ describe("the pre-install backup", () => {
   });
 
   /**
-   * Written raw, this archive sat outside the retention policy while `listArchives`
-   * counted it anyway — so it consumed a `keep` slot that protects a real restore point
-   * and was itself a prune candidate, and nothing ever deleted it. Going through
-   * `sealArchive` puts it inside the policy.
+   * **The apply takes an archive; it does not enforce a retention policy.**
    *
-   * Seven archives already there plus the one this run writes is eight. At `keep: 5` the
-   * newest is never a candidate and the oldest is exempt from the count rule, so the two
-   * the policy gives up are the third- and second-oldest — and the archive just written is
-   * safe twice over: it is the newest, and it is named in `protect`.
+   * This test asserted the opposite — that the apply prunes and that its own archive survives
+   * the pass — because `sealArchive` runs `applyRetention` by default and the increment routed
+   * the pre-apply archive through it to gain a manifest and a journal entry. It gained the
+   * pruning too, so pressing **Apply** deleted other archives beyond `keep`: the operation
+   * whose job is to be the safety net taking other safety nets with it, and the one thing the
+   * increment's own brief said not to change. A reviewer caught it; `sealArchive` now takes
+   * `prune: false` and the route passes it.
+   *
+   * What the archive still gains from `sealArchive` is the part that was actually wanted: a
+   * manifest sidecar, a journal entry, a size read back off disk, and a checksum — so it is
+   * `verifiable` and visible rather than an untracked `*.tar.gz` that `listArchives` counted
+   * anyway.
    */
-  it("runs the retention policy, and the archive it just wrote survives it", async () => {
+  it("writes a sealed archive without pruning anybody else's", async () => {
     specs = [LITHIUM];
     existingArchives = Array.from({ length: 7 }, (_, i) => ({
       name: `world-2026-09-0${i + 1}T00-00-00.tar.gz`,
@@ -1048,19 +1090,11 @@ describe("the pre-install backup", () => {
       mtimeMs: Date.UTC(2026, 8, i + 1),
     }));
     await apply();
-    expect(fact("Retention")?.value).toMatch(/^keep the 5 newest — 6 kept, 2 deleted$/);
-    // Oldest first, which is `selectForPruning`'s contract: if the loop dies partway the
-    // survivors are the newest. Each deletion takes its sidecar with it.
-    expect(rmRuns).toEqual([
-      "/app/data/backups/world-2026-09-02T00-00-00.tar.gz",
-      "/app/data/backups/world-2026-09-02T00-00-00.tar.gz.manifest.json",
-      "/app/data/backups/world-2026-09-03T00-00-00.tar.gz",
-      "/app/data/backups/world-2026-09-03T00-00-00.tar.gz.manifest.json",
-    ]);
-    expect(rmRuns.some((p) => p.includes("auto-before-modpack"))).toBe(false);
-    // And the 2026-09-01 archive, the only restore point older than a week here, is not
-    // what the count rule reaches for.
-    expect(rmRuns.some((p) => p.includes("2026-09-01"))).toBe(false);
+
+    // Seven archives were there and seven are there afterwards. Nothing was deleted at all —
+    // not the oldest, not the archive this run wrote, nothing.
+    expect(rmRuns.filter((p) => p.includes("/app/data/backups/"))).toEqual([]);
+    expect(fact("Retention")).toBeUndefined();
   });
 
   it("is fatal: a failed tar leaves the mods directory alone and deletes the partial", async () => {

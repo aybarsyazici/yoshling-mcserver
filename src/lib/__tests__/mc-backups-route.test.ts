@@ -45,10 +45,28 @@ vi.mock("@/lib/auth", () => ({
 
 // `createBackup` is `backup-create`'s own concern and shells out through `game-manager`;
 // `MC_DIR` is the only other thing this route reads from it.
+let modRowsCleared = 0;
+let modRowsWritten: Record<string, unknown>[] = [];
+
 const createBackup = vi.fn(async () => {
   throw new Error("create is not what this suite is about");
 });
 vi.mock("@/lib/backup-create", () => ({ MC_DIR: DIRS.mc, createBackup }));
+
+/**
+ * The inventory table, recorded rather than stubbed away. The restore has to put
+ * `InstalledMod` rows back alongside the jars: `removeMod` deletes each row with its file, so
+ * a rollback that only restored the directory left the Mods page claiming nothing was
+ * installed while the jars sat on disk. These two spies are how that is asserted.
+ */
+vi.mock("@/lib/db", () => ({
+  db: {
+    installedMod: {
+      deleteMany: vi.fn(async () => { modRowsCleared += 1; }),
+      createMany: vi.fn(async ({ data }: { data: unknown[] }) => { modRowsWritten.push(...data as never[]); }),
+    },
+  },
+}));
 
 vi.mock("@/lib/backup-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/backup-store")>();
@@ -132,6 +150,8 @@ beforeEach(async () => {
   games = "minecraft,7dtd,zomboid";
   steps = [];
   settled = [];
+  modRowsCleared = 0;
+  modRowsWritten = [];
   opFacts = [];
   restarted = false;
   journalled.length = 0;
@@ -268,6 +288,60 @@ describe("POST restore", () => {
    * extracted. Asserted on the files, because every status code and every toast is identical
    * either way.
    */
+  /**
+   * **The jars are not the whole restore.** `removeMod` deletes each `InstalledMod` row along
+   * with its file, so a rollback that put only the directory back left the Mods page claiming
+   * nothing was installed while the jars sat on disk — the files were reversible and the app's
+   * record of them was not, and CLAUDE.md said "reversible for the mod set" on the strength of
+   * the files alone.
+   *
+   * The rows come from the manifest because they cannot be reconstructed: a filename carries
+   * no Modrinth project id. So the apply captures them *before* it deletes anything, and this
+   * is the other end of that.
+   */
+  it("rebuilds the mod inventory from the manifest, not just the jars", async () => {
+    await put("world/level.dat", "saved world");
+    await put("mods/fabric-api.jar", "fabric v1");
+    await archive("auto-before-modpack-2026-10-02T01-00-00.tar.gz", ["world", "mods"], {
+      installedMods: [
+        {
+          modrinthId: "P7dR8mSH",
+          slug: "fabric-api",
+          name: "Fabric API",
+          version: "0.149.1+26.1.2",
+          fileName: "fabric-api.jar",
+          mcVersion: "26.1",
+          loader: "fabric",
+        },
+      ],
+    });
+
+    const { status, body } = await restore("auto-before-modpack-2026-10-02T01-00-00.tar.gz");
+
+    expect(status).toBe(200);
+    // Replaced wholesale, not merged: the inventory describes the archive's directory, and a
+    // merge would leave rows for jars the restore just deleted.
+    expect(modRowsCleared).toBe(1);
+    expect(modRowsWritten).toHaveLength(1);
+    expect(modRowsWritten[0]).toMatchObject({ slug: "fabric-api", fileName: "fabric-api.jar" });
+    // Attributed to whoever ran the restore, so the row is not orphaned.
+    expect(modRowsWritten[0].installedBy).toBeTruthy();
+    expect(body.restoredMods).toBe(1);
+  });
+
+  /** A routine world-only archive says nothing about mods and must not touch the table. */
+  it("leaves the inventory alone when the archive has no mods", async () => {
+    await put("world/level.dat", "saved world");
+    await archive("world-2026-10-02T02-00-00.tar.gz", ["world"]);
+
+    const { status, body } = await restore("world-2026-10-02T02-00-00.tar.gz");
+
+    expect(status).toBe(200);
+    expect(modRowsCleared).toBe(0);
+    expect(modRowsWritten).toEqual([]);
+    expect(body.restoredMods).toBe(0);
+  });
+
   it("puts mods/ back from a two-member archive and says so", async () => {
     await put("world/level.dat", "saved world");
     await put("mods/fabric-api.jar", "fabric v1");

@@ -292,6 +292,19 @@ export async function sealArchive(
     target: string;
     filename: string;
     manifest: BaseManifest;
+    /**
+     * Whether to run retention afterwards. Default **true**, which is what every routine
+     * backup wants: the point of a scheduled create is to keep the newest `keep` and drop
+     * the rest.
+     *
+     * `false` exists for the archive a **modpack apply** takes before it deletes the mods
+     * directory. That archive is a side effect of a different operation, and pruning from
+     * inside it means pressing Apply silently deletes somebody's restore point — an
+     * operation whose job is to be the safety net taking other safety nets with it. It was
+     * wired through here with retention on, which is exactly the behaviour the increment
+     * that added it was told not to change.
+     */
+    prune?: boolean;
   }
 ): Promise<{
   size: number | null;
@@ -340,7 +353,10 @@ export async function sealArchive(
   // The archive that was just written is named explicitly even though it is also the
   // newest (and the newest is never a prune candidate). Two guards for the one file that
   // must survive this is cheap, and it documents the intent at the call site.
-  const prune = await applyRetention(op, opts.game, { protect: [opts.filename] });
+  const prune =
+    opts.prune === false
+      ? { deleted: [] as string[] }
+      : await applyRetention(op, opts.game, { protect: [opts.filename] });
 
   const facts: OperationFact[] = [];
   if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
