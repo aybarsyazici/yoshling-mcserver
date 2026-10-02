@@ -290,6 +290,12 @@ export function InstalledMods() {
           <Button
             variant={can.modsInstall ? "default" : "outline"}
             onClick={() => setAddOpen(true)}
+            // The game's own accent, the way `game-backups.tsx` does it for `Create backup`.
+            // CLAUDE.md puts the per-game accent on `--tint`, and this page's primary action
+            // is the one place on it that should read as Minecraft's rather than the app's
+            // default mauve. Only on the writable variant: an outline `Browse mods` is not the
+            // page's main action and tinting it would claim an emphasis it does not have.
+            style={can.modsInstall ? { background: TINT, color: "var(--background)" } : undefined}
           >
             {can.modsInstall ? "Add a mod" : "Browse mods"}
           </Button>
@@ -325,7 +331,7 @@ export function InstalledMods() {
         <Band
           tone="bad"
           kind="missing"
-          heading={`${pluralise(missing.length, "mod")} has no jar on disk`}
+          heading={`${pluralise(missing.length, "mod")} ${missing.length === 1 ? "has" : "have"} no jar on disk`}
         >
           <Names names={missing} />
           <p className="mt-2">
@@ -382,7 +388,7 @@ export function InstalledMods() {
             Minecraft creates it on first start, and installing a mod creates it too.
             {missing.length === 0
               ? " Nothing is wrong."
-              : ` ${pluralise(missing.length, "mod")} on this list expects it, which is why ` +
+              : ` ${pluralise(missing.length, "mod")} on this list ${missing.length === 1 ? "expects" : "expect"} it, which is why ` +
                 `${missing.length === 1 ? "it is" : "they are"} shown as missing above.`}
           </p>
         </Band>

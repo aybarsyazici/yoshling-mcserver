@@ -309,7 +309,7 @@ export function Modpacks() {
             whose Create button answered a bare 403. Hidden rather than disabled: there is
             nothing to read in a disabled Create, and the Install/Delete controls below take
             the same approach. */}
-        {can.modsInstall && <Button onClick={() => setShowCreate(true)}>Create Modpack</Button>}
+        {can.modsInstall && <Button onClick={() => setShowCreate(true)}>Create a set</Button>}
       </div>
 
       <div className="rounded-lg border border-chart-5/30 bg-chart-5/5 p-4">
@@ -474,7 +474,7 @@ export function Modpacks() {
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Modpack</DialogTitle>
+            <DialogTitle>Create a set</DialogTitle>
             <DialogDescription>
               Group mods together so you can install/export them as a set.
             </DialogDescription>

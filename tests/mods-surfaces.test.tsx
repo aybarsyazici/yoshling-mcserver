@@ -282,7 +282,7 @@ const SURFACES: Surface[] = [
     where: "Modpacks › My Modpacks",
     render: () => void render(<Modpacks />),
     ready: "Big Pack",
-    install: ["Create Modpack", "Install to Server"],
+    install: ["Create a set", "Install to Server"],
     // Edit opens one thing: a list with a Remove beside each mod.
     remove: ["Edit", "Delete"],
     always: ["Export"],
