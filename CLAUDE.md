@@ -815,6 +815,26 @@ findings**, so they stay here:
 
 Genuinely open:
 
+- **Applying a pack that needs a different Minecraft version is not built, and it is wanted.**
+  The owner's requirement, and the design decision, are recorded in
+  [`docs/MINECRAFT.md`](docs/MINECRAFT.md#wanted-apply-a-pack-that-needs-a-different-minecraft-version--not-built).
+  The decision is **warn and let them confirm** — not "use a separate world", which was offered
+  and declined. The hazard the warning carries: **Minecraft worlds do not downgrade**, and the
+  two large saved packs need 1.21.1 / 1.21.11 against a 26.1.2 server, so switching down will
+  likely leave the current world unopenable. Most of the parts exist already — `isDowngrade`
+  and its warning sentence, `/api/settings`'s `needsConfirm` handshake, and
+  `install-modpack`'s `needsVersionChange` field, which **nothing reads yet**. Pair it with
+  pinning, below.
+- **Pack imports are unpinned** — 566 of 569 `ModpackMod` rows have no `versionId`, so applying
+  a saved pack installs the newest build of each mod rather than the pack, and a re-import
+  duplicates the row instead of updating it (production has 9 rows for 6 packs).
+  `dependencies[].version_id` is already in the Modrinth response and discarded at import;
+  `/v2/versions?ids=[…]` returned all 168 of COBBLEVERSE's pins in 424 ms. One increment.
+- **The modpack apply still runs with the world possibly up** — it deletes and writes jars under
+  a live JVM and then tells the user to restart. It should be wrapped in `withGameStopped(…,
+  {restartOnFailure: false})` and claim `power` alongside `files:minecraft`, and call
+  `refuseIfPreempted` the way `backup-create.ts` does nine times and this does zero.
+
 - **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11**, so on a
   26.1.2 server neither can install no matter how often it is re-imported. The apply
   refuses with an honest version mismatch. Not a bug — a fact about those packs. Since

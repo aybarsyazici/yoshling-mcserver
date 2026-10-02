@@ -968,3 +968,76 @@ Two details worth keeping:
   is the only durable record that somebody was told the world and the mods disagree and chose
   to go ahead — which is the first thing anyone debugging a world that no longer boots will
   want to know.
+
+## Wanted: apply a pack that needs a different Minecraft version — NOT BUILT
+
+**Owner's requirement, 2026-10-02, in their words:** *"I want to be able to run any minecraft
+version and then just install mods relevant to that version. But also have the
+capability/possibility/feature that if a modpack requires a certain minecraft version then the
+ability to switch to it and install the modpack."*
+
+The first half is done — the Modrinth search is bound to the server's own version and loader, so
+Browse only offers mods that fit what is running. The second half is **not built**, and this
+section is here so whoever picks it up does not redesign it from scratch: most of the parts
+already exist and one decision has already been made.
+
+### The decision, which is the owner's and is already made
+
+**Warn, and let them confirm and proceed.** Not "use a separate world", which was the
+alternative offered and declined. So the flow must state the consequence plainly, require an
+explicit confirmation, and then do exactly what was asked — no silent substitution of a safer
+behaviour, and no refusal dressed up as a warning.
+
+### The hazard the warning has to carry
+
+**Minecraft worlds do not downgrade.** The live server runs **26.1.2**; `COBBLEVERSE` publishes
+only **1.21.1** and `Hoplite` only up to **1.21.11**. Switching down to play one of them will
+very likely leave the existing world unopenable — that is Minecraft's save format, not anything
+this app does, and no amount of care in the apply changes it.
+
+Note what that means for the increment that pins pack versions: pinning makes a 166-mod pack
+install *the pack*, but the only two large packs saved here still cannot run on 26.1.2. Pinning
+is worth doing on its own merits; this flow is what makes those two packs reachable at all.
+
+### What already exists — do not rebuild these
+
+- **`isDowngrade(target, current)`** in `mc-version-guard.ts`, and the warning text is already
+  written and already correct: *"The world on disk was last opened by Minecraft X. Y is a
+  different version — and an older one, which cannot open a newer world at all."* For an upgrade
+  it says the save format changes and older versions can never open it again. Reuse this
+  sentence; do not write a second one.
+- **The warn-and-confirm handshake**, in `/api/settings`: mismatches with `confirm !== true`
+  answer `400 { needsConfirm: true, mismatches }`, and a caller that passes `confirm: true`
+  proceeds *and gets the override recorded in the operation title* (`(mismatch confirmed)`) —
+  deliberately, because the ledger is the only durable record that somebody was told the world
+  and the mods disagree and chose to go ahead. That is exactly the shape the owner asked for.
+- **`/api/mods/install-modpack` already refuses and already hands up the structured answer**:
+  `needsVersionChange: { mcVersion, modLoader }`, with a message naming both versions. Its long
+  comment explains why the apply must *not* change the version itself — it once regenerated
+  `docker-compose.yml` from a two-service template, deleting the `sevendtd` and `zomboid`
+  services and the volumes the web container mounts. **Switching belongs to `applyServiceEnv`,
+  which patches the scoped block and recreates the container.** Keep it that way.
+- **`applyServiceEnv`** does the patch + graceful stop + `create --force-recreate` + restart-only-
+  if-it-was-running, under the control lock.
+
+### So the work is a flow, not a mechanism
+
+`needsVersionChange` is **read by nothing** today (only by a test) — the same unread-structured-
+field shape the client-only 409 had before it got a dialog. The increment is:
+
+1. The Change pack sheet reads `needsVersionChange` instead of showing a dead end, and renders
+   the comparison it already has (*"this pack needs 1.21.1, you run 26.1.2"*) as an offer.
+2. The confirmation names the world consequence from `versionChangeMismatches`, and **says a
+   backup is taken first** — the pre-apply archive now holds `world` *and* `mods`, so the
+   rollback for this is already real. Take it before the version change, not after.
+3. On confirm: `PUT /api/settings { mcVersion, modLoader, confirm: true }`, then the apply.
+   Two operations, so the ledger shows both; do not fold them into one that cannot say which
+   half it is in — that lesson is `restartGame`'s.
+4. The world consequence is the part to get right in copy. "This may make your current world
+   unopenable" is the honest sentence, and it belongs next to the confirm button, not in a
+   paragraph above it.
+
+**Pair it with the pinning increment** (`dependencies[].version_id`, discarded at import today,
+566 of 569 rows unpinned). Switching the server to 1.21.1 and then installing the newest build
+of each of a pack's 166 mods is not installing the pack, and the version switch is the thing
+that makes the mismatch *not* catch it.
