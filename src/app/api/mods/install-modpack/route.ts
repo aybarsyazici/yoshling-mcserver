@@ -17,12 +17,16 @@ import {
 import { modsDirRefusal, planModpackInstall, type PackMod } from "@/lib/mod-plan";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdir, rm, stat } from "fs/promises";
+import { mkdir, rm } from "fs/promises";
 import path from "path";
 import { RUNTIME } from "@/lib/game-manager";
 import { formatBytes } from "@/lib/format";
 import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { sealArchive, type McManifest } from "@/lib/backup-create";
+import { recordBackupEvent } from "@/lib/backup-log";
+import { removeManifestSidecar } from "@/lib/backup-archive";
+import { archiveMembersPresent, describeMembers } from "@/lib/mc-archive";
 
 /**
  * `execFile` with an argv array, never `exec` with a template string.
@@ -44,11 +48,13 @@ const execFileAsync = promisify(execFile);
 const BACKUP_DIR = "/app/data/backups";
 
 /**
- * Was 60_000 here while the sibling `/api/server/backups` had already raised the very
- * same `tar -czf … -C MC_DIR world` to 300_000, with the comment "was 60s, which is a
+ * Was 60_000 here while the sibling backup path had already raised its near-identical
+ * `tar -czf … -C MC_DIR world` to 300_000, with the comment "was 60s, which is a
  * coin-toss for a 170 MB world on a busy box". So the one backup taken immediately
  * before every jar on the server is deleted had the short timeout, and the one you take
- * by hand had the long one.
+ * by hand had the long one. (Near-identical rather than identical since 2026-10-02: this
+ * archive also carries `mods`, which is small next to a world and does not change the
+ * argument.)
  */
 const TAR_TIMEOUT_MS = 300_000;
 
@@ -132,6 +138,11 @@ export async function POST(request: NextRequest) {
           modpack,
           serverConfig,
           userId: session.user.id,
+          // The pre-apply archive's journal line and manifest attribution. `?? ""` matches
+          // what every backup route builds its actor from; `recordBackupEvent` collapses an
+          // empty name to `null` rather than journalling `actor: ""`, which the backups page
+          // renders as "the scheduler".
+          actorName: session.user.name ?? "",
           errors,
           warnings,
           skipped,
@@ -161,6 +172,7 @@ async function applyModpack(
     modpack,
     serverConfig,
     userId,
+    actorName,
     errors,
     warnings,
     skipped,
@@ -168,6 +180,7 @@ async function applyModpack(
     modpack: { name: string; mods: PackMod[] };
     serverConfig: { mcVersion: string; modLoader: string };
     userId: string;
+    actorName: string;
     errors: string[];
     warnings: string[];
     skipped: SkippedMod[];
@@ -401,13 +414,31 @@ async function applyModpack(
   // legitimate (a fresh install) and stays non-fatal. A tar that was asked to run and
   // did not is fatal, the partial is deleted, and nothing is deleted from the mods
   // directory. `/api/7dtd/reset` already does exactly this and says why.
-  op.step("Backing the world up first");
+  //
+  // **And it archives `mods` as well as `world`, which until 2026-10-02 it did not.** The
+  // archive preserved the one directory this route never touches and nothing of the one it
+  // empties two steps below, while the ledger called it a "Rollback point" — so a modpack
+  // apply was irreversible for the mod set, and `removeMod` deletes the `InstalledMod` row
+  // with the jar, so the names went too. It had not hurt yet only because production has 3
+  // mods totalling 5.8 MB. See `src/lib/mc-archive.ts` for why the restore side of this is
+  // in the same commit: a two-member archive restored through the old route would have
+  // renamed only `world` into place and deleted the rest with the staging dir.
   const MC_DIR = RUNTIME.minecraft.dir;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const archive = path.join(BACKUP_DIR, `auto-before-modpack-${stamp}.tar.gz`);
-  const hasWorld = await stat(path.join(MC_DIR, "world")).then(() => true).catch(() => false);
+  const filename = `auto-before-modpack-${stamp}.tar.gz`;
+  const archive = path.join(BACKUP_DIR, filename);
+  const members = await archiveMembersPresent(MC_DIR);
 
-  if (!hasWorld) {
+  // The probe runs before the step so the label can name what is actually about to be
+  // archived. It said "Backing the world up first" while tarring both, which is the size of
+  // untruth this ledger exists not to tell — and `mods` is the half that matters here.
+  op.step(
+    members.length > 0
+      ? `Backing up ${describeMembers(members)} first`
+      : "Checking what there is to back up"
+  );
+
+  if (members.length === 0) {
     // Settled `done`, NOT `noop`, and that distinction is load-bearing:
     // `concludeOperation` turns any `noop` step into a `partial` outcome, so marking
     // this one would have painted a flawless 166-mod apply amber on every server that
@@ -417,23 +448,63 @@ async function applyModpack(
     //
     // The fact still records it, so the outcome is `ok` rather than `unverified` and a
     // reader can tell "no backup was needed" from "a backup was taken".
-    op.settle("Nothing to back up — there is no world on disk yet");
-    op.fact({ label: "Rollback point", value: "no world on disk yet, so none was needed" });
+    op.settle("Nothing to back up — there is no world or mods directory on disk yet");
+    op.fact({
+      label: "Rollback point",
+      value: "no world or mods directory on disk yet, so none was needed",
+    });
   } else {
     try {
       await mkdir(BACKUP_DIR, { recursive: true });
-      await execFileAsync("tar", ["-czf", archive, "-C", MC_DIR, "world"], {
+      await execFileAsync("tar", ["-czf", archive, "-C", MC_DIR, ...members], {
         timeout: TAR_TIMEOUT_MS,
       });
-      // Read the size back off disk, so "we took one" is evidence rather than an
-      // assumption — the same reason `/api/server/backups` does it.
-      const { size } = await stat(archive);
-      op.settle(`Backed the world up — ${formatBytes(size)}`);
-      op.fact({ label: "Rollback point", value: `${path.basename(archive)} (${formatBytes(size)})` });
+      // Sealed exactly the way `createBackup` seals a real one, rather than left as a raw
+      // `.tar.gz`. Raw, it read back as `verifiable: false` in the listing (no checksum for
+      // a restore to check), never reached the durable journal, and sat outside the
+      // retention policy while `listArchives` counted it anyway — consuming a `keep` slot
+      // that protects a genuine restore point and standing as a prune candidate itself.
+      // `sealArchive` settles the step above with the size read back off disk, so "we took
+      // one" is still evidence rather than an assumption.
+      const sealed = await sealArchive(op, {
+        game: "minecraft",
+        target: archive,
+        filename,
+        manifest: {
+          createdAt: new Date().toISOString(),
+          // Recorded so the listing can say which archives a restore would bring the jars
+          // back from — `GET /api/server/backups` reads this, it does not open the tar.
+          members,
+          ...(actorName ? { startedBy: actorName } : {}),
+          // No `flushed`. This route does not ask Minecraft to save first, and
+          // `BaseManifest` documents `false` as the specific claim "the server was stopped,
+          // so its files were already at rest" — which is not something checked here.
+          // Absent reads as unknown, which is what it is.
+        } satisfies McManifest,
+      });
+      op.fact({
+        label: "Rollback point",
+        value:
+          `${filename}${sealed.size != null ? ` (${formatBytes(sealed.size)})` : ""} — ` +
+          describeMembers(members),
+      });
+      // The journal, not `Activity`: this archive is a side effect of a modpack apply and
+      // the apply writes its own rows. What the journal answers is "where did this file in
+      // /app/data/backups come from", which is the question a prune or a restore raises
+      // long after the operation record has aged out of memory.
+      await recordBackupEvent("minecraft", "create", { userId, name: actorName }, {
+        outcome: "ok",
+        name: filename,
+        sizeBytes: sealed.size ?? undefined,
+        detail: `before applying a modpack — ${describeMembers(members)}`,
+      });
     } catch (e) {
       // Drop the partial FIRST, so nothing can list it as a restore point even if the
-      // response below is never read.
+      // response below is never read. The sidecar goes with it: `sealArchive` may have
+      // written one before a later step threw, and a manifest that outlives its archive is
+      // adopted by the next file to land on the same name.
       await rm(archive, { force: true }).catch(() => {});
+      await removeManifestSidecar(archive);
       const why = (e instanceof Error ? e.message : "unknown error").trim();
       op.reject("The world backup failed — the modpack was not applied");
       return {

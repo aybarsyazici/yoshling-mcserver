@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "path";
 import { serverSideVerdict } from "@/lib/mod-admission";
 import type { ModrinthVersion } from "@/lib/modrinth";
 
@@ -98,8 +99,18 @@ let removeFailures = new Set<string>();
 let existingInstalled: { id: string; name: string } | null = null;
 
 let worldOnDisk = true;
+/**
+ * Whether `MC_DIR/mods` exists. Separate from `worldOnDisk` because the pre-apply archive
+ * takes whichever of the two is there, and the mods directory is the one the apply is
+ * about to empty.
+ */
+let modsOnDisk = true;
 let tarOutcome: "ok" | Error = "ok";
 let archiveBytes = 173_283_913;
+/** `mtime` of the archive the route just wrote, which `sealArchive` reads for `createdAt`. */
+const ARCHIVE_MTIME_MS = Date.UTC(2026, 9, 2, 12, 0, 0);
+/** What `/app/data/backups` already holds, for the retention pass. */
+let existingArchives: { name: string; size: number; mtimeMs: number }[] = [];
 
 /** What a direct download serves. `null` Content-Length = the header is absent. */
 let directLength: number | null = null;
@@ -110,6 +121,7 @@ let directOk = true;
 let removedIds: string[] = [];
 let installedNames: string[] = [];
 let directWrites: { path: string; bytes: number }[] = [];
+let sidecarWrites: { path: string; json: string }[] = [];
 let dbRows: string[] = [];
 let tarRuns: string[][] = [];
 let tarTimeouts: (number | undefined)[] = [];
@@ -202,20 +214,91 @@ const mkdir = vi.fn(async (dir: string) => {
 const rm = vi.fn(async (target: string) => {
   rmRuns.push(String(target));
 });
+/**
+ * `/app/data/backups` as `listArchives` sees it, so the retention pass the pre-apply
+ * archive now runs through is the real one rather than an accidental no-op.
+ */
 const stat = vi.fn(async (target: string) => {
-  // Two different questions reach this one function: "is there a world to back up" and
-  // "how big did the archive come out". Keyed on the path, because the second one is the
-  // read-back that makes "we took a backup" evidence rather than an assumption.
-  if (String(target).endsWith("/world")) {
-    if (!worldOnDisk) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-    return { size: 4096 };
+  const p = String(target);
+  // Three different questions reach this one function, and they are keyed on the path
+  // because two of them are read-backs that turn a claim into evidence:
+  //  - "is there a world / a mods directory to archive" (`archiveMembersPresent`, which
+  //    asks `isDirectory()`),
+  //  - "how big did the archive come out" (`sealArchive`, which also reads `mtime`),
+  //  - "what is in the backups directory" (`listArchives`, which asks `isFile()`).
+  if (p === "/mc/world" || p === "/mc/mods") {
+    const there = p === "/mc/world" ? worldOnDisk : modsOnDisk;
+    if (!there) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    return { size: 4096, mtime: new Date(0), isDirectory: () => true, isFile: () => false };
   }
-  return { size: archiveBytes };
+  const existing = existingArchives.find((a) => p === `/app/data/backups/${a.name}`);
+  if (existing) {
+    return {
+      size: existing.size,
+      mtime: new Date(existing.mtimeMs),
+      isDirectory: () => false,
+      isFile: () => true,
+    };
+  }
+  return {
+    size: archiveBytes,
+    mtime: new Date(ARCHIVE_MTIME_MS),
+    isDirectory: () => false,
+    isFile: () => true,
+  };
 });
-const writeFile = vi.fn(async (target: string, bytes: Buffer) => {
-  directWrites.push({ path: String(target), bytes: bytes.byteLength });
+const readdir = vi.fn(async (dir: string) => {
+  if (String(dir) !== "/app/data/backups") throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  return existingArchives.map((a) => a.name);
 });
-vi.mock("fs/promises", () => ({ mkdir, rm, stat, writeFile }));
+const writeFile = vi.fn(async (target: string, bytes: Buffer | string) => {
+  // The manifest sidecar is kept out of `directWrites`, which several tests assert is
+  // empty on a request that installed nothing. They are two different acts: one is a jar
+  // landing in the mods directory, the other is `sealArchive` describing the archive it
+  // just wrote.
+  if (String(target).endsWith(".manifest.json")) {
+    sidecarWrites.push({ path: String(target), json: String(bytes) });
+    return;
+  }
+  directWrites.push({ path: String(target), bytes: (bytes as Buffer).byteLength });
+});
+vi.mock("fs/promises", () => ({ mkdir, readdir, rm, stat, writeFile }));
+
+/**
+ * The journal, mocked at the module rather than through `appendFile`.
+ *
+ * `recordBackupEvent` writes two stores and only one of them is a file; mocking the module
+ * is the only way to see the `Activity` half's *absence*, which is deliberate here — the
+ * pre-apply archive gets a journal line, and the apply writes its own activity rows.
+ */
+const journalled: { game: string; event: string; actor: string | null; name?: string; sizeBytes?: number; detail?: string }[] = [];
+const recordBackupEvent = vi.fn(
+  async (
+    game: string,
+    event: string,
+    actor: { userId: string; name: string } | null,
+    entry: { name?: string; sizeBytes?: number; detail?: string },
+    activity?: unknown
+  ) => {
+    journalled.push({ game, event, actor: actor?.name || null, ...entry });
+    if (activity) activityRows.push(String((activity as { action: string }).action));
+  }
+);
+const activityRows: string[] = [];
+vi.mock("@/lib/backup-log", () => ({ recordBackupEvent }));
+
+/**
+ * `sha256File` streams the real file through `crypto`, and `fs` (not `fs/promises`) is not
+ * mocked here — so without this it throws ENOENT on a path no test wrote, `sealArchive`
+ * settles "Could not checksum the archive", and the one property that makes the pre-apply
+ * archive restorable at all (`verifiable: true` in the listing, a checksum for the restore
+ * to refuse a corrupt archive against) goes untested while four tests print a stack trace.
+ */
+const SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+vi.mock("@/lib/backup-integrity", () => ({
+  sha256File: vi.fn(async () => SHA256),
+  shortHash: (h: string) => h.slice(0, 12),
+}));
 
 /**
  * Callback-shaped on purpose: the route wraps this in `promisify`, so a promise-returning
@@ -230,8 +313,16 @@ const execFile = vi.fn(
   ) => {
     tarRuns.push([file, ...args]);
     tarTimeouts.push(opts?.timeout);
-    if (tarOutcome !== "ok") cb(tarOutcome);
-    else cb(null, { stdout: "", stderr: "" });
+    if (tarOutcome !== "ok") return cb(tarOutcome);
+    // A successful tar leaves a file behind, so the backups directory `listArchives` reads
+    // has to contain it. Without this the retention pass runs against a directory missing
+    // the very archive it was told to protect, which would make `protect` untestable.
+    existingArchives.push({
+      name: path.basename(args[1]),
+      size: archiveBytes,
+      mtimeMs: ARCHIVE_MTIME_MS,
+    });
+    cb(null, { stdout: "", stderr: "" });
   }
 );
 vi.mock("child_process", () => ({ execFile }));
@@ -270,9 +361,19 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-// `RUNTIME.minecraft.dir` is the only thing the route reads out of `game-manager`, and
-// importing the real one pulls in the Docker CLI layer this suite is forbidden to touch.
-vi.mock("@/lib/game-manager", () => ({ RUNTIME: { minecraft: { dir: "/mc" } } }));
+// The live directories are all `game-manager` is read for here, and importing the real one
+// pulls in the Docker CLI layer this suite is forbidden to touch. All three are supplied
+// because the route reaches `backup-create` for `sealArchive`, and that module re-exports
+// `SDTD_DIR` and the Project Zomboid paths off the same table at import time — one entry
+// would make this suite fail to collect rather than fail an assertion.
+vi.mock("@/lib/game-manager", () => ({
+  RUNTIME: {
+    minecraft: { dir: "/mc" },
+    "7dtd": { dir: "/sevendtd" },
+    zomboid: { dir: "/zomboid" },
+  },
+  containerIsRunning: vi.fn(async () => false),
+}));
 vi.mock("@/lib/server-manager", () => ({ getModsDir: () => "/mods" }));
 
 const { POST: applyPack } = await import("@/app/api/mods/install-modpack/route");
@@ -304,6 +405,8 @@ beforeEach(() => {
   removeFailures = new Set();
   existingInstalled = null;
   worldOnDisk = true;
+  modsOnDisk = true;
+  existingArchives = [];
   tarOutcome = "ok";
   archiveBytes = 173_283_913;
   directLength = null;
@@ -312,6 +415,9 @@ beforeEach(() => {
   removedIds = [];
   installedNames = [];
   directWrites = [];
+  sidecarWrites = [];
+  journalled.length = 0;
+  activityRows.length = 0;
   dbRows = [];
   tarRuns = [];
   tarTimeouts = [];
@@ -840,9 +946,17 @@ describe("a jar with nothing to verify it against is reported as unverified", ()
  * server is deleted immediately after this, so a backup that silently did not happen is
  * the worst thing on this route. It used to be non-fatal, with a 60 s timeout, and it left
  * the partial archive behind for `/api/server/backups` to offer as a restore point.
+ *
+ * **And until 2026-10-02 it archived only `world`** — the one directory this route never
+ * touches — while the ledger called it a "Rollback point". The mods directory was archived
+ * nowhere in this app, and `removeMod` deletes the `InstalledMod` row along with the jar,
+ * so after an apply there was no record left of what had been installed either. The tar
+ * arguments are the whole of that fix on this side; the other half is
+ * `mc-archive.test.ts`, because an archive that carries `mods` and a restore that silently
+ * drops it is strictly worse than the bug.
  */
 describe("the pre-install backup", () => {
-  it("tars the world with an argv array and the long timeout, and reads the size back", async () => {
+  it("tars the world AND the mods with an argv array and the long timeout", async () => {
     specs = [LITHIUM];
     await apply();
     expect(tarRuns).toHaveLength(1);
@@ -851,13 +965,102 @@ describe("the pre-install backup", () => {
     // An argv array, never a shell string: the sibling Minecraft backup route's injection
     // was this exact shape.
     expect(args[0]).toBe("-czf");
-    expect(args.slice(2)).toEqual(["-C", "/mc", "world"]);
+    // `mods` is the member that matters here. Dropping it is the mutation this test exists
+    // for: the apply is about to `removeMod` every installed jar, so without it the
+    // archive preserves nothing of what is destroyed.
+    expect(args.slice(2)).toEqual(["-C", "/mc", "world", "mods"]);
     expect(args[1]).toMatch(/^\/app\/data\/backups\/auto-before-modpack-.*\.tar\.gz$/);
     expect(tarTimeouts).toEqual([300_000]);
+  });
+
+  it("records the members in the manifest, so the listing can say a restore brings the jars back", async () => {
+    specs = [LITHIUM];
+    await apply();
+    // One sidecar, for the archive just written. `GET /api/server/backups` reads `members`
+    // off this file rather than opening the tar — a full gzip decompression per archive,
+    // measured at 7.9 s for one listing — so a `members` that did not get written would
+    // make the page report "world only" for the one archive that undoes an apply.
+    expect(sidecarWrites).toHaveLength(1);
+    expect(sidecarWrites[0].path).toMatch(
+      /^\/app\/data\/backups\/auto-before-modpack-.*\.tar\.gz\.manifest\.json$/
+    );
+    const manifest = JSON.parse(sidecarWrites[0].json);
+    expect(manifest.members).toEqual(["world", "mods"]);
+    // Written raw this archive had no checksum, so the listing marked it
+    // `verifiable: false` and a restore could not refuse a corrupt one. The size goes with
+    // it, which is what catches a truncation without reading a byte.
+    expect(manifest.sha256).toBe(SHA256);
+    expect(manifest.archiveBytes).toBe(173_283_913);
+    // The same list that went to `tar`, so the archive cannot claim to hold something it
+    // does not.
+    expect(manifest.members).toEqual(tarRuns[0].slice(5));
+    expect(manifest.startedBy).toBe("Tester");
+    // Deliberately absent: this route does not ask Minecraft to save first, and
+    // `BaseManifest` documents `flushed: false` as the specific claim "the server was
+    // stopped, so its files were already at rest".
+    expect("flushed" in manifest).toBe(false);
+  });
+
+  it("states both members in the Rollback point fact, with the size read back off disk", async () => {
+    specs = [LITHIUM];
+    await apply();
     // The size comes off disk, so "we took one" is evidence rather than an assumption.
     // The fixture is 173,283,913 B, the size a live run on 2026-09-29 recorded for one of
     // these archives; `formatBytes` renders that as 165 MiB.
-    expect(fact("Rollback point")?.value).toMatch(/^auto-before-modpack-.*\.tar\.gz \(165 MiB\)$/);
+    expect(fact("Rollback point")?.value).toMatch(
+      /^auto-before-modpack-.*\.tar\.gz \(165 MiB\) — the world folder and the mods directory$/
+    );
+  });
+
+  it("journals the archive, so a file in /app/data/backups can be accounted for later", async () => {
+    specs = [LITHIUM];
+    await apply();
+    expect(journalled).toHaveLength(1);
+    expect(journalled[0].game).toBe("minecraft");
+    expect(journalled[0].event).toBe("create");
+    expect(journalled[0].actor).toBe("Tester");
+    expect(journalled[0].name).toMatch(/^auto-before-modpack-.*\.tar\.gz$/);
+    expect(journalled[0].sizeBytes).toBe(173_283_913);
+    expect(journalled[0].detail).toBe(
+      "before applying a modpack — the world folder and the mods directory"
+    );
+    // Journal only. The apply writes its own `Activity` rows through `removeMod` and
+    // `installMod`, and a `backup_create` row beside them would double-count one act.
+    expect(activityRows).toEqual([]);
+  });
+
+  /**
+   * Written raw, this archive sat outside the retention policy while `listArchives`
+   * counted it anyway — so it consumed a `keep` slot that protects a real restore point
+   * and was itself a prune candidate, and nothing ever deleted it. Going through
+   * `sealArchive` puts it inside the policy.
+   *
+   * Seven archives already there plus the one this run writes is eight. At `keep: 5` the
+   * newest is never a candidate and the oldest is exempt from the count rule, so the two
+   * the policy gives up are the third- and second-oldest — and the archive just written is
+   * safe twice over: it is the newest, and it is named in `protect`.
+   */
+  it("runs the retention policy, and the archive it just wrote survives it", async () => {
+    specs = [LITHIUM];
+    existingArchives = Array.from({ length: 7 }, (_, i) => ({
+      name: `world-2026-09-0${i + 1}T00-00-00.tar.gz`,
+      size: 1000,
+      mtimeMs: Date.UTC(2026, 8, i + 1),
+    }));
+    await apply();
+    expect(fact("Retention")?.value).toMatch(/^keep the 5 newest — 6 kept, 2 deleted$/);
+    // Oldest first, which is `selectForPruning`'s contract: if the loop dies partway the
+    // survivors are the newest. Each deletion takes its sidecar with it.
+    expect(rmRuns).toEqual([
+      "/app/data/backups/world-2026-09-02T00-00-00.tar.gz",
+      "/app/data/backups/world-2026-09-02T00-00-00.tar.gz.manifest.json",
+      "/app/data/backups/world-2026-09-03T00-00-00.tar.gz",
+      "/app/data/backups/world-2026-09-03T00-00-00.tar.gz.manifest.json",
+    ]);
+    expect(rmRuns.some((p) => p.includes("auto-before-modpack"))).toBe(false);
+    // And the 2026-09-01 archive, the only restore point older than a week here, is not
+    // what the count rule reaches for.
+    expect(rmRuns.some((p) => p.includes("2026-09-01"))).toBe(false);
   });
 
   it("is fatal: a failed tar leaves the mods directory alone and deletes the partial", async () => {
@@ -872,23 +1075,63 @@ describe("the pre-install backup", () => {
     expect(removedIds).toEqual([]);
     expect(installedNames).toEqual([]);
     // Dropped FIRST, so nothing can list it as a restore point even if nobody reads the
-    // response.
-    expect(rmRuns).toHaveLength(1);
-    expect(rmRuns[0]).toMatch(/auto-before-modpack-.*\.tar\.gz$/);
+    // response — and the sidecar goes with it, or a manifest written by a `sealArchive`
+    // that then threw outlives its archive and is adopted by the next file on that name.
+    expect(rmRuns).toEqual([
+      expect.stringMatching(/auto-before-modpack-.*\.tar\.gz$/),
+      expect.stringMatching(/auto-before-modpack-.*\.tar\.gz\.manifest\.json$/),
+    ]);
     expect(ledger().outcome).toBe("failed");
+    expect(journalled).toEqual([]);
   });
 
-  it("settles done, not noop, when there is no world to back up yet", async () => {
+  it("settles done, not noop, when there is nothing on disk to back up yet", async () => {
     // `concludeOperation` turns any `noop` step into outcome `partial`, so marking this one
     // would paint a flawless apply amber on every server that has no world yet. Nothing
     // went wrong; there was simply nothing to do.
     specs = [LITHIUM];
     worldOnDisk = false;
+    modsOnDisk = false;
     const res = await apply();
     expect(res.status).toBe(200);
     expect(tarRuns).toEqual([]);
-    expect(fact("Rollback point")?.value).toMatch(/no world on disk yet/);
+    expect(fact("Rollback point")?.value).toMatch(/no world or mods directory on disk yet/);
     expect(ledger().outcome).toBe("ok");
+    expect(installedNames).toEqual(["Lithium"]);
+  });
+
+  /**
+   * The case this route is for on a server that has not generated a world: there is still
+   * something to lose, because the jars are about to be deleted and their `InstalledMod`
+   * rows with them. The archive holds `mods` alone, and `restoreMinecraftArchive` accepts
+   * it — pinned in `mc-archive.test.ts`, because an archive the restore refuses would be a
+   * rollback point in name only.
+   */
+  it("archives the mods alone when there is no world yet", async () => {
+    specs = [LITHIUM];
+    worldOnDisk = false;
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(tarRuns).toHaveLength(1);
+    expect(tarRuns[0].slice(3)).toEqual(["-C", "/mc", "mods"]);
+    expect(JSON.parse(sidecarWrites[0].json).members).toEqual(["mods"]);
+    expect(fact("Rollback point")?.value).toMatch(/— the mods directory$/);
+  });
+
+  /**
+   * The complement, and it is not padding: "always add `mods`" passes every test above.
+   * A world with no mods directory yet must not make the tar fail, because `tar -czf …
+   * world mods` exits non-zero on a member that is not there — which would refuse every
+   * modpack apply on a server that has never installed one.
+   */
+  it("archives the world alone when there is no mods directory yet", async () => {
+    specs = [LITHIUM];
+    modsOnDisk = false;
+    const res = await apply();
+    expect(res.status).toBe(200);
+    expect(tarRuns[0].slice(3)).toEqual(["-C", "/mc", "world"]);
+    expect(JSON.parse(sidecarWrites[0].json).members).toEqual(["world"]);
+    expect(fact("Rollback point")?.value).toMatch(/— the world folder$/);
     expect(installedNames).toEqual(["Lithium"]);
   });
 });

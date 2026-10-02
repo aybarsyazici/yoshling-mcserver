@@ -50,6 +50,11 @@ export const BACKUP_DIRS: Record<GameId, string> = {
  * - `automatic` — written by the scheduler, which has no user to attribute. The archive
  *   itself is then able to say where it came from, which is the only place that answer
  *   survives being copied off the box.
+ * - `members` — the top-level names in the tar, written by whoever wrote the tar. It
+ *   exists because Minecraft now has two shapes of archive: a routine backup is
+ *   `["world"]` and the one `install-modpack` takes before it deletes every jar is
+ *   `["world", "mods"]`, and the listing has to be able to say which an archive is
+ *   without decompressing it. `undefined` is an archive from before this was recorded.
  */
 export interface BaseManifest {
   createdAt: string;
@@ -59,6 +64,7 @@ export interface BaseManifest {
   /** Display name of whoever asked for it, or absent for a scheduled backup. */
   startedBy?: string;
   automatic?: boolean;
+  members?: string[];
 }
 
 export interface ArchiveFile {

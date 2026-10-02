@@ -41,6 +41,7 @@ import {
   writeManifestSidecar,
 } from "@/lib/backup-archive";
 import { BACKUP_DIRS, type BaseManifest } from "@/lib/backup-store";
+import type { McArchiveMember } from "@/lib/mc-archive";
 import { sha256File, shortHash } from "@/lib/backup-integrity";
 import { applyRetention } from "@/lib/backup-retention";
 import { recordBackupEvent } from "@/lib/backup-log";
@@ -109,10 +110,11 @@ export const SDTD_XML_PATH = path.join(SDTD_CONFIG_DIR, "sdtdserver.xml");
 // ── manifests ────────────────────────────────────────────────────────────────
 
 /**
- * Minecraft has no in-tar manifest and deliberately still does not get one: its archive
- * is `tar -czf … -C MC_DIR world`, so the only member is `world/`, and the restore asserts
- * exactly that. Adding a `manifest.json` member would change the archive's shape for the
- * sake of metadata that the sidecar holds anyway.
+ * Minecraft has no in-tar manifest and deliberately still does not get one: its members
+ * are game directories (`world`, and `mods` on the archive `install-modpack` takes before
+ * it deletes every jar), and the restore swaps exactly those. Adding a `manifest.json`
+ * member would change the archive's shape for the sake of metadata the sidecar holds
+ * anyway — and the restore would then have to know to skip it.
  */
 export type McManifest = BaseManifest;
 
@@ -271,8 +273,19 @@ function createBody(
  * The sidecar is written only after the refusals for the reason already recorded in the
  * routes: one written earlier would outlive the archive that refusal deletes, and be
  * adopted by the next archive to land on the same name.
+ *
+ * **Exported, and the fourth caller is not a backup route.** `/api/mods/install-modpack`
+ * tars the world (and now the mods) before it deletes every installed jar, and it used to
+ * write that archive raw: no sidecar, so the listing marked it `verifiable: false` and a
+ * restore could not check it; no journal line; and no retention pass, while `listArchives`
+ * counted it anyway — so it consumed a `keep` slot that protects a real restore point and
+ * was itself a prune candidate. Going through this is what makes the pre-apply archive a
+ * restore point on the same terms as every other archive.
+ *
+ * It settles the step that is already open, so the caller's `op.step(…)` must be the one
+ * the archive was written under.
  */
-async function sealArchive(
+export async function sealArchive(
   op: OpHandle,
   opts: {
     game: GameId;
@@ -457,6 +470,22 @@ async function createMinecraft(
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `world-${stamp}.tar.gz`;
   const target = path.join(dir, filename);
+
+  /**
+   * A routine Minecraft backup is world-only, and stays world-only.
+   *
+   * `install-modpack`'s pre-apply archive adds `mods` because that is the directory it is
+   * about to empty; a routine backup is taken on a schedule against a world that is
+   * usually hundreds of megabytes, and bundling an unchanged mods directory into every one
+   * of those would grow the archives and the retention pressure for a copy of something
+   * nothing is about to delete.
+   *
+   * Written once and read twice — as the tar's member arguments and as the manifest's
+   * `members` — so the archive cannot claim to hold something it does not. The listing
+   * reports `includesMods` off that field, so the two drifting apart would make the page
+   * tell someone a restore would bring their mods back when it would not.
+   */
+  const members: McArchiveMember[] = ["world"];
   try {
     await mkdir(dir, { recursive: true });
 
@@ -477,7 +506,7 @@ async function createMinecraft(
 
       op.step("Compressing the archive");
       try {
-        await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, "world"], {
+        await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, ...members], {
           timeout: TAR_TIMEOUT_MS,
         });
       } catch (e) {
@@ -495,6 +524,7 @@ async function createMinecraft(
     const manifest: McManifest = {
       createdAt: new Date().toISOString(),
       flushed,
+      members,
       ...provenance(actor),
     };
     const sealed = await sealArchive(op, { game: "minecraft", target, filename, manifest });

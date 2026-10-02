@@ -765,6 +765,14 @@ returned to its exact starting md5); the `server.properties` help layer; the 7DT
 route calling a busy-but-running server "powered off" (see `src/lib/rcon-failure.ts` —
 `ETIMEDOUT` as a socket code and the bare message `"timeout"` mean opposite things).
 
+**Closed 2026-10-02 — a modpack apply is reversible for the mod set.** `install-modpack`
+tarred the world and then deleted every installed jar, so its "Rollback point" preserved the
+one directory the apply never touches; the mods directory was archived nowhere. It now
+archives `mods` too, **and the restore puts it back** — adding one without the other would
+have reported success while discarding the mods, since the restore renamed only `world` into
+place and deleted the staging dir. Routine backups stay world-only. Details, and the four
+properties not to break: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+
 Genuinely open:
 
 - **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11**, so on a

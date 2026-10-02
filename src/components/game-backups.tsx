@@ -39,6 +39,16 @@ interface Backup {
   verifiable?: boolean;
   /** Taken by the scheduler rather than by a person. */
   automatic?: boolean;
+  /**
+   * Minecraft only: the archive holds `mods/`, so restoring it puts the installed jars
+   * back too.
+   *
+   * Only the archive `install-modpack` takes before it deletes every jar carries them;
+   * routine backups are world-only and stay that way. The two sit in the same list under
+   * names that both end in `.tar.gz`, so without this the page cannot tell you which one
+   * undoes a modpack apply.
+   */
+  includesMods?: boolean;
 }
 
 /**
@@ -360,6 +370,14 @@ export function GameBackups({ game }: { game: GameId }) {
                         </span>
                       )}
                       {b.automatic && <span>· automatic</span>}
+                      {/* Said only when it is true, like the checksum badge below: a
+                          "world only" badge on every routine backup would be noise, and
+                          the archive that carries the mods is the rare one. */}
+                      {b.includesMods && (
+                        <span title="This archive holds the mods directory, so restoring it puts the installed jars back too.">
+                          · mods incl.
+                        </span>
+                      )}
                       {/* Said only when it is true. The absence of a checksum is not a
                           defect in the archive — every archive written before checksums
                           existed has none, and a restore reports that honestly rather

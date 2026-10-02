@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { execFile } from "child_process";
-import { promisify } from "util";
-import { stat, rm, mkdir, rename } from "fs/promises";
+import { stat, rm, mkdir } from "fs/promises";
 import path from "path";
 import { withGameStopped } from "@/lib/game-manager";
 import { isConflict, conflictResponse, fileLaneBusy } from "@/lib/operation-response";
@@ -16,6 +14,11 @@ import {
 } from "@/lib/backup-archive";
 import { archiveResponse, BACKUP_DIRS, listArchives } from "@/lib/backup-store";
 import { createBackup, MC_DIR, type McManifest } from "@/lib/backup-create";
+import {
+  describeMembers,
+  manifestIncludesMods,
+  restoreMinecraftArchive,
+} from "@/lib/mc-archive";
 import { integrityFact, verifyArchive } from "@/lib/backup-integrity";
 import { describePolicy, policyFor } from "@/lib/backup-retention";
 import { readJournal, recordBackupEvent } from "@/lib/backup-log";
@@ -25,7 +28,6 @@ import { intervalMsFor, scheduleEnabled } from "@/lib/backup-schedule";
 // the request lives as long as a graceful stop plus an extract.
 export const maxDuration = 300;
 
-const execFileAsync = promisify(execFile);
 const BACKUP_DIR = BACKUP_DIRS.minecraft;
 
 /**
@@ -36,10 +38,10 @@ const BACKUP_DIR = BACKUP_DIRS.minecraft;
 const TAR_TIMEOUT_MS = 300_000;
 
 /**
- * Minecraft archives carry no `manifest.json` member — the tar is `-C MC_DIR world` and
- * the restore asserts exactly that one member — so the sidecar is read directly rather
- * than through `readBackupManifest`. Going through that helper would spawn a
- * `tar -xzOf` per archive looking for a member that has never been there.
+ * Minecraft archives carry no `manifest.json` member — every member is a game directory,
+ * `world` and (for the archive `install-modpack` takes) `mods` — so the sidecar is read
+ * directly rather than through `readBackupManifest`. Going through that helper would spawn
+ * a `tar -xzOf` per archive looking for a member that has never been there.
  */
 async function mcManifest(name: string): Promise<McManifest | null> {
   return readManifestSidecar<McManifest>(path.join(BACKUP_DIR, name));
@@ -135,6 +137,15 @@ export async function GET(request: NextRequest) {
           createdAt: new Date(a.createdAtMs).toISOString(),
           verifiable: Boolean(m?.sha256),
           automatic: m?.automatic ?? false,
+          // Whether a restore of this one would bring the installed jars back.
+          //
+          // Routine backups are world-only and the archive `install-modpack` takes before
+          // it deletes every jar is not, and the two are listed side by side under names
+          // that both end in `.tar.gz` — so without this the page cannot tell you which of
+          // the two things in front of you is the one that undoes a modpack apply. Read off
+          // the manifest's `members`, never by opening the tar: that costs a full gzip
+          // decompression per archive (measured at 7.9 s for one listing).
+          includesMods: manifestIncludesMods(m),
         };
       })
     );
@@ -196,6 +207,14 @@ export async function POST(request: NextRequest) {
       // box today predates them. It is reported as a fact rather than refused.
       const integrity = await verifyArchive(BACKUP_DIR, name, await mcManifest(name));
 
+      // What the restore actually put back, in words, read out of the archive rather than
+      // assumed from the request. An archive taken before a modpack apply carries `mods`
+      // as well as `world`; every other Minecraft archive carries only `world` and leaves
+      // the live mods directory alone. The step label, the fact, the durable row and the
+      // response all come from this one value, so none of them can claim the jars came
+      // back when they did not.
+      let replaced = "";
+
       // A running server holds the world in memory and writes it back on its next
       // autosave, so restoring underneath it changed nothing that survived — and
       // still reported success. `withGameStopped` saves + stops first, restores,
@@ -208,9 +227,15 @@ export async function POST(request: NextRequest) {
         async (op) => {
           op.step("Restoring the world from backup");
           op.detail(name);
-          await restoreWorld(backupPath);
-          op.settle("Replaced the world folder");
+          const result = await restoreMinecraftArchive({
+            archivePath: backupPath,
+            mcDir: MC_DIR,
+            timeoutMs: TAR_TIMEOUT_MS,
+          });
+          replaced = describeMembers(result.replaced);
+          op.settle(`Replaced ${replaced}`);
           op.fact({ label: "Archive", value: name });
+          op.fact({ label: "Replaced", value: replaced });
           op.fact(integrityFact(integrity));
         },
         {
@@ -227,9 +252,11 @@ export async function POST(request: NextRequest) {
         "restore",
         actor,
         { outcome: "ok", name, detail: integrity.state },
-        { action: "backup_restore", details: { name, restartedAfter: restarted } }
+        // `replaced` in the durable row, because the registry drops the record after six
+        // hours and "did that restore put the mods back" is a question asked later.
+        { action: "backup_restore", details: { name, restartedAfter: restarted, replaced } }
       );
-      return NextResponse.json({ success: true, restarted, checksum: integrity.state });
+      return NextResponse.json({ success: true, restarted, checksum: integrity.state, replaced });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
       // A restore that started and did not finish is the single most important thing in
@@ -300,38 +327,4 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-}
-
-/**
- * Extract into a staging dir and only then swap the world in.
- *
- * This used to `rm -rf world` *first* and extract second, so a truncated or
- * wrong-shaped archive — or a full disk — left no world at all. 7DTD and PZ
- * already extract before they replace; this brings MC in line. The staging dir
- * lives inside MC_DIR so the final step is a same-device rename: the live world
- * only disappears once its replacement is complete on disk.
- */
-async function restoreWorld(backupPath: string): Promise<void> {
-  const work = path.join(MC_DIR, `.restore-${Date.now()}`);
-  await rm(work, { recursive: true, force: true });
-  await mkdir(work, { recursive: true });
-  try {
-    await execFileAsync("tar", ["-xzf", backupPath, "-C", work], { timeout: TAR_TIMEOUT_MS });
-
-    // MC backups are `tar -czf … -C MC_DIR world`, so the member is `world/`.
-    const extracted = path.join(work, "world");
-    const isDir = await stat(extracted)
-      .then((s) => s.isDirectory())
-      .catch(() => false);
-    if (!isDir) {
-      // `BadArchiveError`, so the route answers 400 rather than 500: a valid gzip file
-      // that happens not to contain `world/` is the user's archive being wrong.
-      throw new BadArchiveError("This backup has no world folder in it — nothing was changed.");
-    }
-
-    await rm(path.join(MC_DIR, "world"), { recursive: true, force: true });
-    await rename(extracted, path.join(MC_DIR, "world"));
-  } finally {
-    await rm(work, { recursive: true, force: true }).catch(() => {});
-  }
 }
