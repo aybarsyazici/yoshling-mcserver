@@ -92,6 +92,16 @@ export interface GamesState {
     restart: boolean;
     /** `settings.read` — whether the Settings page is worth offering at all. */
     settings: boolean;
+    /**
+     * `mods.install` / `mods.remove` — the Minecraft mods page's write controls.
+     *
+     * Same job as the three power flags, one page later: `/minecraft/mods` offered a
+     * MEMBER Create Modpack, Edit, Install to Server, Delete, Remove, + Add to Pack and
+     * Import, and every one of them answered a bare 403. Two flags because
+     * `permissions.ts` keeps the two capabilities separate.
+     */
+    modsInstall: boolean;
+    modsRemove: boolean;
   };
   /** Configured heap per world, from the compose file. null = no heap setting. */
   memoryGb: Partial<Record<GameId, number | null>>;
@@ -156,6 +166,21 @@ export async function fetchLiveSettings(
   }
 }
 
+/**
+ * The interval for a surface that reads `can` and nothing else.
+ *
+ * The four Minecraft mods components call `useGames(CAPABILITY_POLL_MS)`. None of them reads a
+ * world's run state — only `can.modsInstall` / `can.modsRemove` — and those change when an
+ * admin edits a role on the Crew page, which is rare. The 5 s default would put a status poll
+ * behind every open mods tab for a pair of booleans; polling at all is what makes a demotion
+ * land without a reload. The route is the enforcement either way, so the cost of being 30 s
+ * stale is a control that 403s with an explanation.
+ *
+ * One exported constant rather than a literal per file, because four copies of a number are
+ * four things to notice when one of them is wrong.
+ */
+export const CAPABILITY_POLL_MS = 30_000;
+
 /** Polls /api/games/status. `interval` in ms; pass 0 to disable polling. */
 export function useGames(interval = 5000): GamesState {
   const [games, setGames] = useState<Record<GameId, GameSnapshot> | null>(null);
@@ -174,12 +199,18 @@ export function useGames(interval = 5000): GamesState {
    * every real user, while the worst case of guessing `true` is one link that 403s with an
    * explanation. The route is the enforcement either way; these flags only decide what is
    * worth offering.
+   *
+   * The two mods flags start **false**, with the power buttons: they guard writes that
+   * delete a pack or replace every jar on the server, so a control that is live for a
+   * moment and then dead is the defect, not the cure.
    */
   const [can, setCan] = useState({
     start: false,
     stop: false,
     restart: false,
     settings: true,
+    modsInstall: false,
+    modsRemove: false,
   });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
@@ -211,7 +242,19 @@ export function useGames(interval = 5000): GamesState {
       // "no Settings link" for an admin. `?? true` is the safe direction here — the route
       // still refuses, so the worst case is a link that 403s, whereas the worst case of
       // `?? false` is an admin who cannot find the settings page.
-      if (data.can) setCan({ ...data.can, settings: data.can.settings ?? true });
+      //
+      // The two mods flags default the other way for the same reason they *start* false:
+      // an older build's `can` carries neither, and `undefined` spread into state would
+      // leave the type lying about a boolean it does not have. `?? false` hides a write
+      // control the response did not vouch for, which costs a reload; the other direction
+      // offers a Delete that 403s.
+      if (data.can)
+        setCan({
+          ...data.can,
+          settings: data.can.settings ?? true,
+          modsInstall: data.can.modsInstall ?? false,
+          modsRemove: data.can.modsRemove ?? false,
+        });
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
       setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);

@@ -134,6 +134,24 @@ export async function GET(request: Request) {
       // Settings link rather than sending a MEMBER to a page whose every panel 403s on
       // load — the same reason the three power booleans exist.
       settings: hasPermission(session.user.role, "settings.read"),
+      // The mods page's write controls, added for the reason the three power booleans
+      // were: `/minecraft/mods` showed a MEMBER Create Modpack, Edit, Install to Server,
+      // Delete, Remove, + Add to Pack and Import, and every one of them answered a bare
+      // 403 with nothing saying why.
+      //
+      // `mods.install` is what POST `/api/modpacks`, `/api/modpacks/[id]/mods`,
+      // `/api/modpacks/import`, `/api/mods/install` and `/api/mods/install-modpack`
+      // check, plus PUT `/api/modpacks/[id]`. `mods.remove` is what DELETE
+      // `/api/mods/[id]`, `/api/modpacks/[id]` and `/api/modpacks/[id]/mods` check. Two
+      // flags rather than one because the table keeps them separate, and a future owner
+      // may want "may add to a pack" without "may delete a pack".
+      //
+      // Deliberately NOT covering Export (`/api/modpacks/[id]/export`): that route gates
+      // on world access alone and answers a MEMBER happily, because it is a read that
+      // hands back download links for a player's own launcher. Hiding it would remove a
+      // capability a read-only viewer has rather than one they are refused.
+      modsInstall: hasPermission(session.user.role, "mods.install"),
+      modsRemove: hasPermission(session.user.role, "mods.remove"),
     },
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,

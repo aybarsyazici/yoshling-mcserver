@@ -25,10 +25,14 @@ export default function ModsPage() {
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: tint }}>
+      {/* The subtitle said "install with one click", which described a control that does not
+          exist: nothing on this page installs a single mod — `/api/mods/install` has no
+          caller anywhere in the tree — and the only thing that writes to the server's mods
+          folder is applying a whole pack. */}
       <SectionHeading
         eyebrow="Minecraft · Content"
         title="Mods & modpacks"
-        sub="Search Modrinth, install with one click, and manage what's running."
+        sub="Search Modrinth, group mods into packs, and see what is installed."
         tint={tint}
       />
 

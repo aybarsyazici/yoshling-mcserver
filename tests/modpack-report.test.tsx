@@ -25,8 +25,31 @@
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { ALL_POWERS, gamesState, installBrowserStubs } from "./helpers/dom";
+
+/**
+ * `can` is stubbed, and these tests are about the report rather than the gate.
+ *
+ * Every test in this file has to get as far as pressing **Install to Server**, which is now
+ * gated on `can.modsInstall` — so without this the component's own
+ * `useGames()` poll would have to land through the `fetch` stub below before the button
+ * existed, adding an async precondition to nine tests that are about a dialog. Whether the
+ * button is *there* for a given role is `tests/mods-surfaces.test.tsx`'s subject, and it
+ * asserts it through the real projection.
+ *
+ * Mocked at the module boundary, not by widening the fetch stub, so a `can` that stops
+ * being read cannot be papered over here.
+ *
+ * A **partial** mock — only `useGames` is replaced. `modpacks.tsx` also imports
+ * `CAPABILITY_POLL_MS` from the same module, and a whole-module factory returning one export
+ * makes every render throw `No "CAPABILITY_POLL_MS" export is defined on the … mock`.
+ */
+vi.mock("@/lib/use-games", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/use-games")>()),
+  useGames: () => gamesState({ can: ALL_POWERS }),
+}));
+
 import { Modpacks } from "@/components/modpacks";
-import { installBrowserStubs } from "./helpers/dom";
 
 const toasts: { kind: string; text: string }[] = [];
 vi.mock("sonner", () => ({

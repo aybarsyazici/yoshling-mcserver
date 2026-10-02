@@ -8,18 +8,17 @@ datasource db {
 }
 
 model User {
-  id          String       @id @default(cuid())
-  discordId   String       @unique
-  username    String
-  avatar      String?
-  role        String       @default("MEMBER") // ADMIN, MOD, MEMBER
+  id         String     @id @default(cuid())
+  discordId  String     @unique
+  username   String
+  avatar     String?
+  role       String     @default("MEMBER") // ADMIN, MOD, MEMBER
   // Which worlds this user may see, as a CSV of game ids
   // ("minecraft,7dtd,zomboid"). Empty = no access yet, an admin has to grant it.
   // ADMIN ignores this column and always sees every world.
-  games       String       @default("")
-  createdAt   DateTime     @default(now())
-  activities  Activity[]
-  modRequests ModRequest[]
+  games      String     @default("")
+  createdAt  DateTime   @default(now())
+  activities Activity[]
 }
 
 model InstalledMod {
@@ -94,15 +93,16 @@ model Activity {
   createdAt DateTime @default(now())
 }
 
-model ModRequest {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id])
-  modrinthId String
-  modName    String
-  status     String   @default("pending")
-  createdAt  DateTime @default(now())
-}
+// `model ModRequest` was here, with a `User.modRequests` back-relation, and nothing in the
+// app ever read or wrote either: zero rows in production, and zero references outside the
+// generated client. `permissions.ts` already records its capability (`mods.request`) as one
+// of five keys deleted for describing a feature that "exists in the Prisma schema and
+// nowhere in the code" — this is the other half of that cleanup.
+//
+// **The empty table is deliberately left on the production database.** Dropping it would be
+// a hand-applied destructive migration (prod runs none automatically) for no gain; an unused
+// table costs nothing, while a `DROP TABLE` run by hand against the one DB is a risk with no
+// upside. So dev and prod differ here by one table that neither reads.
 
 model Modpack {
   id              String      @id @default(cuid())

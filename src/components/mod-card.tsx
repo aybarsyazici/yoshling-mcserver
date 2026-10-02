@@ -24,6 +24,15 @@ import type { ModrinthProject } from "@/lib/modrinth";
 
 interface ModCardProps {
   mod: ModrinthProject;
+  /**
+   * `can.modsInstall`, from the browser that owns the grid.
+   *
+   * A **required** prop, and read from the parent rather than from `useGames()` here: the
+   * search appends 20 cards per "Load More", so a hook per card is 20, 40, 60 pollers on
+   * one page for one boolean. Required means a new call site cannot silently default to
+   * showing a control that answers 403 — the compiler asks.
+   */
+  canAddToPack: boolean;
 }
 
 interface SimpleModpack {
@@ -38,7 +47,7 @@ interface Dependency {
   name: string;
 }
 
-export function ModCard({ mod }: ModCardProps) {
+export function ModCard({ mod, canAddToPack }: ModCardProps) {
   const [showDetail, setShowDetail] = useState(false);
   const [showPackDialog, setShowPackDialog] = useState(false);
   const [modpacks, setModpacks] = useState<SimpleModpack[]>([]);
@@ -230,14 +239,19 @@ export function ModCard({ mod }: ModCardProps) {
               <span className="text-xs text-muted-foreground">
                 {formatDownloads(mod.downloads)} downloads
               </span>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={(e) => { e.stopPropagation(); openPackDialog(); }}
-                className="shadow-sm"
-              >
-                + Add to Pack
-              </Button>
+              {/* `POST /api/modpacks/[id]/mods` checks `mods.install`. The card itself
+                  stays clickable for a viewer who cannot add — it opens the mod's details,
+                  which is a read. */}
+              {canAddToPack && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => { e.stopPropagation(); openPackDialog(); }}
+                  className="shadow-sm"
+                >
+                  + Add to Pack
+                </Button>
+              )}
             </div>
           </div>
         </CardContent>

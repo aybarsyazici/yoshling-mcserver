@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
 
 interface ModpackResult {
   project_id: string;
@@ -26,6 +27,12 @@ interface ModpackResult {
 }
 
 export function ModpackBrowserModrinth({ onImported }: { onImported: () => void }) {
+  /**
+   * The fourth write control on `/minecraft/mods`, on its other sub-tab. Included with the
+   * three on the My Modpacks tab because leaving it would mean the page still offered a
+   * MEMBER one button that answers 403 — `POST /api/modpacks/import` checks `mods.install`.
+   */
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ModpackResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -181,13 +188,15 @@ export function ModpackBrowserModrinth({ onImported }: { onImported: () => void 
                   <span className="text-xs text-muted-foreground">
                     {formatDownloads(pack.downloads)} downloads
                   </span>
-                  <Button
-                    size="sm"
-                    disabled={importing === pack.project_id}
-                    onClick={(e) => { e.stopPropagation(); handleImport(pack); }}
-                  >
-                    {importing === pack.project_id ? "Importing..." : "Import"}
-                  </Button>
+                  {can.modsInstall && (
+                    <Button
+                      size="sm"
+                      disabled={importing === pack.project_id}
+                      onClick={(e) => { e.stopPropagation(); handleImport(pack); }}
+                    >
+                      {importing === pack.project_id ? "Importing..." : "Import"}
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}

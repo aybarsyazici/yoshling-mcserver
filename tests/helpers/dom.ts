@@ -85,9 +85,30 @@ export function worlds(
  * because it lives on the same `can` object as the three power flags. It is deliberately
  * NOT tied to them: a role can hold power and not settings, and a fixture that couples the
  * two would hide that.
+ *
+ * `modsInstall` / `modsRemove` ride along for the same reason — they are keys of the same
+ * `can` object, not a second concept. The two named fixtures are the shapes the two roles
+ * that matter actually produce (`ALL_POWERS` = ADMIN or MOD, `NO_POWERS` = MEMBER), so a
+ * surface test can state "what a MEMBER sees" without restating the permission table; a
+ * test that wants an uneven combination spells it out inline, which is what
+ * `tests/mods-surfaces.test.tsx` does to keep the two mods flags independent.
  */
-export const ALL_POWERS = { start: true, stop: true, restart: true, settings: true };
-export const NO_POWERS = { start: false, stop: false, restart: false, settings: false };
+export const ALL_POWERS = {
+  start: true,
+  stop: true,
+  restart: true,
+  settings: true,
+  modsInstall: true,
+  modsRemove: true,
+};
+export const NO_POWERS = {
+  start: false,
+  stop: false,
+  restart: false,
+  settings: false,
+  modsInstall: false,
+  modsRemove: false,
+};
 
 /**
  * A `useGames()` return value, complete enough that no surface reads `undefined`.
