@@ -7,15 +7,18 @@ import {
   addPlayerBan,
   banCommand,
   banDrift,
+  banEntryRefusal,
   banMessage,
-  banlistContains,
+  banlistLists,
   banlistProves,
+  banlistUsable,
   buildIpBan,
   buildPlayerBan,
   checkBanTarget,
   classifyBanReply,
   isValidIpv4,
   isValidIpv6,
+  liveReadState,
   mcBanDate,
   normalizeIp,
   pardonCommand,
@@ -459,9 +462,10 @@ describe("serializePlayerBans", () => {
     expect(serializePlayerBans([{ ...good, name: "" }]).ok).toBe(false);
   });
 
-  it("refuses the whole write when any one entry is bad", () => {
-    // All-or-nothing, like `resolveEntryUuids`: a partial write is the same
-    // silent-nothing failure, just harder to notice.
+  it("refuses the whole write when any one entry is bad and none was excused", () => {
+    // All-or-nothing by default, like `resolveEntryUuids`: a partial write is the same
+    // silent-nothing failure, just harder to notice. The default `require` is every entry,
+    // so a caller that forgets the argument gets the strict behaviour.
     expect(serializePlayerBans([good, { ...good, name: "Jeb", uuid: "" }]).ok).toBe(false);
   });
 
@@ -469,6 +473,67 @@ describe("serializePlayerBans", () => {
     const r = serializePlayerBans([]);
     expect(r.ok).toBe(true);
     if (r.ok) expect(JSON.parse(r.json)).toEqual([]);
+  });
+
+  /**
+   * ## `require` — the difference between protecting a list and locking it
+   *
+   * Validating every entry made one pre-existing entry the dashboard dislikes refuse *every*
+   * file-path edit. The realistic source of such an entry is this repo's own history: the
+   * whitelist and ops writers shipped `uuid: ""` for months, so a `banned-players.json`
+   * carrying a blank-uuid entry is the expected state of an older install, not a contrived
+   * one. The consequences were both bad and both silent in their own way — the pardon that
+   * would have *removed* the bad entry was refused by the bad entry, and the 500 named
+   * whichever entry the loop happened to reach first, so a request about "Notch" came back
+   * talking about "Herobrine".
+   */
+  const legacy = { ...good, name: "Herobrine", uuid: "" };
+
+  it("carries a pre-existing bad entry through instead of blocking the edit", () => {
+    const r = serializePlayerBans([legacy, good], [good]);
+    expect(r.ok).toBe(true);
+    // Carried through *unchanged*: it is already on disk and the game already ignores it.
+    // Dropping it silently would be this route deleting somebody's ban record.
+    if (r.ok) expect(JSON.parse(r.json)).toEqual([legacy, good]);
+  });
+
+  it("lets a pardon proceed even though the list still holds a bad entry", () => {
+    // A pardon adds nothing, so it is answerable for nothing and passes `[]`.
+    const r = serializePlayerBans([legacy], []);
+    expect(r.ok).toBe(true);
+  });
+
+  /** The entry being added is still refused — the guarantee that must not have been traded. */
+  it("still refuses the entry the write is answerable for", () => {
+    const blank = { ...good, name: "Steve", uuid: "" };
+    const r = serializePlayerBans([legacy, blank], [blank]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("Steve");
+      // The misattribution, as an assertion: the sentence must be about the entry this
+      // write is for, never about the one that happened to come first in the file.
+      expect(r.error).not.toContain("Herobrine");
+    }
+  });
+});
+
+describe("banEntryRefusal", () => {
+  const good = {
+    uuid: offlineUuid("Notch"),
+    name: "Notch",
+    created: "2026-10-01 12:00:00 +0000",
+    source: "Rcon",
+    expires: BAN_FOREVER,
+    reason: "Griefing",
+  };
+
+  it("passes a writable entry", () => {
+    expect(banEntryRefusal(good)).toBe(null);
+  });
+
+  it("names the entry it is refusing, so no caller has to guess which", () => {
+    expect(banEntryRefusal({ ...good, uuid: "" })).toContain("Notch");
+    expect(banEntryRefusal({ ...good, name: "not a name" })).toContain("not a name");
   });
 });
 
@@ -489,6 +554,14 @@ describe("serializeIpBans", () => {
     for (const ip of ["", "999.1.1.1", "1.2.3", "example.com", "1.2.3.4/24", "::1"]) {
       expect(serializeIpBans([{ ...good, ip }]).ok).toBe(false);
     }
+  });
+
+  /** `require` means the same here as for players — the same lock, the same unlock. */
+  it("carries a pre-existing bad address through rather than blocking the edit", () => {
+    const legacy = { ...good, ip: "::1" };
+    expect(serializeIpBans([legacy, good], [good]).ok).toBe(true);
+    expect(serializeIpBans([legacy], []).ok).toBe(true);
+    expect(serializeIpBans([legacy, good]).ok).toBe(false);
   });
 });
 
@@ -694,10 +767,14 @@ describe("parseBanlist", () => {
     expect(r.separated).toBe(false);
     expect(r.entries).toEqual([]);
     expect(r.recognised).toBe(true);
-    // The count is still trustworthy, and the contains-check still works — which is
-    // why those two are what the route relies on.
-    expect(banlistContains(r, "Notch")).toBe(true);
-    expect(banlistContains(r, "jeb_")).toBe(true);
+    /**
+     * And nothing downstream treats it as evidence. An earlier version answered the yes/no
+     * from a substring of the raw buffer here, on the grounds that the phrase
+     * `"<name> was banned by "` is unambiguous wherever it appears — it is not, because the
+     * reason it appears in is operator input. So a reply this unreadable answers `null`.
+     */
+    expect(banlistLists(r, "Notch")).toBe(null);
+    expect(banlistLists(r, "jeb_")).toBe(null);
   });
 
   it("accepts a single-entry run-together reply, where the parse is unambiguous", () => {
@@ -729,51 +806,128 @@ describe("parseBanlist", () => {
   });
 });
 
-describe("banlistContains", () => {
+describe("banlistUsable", () => {
+  it("accepts a parsed list, including an empty one", () => {
+    expect(banlistUsable(parseBanlist("There are no bans"))).toBe(true);
+    expect(banlistUsable(parseBanlist("There are 1 ban(s):\nNotch was banned by Rcon: a"))).toBe(
+      true
+    );
+  });
+
+  it("refuses a reply that is not a banlist answer", () => {
+    expect(banlistUsable(parseBanlist("Unknown command"))).toBe(false);
+    expect(banlistUsable(parseBanlist(""))).toBe(false);
+  });
+
+  /**
+   * Both halves of the guard have to be there, and this is the input that tells them apart:
+   * a *recognised* reply whose entries ran together. Dropping `separated` from `banlistUsable`
+   * leaves this green and re-opens every question below to a reply nobody can read.
+   */
+  it("refuses a recognised reply whose entries could not be told apart", () => {
+    const together = parseBanlist(
+      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
+    );
+    expect(together.recognised).toBe(true);
+    expect(together.separated).toBe(false);
+    expect(banlistUsable(together)).toBe(false);
+  });
+});
+
+describe("banlistLists", () => {
   const two = parseBanlist(
     "There are 2 ban(s):\nNotch was banned by Rcon: Griefing\n1.2.3.4 was banned by Rcon: spam"
   );
 
   it("finds a banned name and a banned ip", () => {
-    expect(banlistContains(two, "Notch")).toBe(true);
-    expect(banlistContains(two, "1.2.3.4")).toBe(true);
+    expect(banlistLists(two, "Notch")).toBe(true);
+    expect(banlistLists(two, "1.2.3.4")).toBe(true);
   });
 
   it("is case-insensitive and tolerant of surrounding space", () => {
     // The operator types `notch`; the server prints the profile's canonical `Notch`.
-    expect(banlistContains(two, "notch")).toBe(true);
-    expect(banlistContains(two, "  NOTCH  ")).toBe(true);
+    expect(banlistLists(two, "notch")).toBe(true);
+    expect(banlistLists(two, "  NOTCH  ")).toBe(true);
   });
 
   it("does not find something that is absent", () => {
-    expect(banlistContains(two, "Steve")).toBe(false);
-    expect(banlistContains(two, "1.2.3.5")).toBe(false);
+    expect(banlistLists(two, "Steve")).toBe(false);
+    expect(banlistLists(two, "1.2.3.5")).toBe(false);
   });
 
-  it("requires the full phrase, not a bare mention of the name", () => {
-    // A name inside someone else's ban *reason* must not read as that name being banned.
+  it("matches the entry's name, not a mention of it in someone else's reason", () => {
     const r = parseBanlist("There are 1 ban(s):\njeb_ was banned by Rcon: impersonating Notch");
-    expect(banlistContains(r, "jeb_")).toBe(true);
-    expect(banlistContains(r, "Notch")).toBe(false);
-  });
-
-  it("answers false for an unrecognised reply instead of guessing", () => {
-    expect(banlistContains(parseBanlist("Unknown command"), "Notch")).toBe(false);
-    expect(banlistContains(parseBanlist(""), "Notch")).toBe(false);
+    expect(banlistLists(r, "jeb_")).toBe(true);
+    expect(banlistLists(r, "Notch")).toBe(false);
   });
 
   /**
-   * The case that distinguishes the `recognised` guard from nothing at all. A reply with
-   * no header but an entry-shaped line *does* contain the phrase, so without the guard
-   * this would read a reply the parser could not vouch for as positive evidence. The
-   * first version of these tests only used replies that lacked the phrase too, so
-   * deleting the guard left every one of them green — found by mutation-checking it.
+   * **The poisoned read-back.** `reason` and `source` are operator input that the server
+   * echoes straight back into this reply, so the previous implementation — a substring search
+   * for `"<target> was banned by "` over the raw buffer — could be told what to find.
+   *
+   * The sequence it allows, end to end: ban Alice with the reason "Bob was banned by me:
+   * spam"; later ban Bob and have it fail (an unresolvable name, a truncated reply, a typo
+   * the server rejected); the read-back searches the buffer, finds the phrase inside Alice's
+   * reason, and `banlistProves` answers true. The route then logs the ban, answers 200 and
+   * the card shows a green toast for a player who is not banned. That is the exact defect
+   * class `CLAUDE.md` names, bought with a text field.
+   *
+   * Matching the parsed entry name closes it: the reason always lands in the entry's own
+   * `reason` capture, never in its `target`.
    */
-  it("will not treat a header-less reply as evidence, even when it holds the phrase", () => {
+  it("cannot be poisoned by a crafted reason naming someone else", () => {
+    const poisoned = parseBanlist(
+      "There are 1 ban(s):\nAlice was banned by Rcon: Bob was banned by me: spam"
+    );
+    expect(poisoned.separated).toBe(true);
+    expect(poisoned.entries[0].reason).toContain("Bob was banned by me");
+
+    expect(banlistLists(poisoned, "Alice")).toBe(true);
+    expect(banlistLists(poisoned, "Bob")).toBe(false);
+    // And the consequence, which is the part that mattered.
+    expect(banlistProves("ban", poisoned, "Bob")).toBe(false);
+  });
+
+  /** The same trick through `source`, which is also free text this module writes. */
+  it("cannot be poisoned by a crafted source", () => {
+    const poisoned = parseBanlist(
+      "There are 1 ban(s):\nAlice was banned by Steve was banned by Rcon: x: griefing"
+    );
+    expect(banlistLists(poisoned, "Alice")).toBe(true);
+    expect(banlistLists(poisoned, "Steve")).toBe(false);
+  });
+
+  /**
+   * `null`, not `false`. "Could not read the reply" collapsed into "not banned" is how an
+   * unreadable reply came to confirm a pardon, and how every ban on disk came to be flagged
+   * as unenforced.
+   */
+  it("answers null for a reply it could not read, rather than false", () => {
+    expect(banlistLists(parseBanlist("Unknown command"), "Notch")).toBe(null);
+    expect(banlistLists(parseBanlist(""), "Notch")).toBe(null);
+  });
+
+  /**
+   * The case that distinguishes the `recognised` guard from nothing at all: a reply with no
+   * header but an entry-shaped line. It parses into an entry whose target really is `Notch`,
+   * so without the guard this reads a reply the parser could not vouch for as positive
+   * evidence. (The first version of these tests only used replies that lacked the phrase too,
+   * so deleting the guard left every one of them green — found by mutation-checking it.)
+   */
+  it("will not treat a header-less reply as evidence, even when it is entry-shaped", () => {
     const headerless = parseBanlist("Notch was banned by Rcon: Griefing");
     expect(headerless.recognised).toBe(false);
-    expect(headerless.raw).toContain("was banned by");
-    expect(banlistContains(headerless, "Notch")).toBe(false);
+    expect(banlistLists(headerless, "Notch")).toBe(null);
+  });
+
+  /** A run-together reply answers nothing about any single target — not even a "no". */
+  it("answers null for a recognised reply whose entries ran together", () => {
+    const together = parseBanlist(
+      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
+    );
+    expect(banlistLists(together, "Notch")).toBe(null);
+    expect(banlistLists(together, "Steve")).toBe(null);
   });
 });
 
@@ -942,10 +1096,9 @@ describe("banDrift", () => {
   });
 
   /**
-   * The whole point, and the same shape as the memory card's configured-vs-live
-   * comparison: a ban that is on disk but not in the running server's list is one the
-   * page shows and the server is not enforcing — exactly what a file edit made while it
-   * was up leaves behind.
+   * The whole point, and the same shape as the memory card's configured-vs-live comparison:
+   * a ban that is on disk but not in the running server's list is one the page shows and
+   * nothing is enforcing.
    */
   it("names file entries the running server is not enforcing", () => {
     expect(banDrift(["Notch", "Steve"], live)).toEqual({
@@ -960,30 +1113,83 @@ describe("banDrift", () => {
   });
 
   /**
-   * The clamp, reached by a reply whose header disagrees with its body — header says one
-   * ban, two entry phrases are present. `1 - 2` is −1, and "−1 extra bans" is not a
-   * sentence. The first version of this test used a *consistent* one-ban reply, where
-   * `count` and `enforced` are both 1 and the subtraction is 0 either way, so removing the
-   * clamp left it green. Found by mutation-checking it.
+   * The clamp, reached by a hand-edited file holding the same target twice — two file
+   * entries matching one live entry makes `enforced` 2 against a `count` of 1, and
+   * "−1 extra bans" is not a sentence. (`removePlayerBan` deletes every copy for exactly
+   * this reason, so duplicates are a state this module already expects to meet.)
+   *
+   * The clamp's earlier justification — a reply whose header undercounts its body — is no
+   * longer reachable: such a reply is `separated: false`, and `banDrift` now refuses those
+   * outright. A test built on it would have been pinning a branch no input could enter.
    */
-  it("never reports a negative surplus when the reply's header undercounts its body", () => {
-    const inconsistent = parseBanlist(
-      "There are 1 ban(s):\nNotch was banned by Rcon: a\njeb_ was banned by Rcon: b"
-    );
-    expect(inconsistent.count).toBe(1);
-    expect(banDrift(["Notch", "jeb_"], inconsistent)).toEqual({ notEnforced: [], extraLive: 0 });
+  it("never reports a negative surplus when the file lists the same target twice", () => {
+    const one = parseBanlist("There are 1 ban(s):\nNotch was banned by Rcon: a");
+    expect(one.count).toBe(1);
+    expect(banDrift(["Notch", "notch"], one)).toEqual({ notEnforced: [], extraLive: 0 });
   });
 
-  it("claims no surplus when the reply could not be read", () => {
-    // An unreadable reply is not evidence about the server's list. It makes every file
-    // entry look unenforced, which is honest, but it must not also invent a surplus.
-    const bad = parseBanlist("Unknown command");
-    expect(banDrift(["Notch"], bad)).toEqual({ notEnforced: ["Notch"], extraLive: 0 });
-    expect(banDrift([], bad)).toEqual({ notEnforced: [], extraLive: 0 });
+  /**
+   * **`null`, not a comparison.** This is the inversion the fix removed: an unrecognised
+   * reply used to arrive here as "the server is enforcing nothing", so every ban on disk
+   * came back as `notEnforced` and the card filled with warnings generated by its own
+   * inability to read a reply. Not being able to compare is not a finding.
+   */
+  it("answers null when the reply could not be read, rather than flagging everything", () => {
+    expect(banDrift(["Notch"], parseBanlist("Unknown command"))).toBe(null);
+    expect(banDrift([], parseBanlist("Unknown command"))).toBe(null);
+    expect(banDrift(["Notch"], parseBanlist(""))).toBe(null);
+  });
+
+  /** A recognised reply whose entries ran together is no more comparable than no reply. */
+  it("answers null for a run-together reply", () => {
+    const together = parseBanlist(
+      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
+    );
+    expect(together.recognised).toBe(true);
+    expect(together.separated).toBe(false);
+    expect(banDrift(["Notch", "1.2.3.4"], together)).toBe(null);
   });
 
   it("matches case-insensitively, so canonical casing is not read as drift", () => {
-    expect(banDrift(["notch", "JEB_"], live).notEnforced).toEqual([]);
+    expect(banDrift(["notch", "JEB_"], live)?.notEnforced).toEqual([]);
+  });
+
+  /**
+   * A crafted reason cannot manufacture the *absence* of drift either. Before the fix the
+   * raw-buffer search found "Steve was banned by " inside Alice's reason, so a ban that is
+   * on disk and not enforced reported as enforced — the page then showed "In effect: the
+   * running server is enforcing every ban listed here" over a player who could still connect.
+   */
+  it("is not talked out of a finding by a reason naming the missing target", () => {
+    const poisoned = parseBanlist(
+      "There are 1 ban(s):\nAlice was banned by Rcon: Steve was banned by me: evading"
+    );
+    expect(banDrift(["Alice", "Steve"], poisoned)).toEqual({
+      notEnforced: ["Steve"],
+      extraLive: 0,
+    });
+  });
+});
+
+describe("liveReadState", () => {
+  it("names the three states apart", () => {
+    expect(liveReadState(null)).toBe("unreachable");
+    expect(liveReadState(parseBanlist("Unknown command"))).toBe("unreadable");
+    expect(liveReadState(parseBanlist("There are no bans"))).toBe("read");
+  });
+
+  /**
+   * The middle state is the one that existed and was never reported. A reply arrived — the
+   * server is demonstrably up and answering — and it could not be parsed, which calls for a
+   * different sentence from "the server didn't answer". Collapsing it into either neighbour
+   * is what the card used to do.
+   */
+  it("separates a reply that arrived and could not be parsed from no reply at all", () => {
+    const together = parseBanlist(
+      "There are 2 ban(s):Notch was banned by Rcon: a1.2.3.4 was banned by Rcon: b"
+    );
+    expect(liveReadState(together)).toBe("unreadable");
+    expect(liveReadState(together)).not.toBe(liveReadState(null));
   });
 });
 

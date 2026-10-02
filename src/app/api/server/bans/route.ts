@@ -5,7 +5,8 @@ import { hasPermission } from "@/lib/permissions";
 import { fileLaneBusy } from "@/lib/operation-response";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { containerIsRunning } from "@/lib/game-manager";
-import { sendCommand } from "@/lib/rcon";
+import { sendCommand, sendCommandLong } from "@/lib/rcon";
+import { classifyRconFailure, rconFailureMessage } from "@/lib/rcon-failure";
 import { db } from "@/lib/db";
 import {
   BANLIST_IPS,
@@ -20,6 +21,7 @@ import {
   buildPlayerBan,
   checkBanTarget,
   classifyBanReply,
+  liveReadState,
   pardonCommand,
   parseBanlist,
   parseBannedIpsFile,
@@ -78,19 +80,17 @@ import path from "path";
  *
  * ## Why this is not a `runOperation`
  *
- * Three RCON round trips at most — the liveness probe, the command, the read-back — and
- * they are sequenced so the timeouts mostly cannot stack. A probe that times out (3 s,
- * `rcon.ts`'s default) means the file path, so neither of the other two runs. A probe that
- * answers leaves a live cached socket, so the command and the read-back are sends rather
- * than connects. The realistic bad case is therefore a fast probe plus
- * `BAN_RCON_TIMEOUT_MS` (5 s) plus 3 s ≈ 8 s; the pathological one, where even the
- * successful probe takes its full 3 s, is ~11 s.
+ * Three RCON round trips at most — the liveness probe, the command, the read-back — and they
+ * are sequenced so the deadlines cannot stack beyond the sum of three. The worst case is
+ * each one spending its whole budget: `BANLIST_RCON_TIMEOUT_MS` for the probe, then
+ * `BAN_RCON_TIMEOUT_MS` for the command, then `BANLIST_RCON_TIMEOUT_MS` again for the
+ * read-back. A probe that *times out* means the file path, so neither of the other two runs.
  *
- * So it can just cross the ten seconds `docs/OPERATIONS.md` sets as the threshold, and it
- * is still deliberately not an operation: there is nothing to narrate. No eviction, no
- * stages, no artefact, no resumption — one command and its verification, which a toast
- * carries. A ledger record per ban would be noise in the strip, and `runOperation` is for
- * work whose progress a reader needs to follow, not for work that is merely sometimes slow.
+ * So it can cross the ten seconds `docs/OPERATIONS.md` sets as the threshold, and it is
+ * still deliberately not an operation: there is nothing to narrate. No eviction, no stages,
+ * no artefact, no resumption — one command and its verification, which a toast carries. A
+ * ledger record per ban would be noise in the strip, and `runOperation` is for work whose
+ * progress a reader needs to follow, not for work that is merely sometimes slow.
  */
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
@@ -98,24 +98,30 @@ const PLAYERS_FILE = path.join(MC_DIR, "banned-players.json");
 const IPS_FILE = path.join(MC_DIR, "banned-ips.json");
 
 /**
- * Generous, because `ban <name>` resolves the name through the profile cache and falls
- * back to a Mojang lookup *on the server thread* even with `online-mode=false` — the
- * same hazard the settings page documents for `/op`, where RCON's default 3 s gave up on
- * a server that was fine and still working. 5 s is a guess at a bound, not a
- * measurement: nothing here has been run against the live server.
+ * Generous, because `ban <name>` resolves the name through the profile cache and falls back
+ * to a Mojang lookup *on the server thread* even with `online-mode=false` — the same hazard
+ * the Ops card on the settings page documents for `/op`, where the default gave up on a
+ * server that was fine and still working. 5 s is a guess at a bound, not a measurement:
+ * nothing here has been run against the live server.
+ *
+ * **This value governs only because `rcon.ts` was fixed to let it.** `rcon-client` keeps its
+ * own `config.timeout` (2000 ms) and rejects the send itself when it fires, so until the
+ * cache started passing the caller's budget through at connect time, every number handed to
+ * `sendCommand` was capped at two seconds and the outer race never ran. A constant that
+ * explained a generosity it was not getting is the shape of defect this repo keeps finding,
+ * so if that plumbing is ever reverted, delete this constant rather than leave the comment.
  */
 const BAN_RCON_TIMEOUT_MS = 5000;
 
-/** Same `isUnreachable` test as the console route — see its comment for why both. */
-function isUnreachable(e: unknown): boolean {
-  const code = (e as { code?: unknown })?.code;
-  const msg = e instanceof Error ? e.message : String(e ?? "");
-  return (
-    (typeof code === "string" &&
-      ["ENOTFOUND", "ECONNREFUSED", "EHOSTUNREACH", "ETIMEDOUT"].includes(code)) ||
-    /ENOTFOUND|ECONNREFUSED|EHOSTUNREACH|ETIMEDOUT|timeout/i.test(msg)
-  );
-}
+/**
+ * The budget for a `banlist`, which is a different kind of slow from a `ban`.
+ *
+ * It goes over `sendCommandLong`, which opens its own socket: one handshake, then a reply
+ * that may span several 4096-byte packets, then a quiet window to know it has ended. Longer
+ * than the `ban` budget because the cost scales with how many bans there are, and shorter
+ * than `rconCommandLong`'s own 9 s default because this runs twice per page load.
+ */
+const BANLIST_RCON_TIMEOUT_MS = 6000;
 
 interface BanFiles {
   players: ReturnType<typeof parseBannedPlayersFile>;
@@ -159,10 +165,28 @@ async function writeBanFile(file: string, json: string): Promise<void> {
   await writeFile(file, json, "utf-8");
 }
 
-/** One RCON `banlist`, parsed. `null` when the server could not be asked. */
+/**
+ * One RCON `banlist`, parsed. `null` when the server could not be asked.
+ *
+ * **`sendCommandLong`, not `sendCommand`** — `banlist` enumerates, and one RCON packet
+ * carries at most 4096 bytes of payload. `rcon-client` resolves on the first packet and
+ * silently discards the rest; measured on this box against Project Zomboid's `showoptions`,
+ * a 6,789-byte reply came back as 4,102 and the page showed 79 of 137 settings with no
+ * error (see `src/lib/rcon-frame.ts`). A `banlist` line is a name, a source and a free-text
+ * reason, so a few dozen bans clears that cliff — and the truncation lands exactly where it
+ * does the most harm: this reply **is** the read-back that decides whether a ban is reported
+ * as applied, so a ban that fell off the end reads as absent and a real ban gets reported as
+ * having failed. Confirming a *pardon* from a truncated list is the same hazard with the
+ * sign flipped, which is why `banlistProves` refuses a reply it cannot vouch for.
+ */
 async function readBanlist(kind: BanKind): Promise<BanlistReply | null> {
   try {
-    return parseBanlist(await sendCommand(kind === "player" ? BANLIST_PLAYERS : BANLIST_IPS));
+    return parseBanlist(
+      await sendCommandLong(
+        kind === "player" ? BANLIST_PLAYERS : BANLIST_IPS,
+        BANLIST_RCON_TIMEOUT_MS
+      )
+    );
   } catch {
     return null;
   }
@@ -206,21 +230,39 @@ export async function GET() {
    * The configured-vs-live comparison, the same idea as the memory card: ask the server
    * what it is actually enforcing and report any disagreement with the files. That is the
    * only way "this ban is real" is something the page can show rather than something the
-   * reader assumes — and the disagreement it finds is precisely what a file edit made
-   * while the server was running leaves behind.
+   * reader assumes.
    *
-   * Probed **unconditionally**, not only when docker says the container is up, for two
-   * reasons. It is the same signal `routeBanChange` routes on, so the `path` this GET
-   * predicts is the path the POST will actually take — a prediction derived differently
-   * from the decision is a prediction that will eventually contradict it. And a stopped
-   * world refuses the connection immediately (the compose alias does not resolve), so the
-   * cost is one fast failure per page load rather than a timeout.
+   * Probed **unconditionally**, not only when docker says the container is up: it is the
+   * same signal `routeBanChange` routes on, so the `path` this GET predicts is the path the
+   * POST will actually take — a prediction derived differently from the decision is a
+   * prediction that will eventually contradict it. A stopped world refuses or fails to
+   * resolve immediately, so the cost is two fast failures per page load rather than two
+   * timeouts.
+   *
+   * **The two `banlist` reads are sequential, and that is not an oversight.** Every other RCON
+   * call site in this repo issues one command at a time, and there are two reasons to keep that
+   * true here rather than wrap them in a `Promise.all`.
+   *
+   * `rconCommandLong` opens its own socket per call and ends a reply by waiting for the server
+   * to go quiet — there is no length field and no end marker, so "it stopped talking" is the
+   * only signal available. Two of those in flight at once means the game is interleaving two
+   * multi-packet replies while each side's quiet window is already running, which makes the one
+   * heuristic the drain depends on depend on the other command's timing.
+   *
+   * And if either of these ever moves back to the cached socket, concurrency becomes actively
+   * wrong rather than merely wasteful: `getRcon` has no in-flight dedupe, so two callers that
+   * find no cached socket both connect and the loser is overwritten in the map and leaked, and
+   * `rcon-client` is `maxPending: 1`, so the second command queues behind the first while its
+   * own deadline is already counting down.
    */
-  const [running, livePlayers, liveIps] = await Promise.all([
-    containerIsRunning("minecraft").catch(() => false),
-    readBanlist("player"),
-    readBanlist("ip"),
-  ]);
+  const running = await containerIsRunning("minecraft").catch(() => false);
+  const livePlayers = await readBanlist("player");
+  const liveIps = await readBanlist("ip");
+
+  const drift = {
+    players: livePlayers && banDrift(fileTargets("player", files), livePlayers),
+    ips: liveIps && banDrift(fileTargets("ip", files), liveIps),
+  };
 
   return NextResponse.json({
     // `withCreatedIso` because the settings page cannot import this module at runtime —
@@ -234,31 +276,34 @@ export async function GET() {
     malformed: { players: files.players.malformed, ips: files.ips.malformed },
     running,
     /**
-     * Where a change made right now would go — from the same function the mutation uses,
-     * on the same two signals. The UI says it *before* the button, so it has to be the
-     * same answer the button will produce.
+     * Where a change made right now would go — from the same function the mutation uses, on
+     * the same two signals. The UI says it *before* the button, so it has to be the same
+     * answer the button will produce.
+     *
+     * `rconAnswering` is "either read got a reply", not "the players read got a reply". Both
+     * go to the same socket, so in practice they agree — but the mutation probes whichever
+     * kind it was asked about, so predicting from only one of the two would make this page
+     * contradict its own button for an IP ban in exactly the moment the player read happened
+     * to fail. "Something answered" is the signal `routeBanChange` is actually about.
      */
-    path: routeBanChange({ containerRunning: running, rconAnswering: livePlayers !== null }).path,
-    live:
-      livePlayers || liveIps
-        ? {
-            players: livePlayers
-              ? { count: livePlayers.count, recognised: livePlayers.recognised }
-              : null,
-            ips: liveIps ? { count: liveIps.count, recognised: liveIps.recognised } : null,
-          }
-        : null,
+    path: routeBanChange({
+      containerRunning: running,
+      rconAnswering: livePlayers !== null || liveIps !== null,
+    }).path,
     /**
-     * `running && !live` is its own state: the container is up and not answering. The UI
-     * must not render that as "no drift", because nothing was compared.
+     * Three states per list, not two — see `liveReadState`. "Did not answer" and "answered
+     * with something unreadable" need different sentences on the page, and collapsing them
+     * is what made an unrecognised reply report every ban on disk as unenforced.
      */
-    drift:
-      livePlayers && liveIps
-        ? {
-            players: banDrift(fileTargets("player", files), livePlayers),
-            ips: banDrift(fileTargets("ip", files), liveIps),
-          }
-        : null,
+    live: { players: liveReadState(livePlayers), ips: liveReadState(liveIps) },
+    /**
+     * `null` per list when there was nothing to compare against — no reply, or a reply whose
+     * entries could not be told apart. The UI must not render either as "no drift", because
+     * nothing was compared. Kept per kind rather than collapsed to one nullable pair: the
+     * player list can be readable while the IP list is not, and that is a comparison worth
+     * reporting for the half that worked.
+     */
+    drift,
   });
 }
 
@@ -298,12 +343,21 @@ async function applyBanChange(
   const { kind, target } = checked;
 
   /**
-   * One probe, two signals, and the probe is the one that decides.
+   * Two signals, and the RCON one decides.
    *
    * A live RCON socket is proof the game is up; `containerIsRunning` is a report, and
    * `containerState` answers `"missing"` for any `docker inspect` failure — so routing on
-   * docker alone can send a write to a file that a running game will overwrite. The probe
-   * doubles as the "before" read, which is why this costs one command rather than two.
+   * docker alone can send a write to a file that a running game will overwrite.
+   *
+   * The reply itself is deliberately **not** kept as a "before" state. It would be the cheap
+   * way to decide a no-op, and it would be the wrong one: it is read before the command and
+   * the question is what is true after. `classifyBanReply` cross-checked against the
+   * read-back is what answers that, and the probe's only job is "did anything answer".
+   *
+   * Concurrent here, unlike the two `banlist` reads in the GET, and for a reason rather than
+   * by accident: these are two different subsystems — one forks `docker inspect`, the other
+   * opens a socket — so neither queues behind the other and there is no shared client for
+   * them to race on.
    */
   const [running, probe] = await Promise.all([
     containerIsRunning("minecraft").catch(() => false),
@@ -319,7 +373,7 @@ async function applyBanChange(
 
   const result =
     routing.path === "rcon"
-      ? await applyViaRcon(action, kind, target, input.reason)
+      ? await applyViaRcon(action, kind, target, input.reason, running)
       : await applyViaFile(action, kind, target, input.reason, session.user.name);
 
   if ("response" in result) return result.response;
@@ -398,7 +452,8 @@ async function applyViaRcon(
   action: "ban" | "pardon",
   kind: BanKind,
   target: string,
-  reason: unknown
+  reason: unknown,
+  containerRunning: boolean
 ): Promise<ChangeResult> {
   const command =
     action === "ban" ? banCommand(kind, target, reason) : pardonCommand(kind, target);
@@ -407,21 +462,36 @@ async function applyViaRcon(
   try {
     reply = await sendCommand(command, BAN_RCON_TIMEOUT_MS);
   } catch (e) {
-    if (isUnreachable(e)) {
-      /**
-       * A *different* failure from `routeBanChange`'s refusal, and it gets its own
-       * sentence: the probe answered moments ago, so the server went away between the
-       * check and the command — a stop or a crash mid-request, not a wedged game loop.
-       * Still a 503, and still no fall-back to the file: whether the game is on its way
-       * down or already gone, it may yet rewrite both files from the list it had.
-       */
+    /**
+     * `classifyRconFailure` rather than one regex over the message, because the two failures
+     * that land here mean opposite things and the first version of this route read them as
+     * one. `ETIMEDOUT` as a socket `code` is the kernel abandoning the handshake — nothing
+     * answered. The bare `"timeout"` that `rcon.ts` raises is the opposite: the handshake
+     * succeeded and the game went quiet, so the server is demonstrably there.
+     *
+     * **This is why the sentence cannot claim the ban did not happen.** The probe answered a
+     * moment ago, and a `no-reply` means only that the *reply* never arrived — the command
+     * was written to a live socket and the server may well have executed it, which on this
+     * path means the server has already rewritten `banned-players.json` itself. The first
+     * version of this body asserted both "the ban was not applied" and "Nothing was written
+     * to the ban files"; neither is established, and the second would be false in precisely
+     * the case that matters. Say what is known: the outcome is unknown, and re-reading the
+     * list is how to find out.
+     *
+     * Still a 503 and still no fall-back to the file, for the same reason as
+     * `routeBanChange`'s refusal: whether the game is on its way down or already gone, it
+     * may yet rewrite both files from the list it had.
+     */
+    const failure = classifyRconFailure(e);
+    if (failure !== "game-error") {
+      const detail = rconFailureMessage(failure, containerRunning, "The Minecraft server");
       return {
         response: NextResponse.json(
           {
             error:
-              "The Minecraft server answered a moment ago and then stopped responding, so " +
-              "the ban was not applied. Nothing was written to the ban files. Check whether " +
-              "the server is still up, then try again.",
+              `${detail} It answered moments ago, so whether it applied the ${action} ` +
+              `before going quiet is unknown — reload this page to see its current list ` +
+              `rather than retrying blind.`,
           },
           { status: 503 }
         ),
@@ -514,6 +584,15 @@ async function applyViaFile(
 
   if (kind === "player") {
     let next: BannedPlayerEntry[];
+    /**
+     * The entries this write is answerable for — the one being added, and nothing else.
+     *
+     * Passing the whole list made one pre-existing entry the dashboard dislikes (an older
+     * version's, or a hand-edited one, with a blank `uuid`) refuse *every* file-path edit,
+     * including the pardon that would have removed it, and the 500 it answered named that
+     * entry rather than the player the request was about. See `serializePlayerBans`.
+     */
+    let requires: BannedPlayerEntry[];
     if (action === "ban") {
       const entry = buildPlayerBan({ name: target, source, reason });
       /**
@@ -533,28 +612,35 @@ async function applyViaFile(
       const added = addPlayerBan(files.players.entries, withIds.entries[0]);
       next = added.list;
       changed = added.added;
+      requires = [withIds.entries[0]];
     } else {
       const removed = removePlayerBan(files.players.entries, target);
       next = removed.list;
       changed = removed.removed > 0;
+      // A pardon adds nothing, so there is nothing for this write to be answerable for.
+      requires = [];
     }
-    const ser = serializePlayerBans(next);
+    const ser = serializePlayerBans(next, requires);
     // The backstop for the blank-UUID bug. Reaching it means something above skipped the
     // resolution, which is a bug worth a refusal rather than a file the game ignores.
     if (!ser.ok) return { response: NextResponse.json({ error: ser.error }, { status: 500 }) };
     json = ser.json;
   } else {
     let next: BannedIpEntry[];
+    let requires: BannedIpEntry[];
     if (action === "ban") {
-      const added = addIpBan(files.ips.entries, buildIpBan({ ip: target, source, reason }));
+      const entry = buildIpBan({ ip: target, source, reason });
+      const added = addIpBan(files.ips.entries, entry);
       next = added.list;
       changed = added.added;
+      requires = [entry];
     } else {
       const removed = removeIpBan(files.ips.entries, target);
       next = removed.list;
       changed = removed.removed > 0;
+      requires = [];
     }
-    const ser = serializeIpBans(next);
+    const ser = serializeIpBans(next, requires);
     if (!ser.ok) return { response: NextResponse.json({ error: ser.error }, { status: 500 }) };
     json = ser.json;
   }

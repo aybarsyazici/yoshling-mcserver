@@ -34,6 +34,12 @@ import { isValidMcName, isValidUuid } from "@/lib/mc-identity";
  * locale-dependent. A parser built on them *will* eventually stop matching, so the
  * design makes that case say "could not confirm" rather than "done".
  *
+ * That cuts both ways and is the second thing to know about the read-back: **`reason` and
+ * `source` are free text the server echoes straight back into the `banlist` reply.** So the
+ * reply is not a trusted document — part of it is operator input, and anything that reads it
+ * has to read *structure* rather than search text. `banlistLists` does, `banlistUsable` says
+ * when the structure is recoverable at all, and nothing matches on the raw buffer.
+ *
  * ## Deliberately not supported
  *
  * **Temporary bans.** `banned-players.json` has an `expires` field, but vanilla's
@@ -415,6 +421,23 @@ export function parseBannedIpsFile(raw: string): ParsedBanFile<BannedIpEntry> {
 }
 
 /**
+ * Why this entry must not be written, or `null` if it may be. One sentence naming the entry
+ * it is about, so no caller has to guess which of a list it refers to.
+ */
+export function banEntryRefusal(e: BannedPlayerEntry): string | null {
+  if (!isValidMcName(e.name)) {
+    return `Refusing to write a ban entry with the name "${e.name}".`;
+  }
+  if (!isValidUuid(e.uuid)) {
+    return (
+      `Refusing to write a ban for "${e.name}" with no UUID — Minecraft matches bans ` +
+      `by UUID and would ignore it.`
+    );
+  }
+  return null;
+}
+
+/**
  * Serialize for disk, or refuse.
  *
  * **This is where the blank-UUID bug is made impossible rather than merely avoided.**
@@ -428,30 +451,45 @@ export function parseBannedIpsFile(raw: string): ParsedBanFile<BannedIpEntry> {
  * backstop that makes forgetting to call it a refusal instead of a silent nothing, and
  * it is a `Result` rather than a `throw` so the route answers 500 with a sentence
  * instead of a stack trace.
+ *
+ * ## `require` — whose entries this write is answerable for
+ *
+ * Only the entries named in `require` are checked. The rest of the list is carried through
+ * **unchanged**, and that is deliberate rather than lax.
+ *
+ * Validating all of them turned one pre-existing entry the dashboard dislikes — a ban added
+ * by an older version, or by hand, with a blank `uuid` — into a refusal of *every* file-path
+ * edit, including the pardon that would have removed it. A list that cannot be edited is
+ * not a protected list. Worse, the sentence that came back named whichever entry the loop
+ * reached first, so a 500 about "Herobrine" was returned to someone banning "Notch": the
+ * error pointed at the wrong player and at a write they had not asked for.
+ *
+ * Carrying a bad entry through does not make it worse. It is already on disk, the game
+ * already ignores it, and `banDrift` is what surfaces it while the server is running. What
+ * must never happen is *this* route creating one, and `require` is exactly the set that
+ * could: the entry being added. A pardon adds nothing, so it requires nothing — it passes
+ * `[]` and can always proceed.
+ *
+ * The default is every entry, so a caller that forgets the argument gets the strict
+ * behaviour rather than the permissive one.
  */
 export function serializePlayerBans(
-  entries: BannedPlayerEntry[]
+  entries: BannedPlayerEntry[],
+  require: BannedPlayerEntry[] = entries
 ): { ok: true; json: string } | { ok: false; error: string } {
-  for (const e of entries) {
-    if (!isValidMcName(e.name)) {
-      return { ok: false, error: `Refusing to write a ban entry with the name "${e.name}".` };
-    }
-    if (!isValidUuid(e.uuid)) {
-      return {
-        ok: false,
-        error:
-          `Refusing to write a ban for "${e.name}" with no UUID — Minecraft matches bans ` +
-          `by UUID and would ignore it.`,
-      };
-    }
+  for (const e of require) {
+    const refusal = banEntryRefusal(e);
+    if (refusal) return { ok: false, error: refusal };
   }
   return { ok: true, json: JSON.stringify(entries, null, 2) };
 }
 
+/** `require` means the same thing here as in `serializePlayerBans` — see its comment. */
 export function serializeIpBans(
-  entries: BannedIpEntry[]
+  entries: BannedIpEntry[],
+  require: BannedIpEntry[] = entries
 ): { ok: true; json: string } | { ok: false; error: string } {
-  for (const e of entries) {
+  for (const e of require) {
     // IPs are matched as strings, so there is no identity to resolve — but an
     // unvalidated value still lands in a file the game parses, which is the other half
     // of the same lesson.
@@ -571,8 +609,6 @@ export function classifyBanReply(reply: string): BanReplyVerdict {
 }
 
 export interface BanlistReply {
-  /** The reply as received, kept so `banlistContains` can search it. */
-  raw: string;
   /** The N from "There are N ban(s):", or 0 for "There are no bans". `null` if absent. */
   count: number | null;
   /**
@@ -589,8 +625,16 @@ export interface BanlistReply {
    * between them, so `"...GriefingNotch was banned by..."` has no reading that
    * distinguishes the reason from the name. Rather than guess, the header count is
    * cross-checked against the number of lines that parsed; a mismatch drops `entries`
-   * and sets this false. The caller then uses the json file for the records and
-   * `banlistContains` for the yes/no — both of which are unaffected.
+   * and sets this false.
+   *
+   * **A reply that is not `separated` answers nothing about any single target**, which is
+   * why `banlistUsable` requires it. A previous version searched the raw buffer for
+   * `"<name> was banned by "` on the grounds that the phrase is unambiguous wherever it
+   * appears — it is not: `reason` and `source` are free text the server echoes back into
+   * this same reply, so one ban carrying the reason `"Bob was banned by me: spam"` makes
+   * every later read-back answer "Bob is banned" whether he is or not. The read-back is
+   * the only thing that decides whether this feature claims success, so that search was a
+   * way for a crafted reason to buy a green toast.
    */
   separated: boolean;
   /** True when this looked like a banlist answer at all. */
@@ -607,12 +651,12 @@ const BANLIST_ENTRY = /^(\S+) was banned by (.+?): ([\s\S]*)$/;
 
 export function parseBanlist(raw: string): BanlistReply {
   const text = raw.replace(/\r\n/g, "\n");
-  const none = { raw, count: 0, entries: [], separated: true, recognised: true };
+  const none = { count: 0, entries: [], separated: true, recognised: true };
 
   if (/There are no bans/i.test(text)) return none;
 
   const header = /There are (\d+) ban\(s\):/i.exec(text);
-  if (!header) return { raw, count: null, entries: [], separated: false, recognised: false };
+  if (!header) return { count: null, entries: [], separated: false, recognised: false };
 
   const count = Number(header[1]);
   const rest = text.slice(header.index + header[0].length);
@@ -631,24 +675,43 @@ export function parseBanlist(raw: string): BanlistReply {
   // "it parsed" is not evidence. "It parsed into as many entries as the server said
   // there are" is.
   const separated = entries.length === count;
-  return { raw, count, entries: separated ? entries : [], separated, recognised: true };
+  return { count, entries: separated ? entries : [], separated, recognised: true };
 }
 
 /**
- * Is `target` in this ban list?
+ * Can this reply be read as a list of entries at all?
  *
- * A substring search for `"<target> was banned by "`, which is the one question that
- * can be answered **whether or not the reply was separated** — the phrase is
- * unambiguous wherever it appears in the buffer. That is why this, and not
- * `entries`, is what proves a ban or a pardon took effect.
- *
- * Case-insensitive: the operator may type `notch` while the server prints the
- * profile's canonical `Notch`. For an IPv4 target case is irrelevant, so the same
- * comparison is safe for both kinds.
+ * The gate on every question asked of a `banlist` reply. Both halves are needed:
+ * `recognised` says it looked like a banlist answer, `separated` says the entries could be
+ * told apart. "There are no bans" satisfies both — it is a complete, readable list that
+ * happens to be empty, and a pardon read back against it is genuinely proved.
  */
-export function banlistContains(reply: BanlistReply, target: string): boolean {
-  if (!reply.recognised) return false;
-  return reply.raw.toLowerCase().includes(`${target.trim().toLowerCase()} was banned by `);
+export function banlistUsable(reply: BanlistReply): boolean {
+  return reply.recognised && reply.separated;
+}
+
+/**
+ * Does this ban list hold `target`? **`null` means the reply could not be read**, which is
+ * not the same as "no" and must never be collapsed into it.
+ *
+ * Matched against the **parsed** `target` of each entry, not against a substring of the
+ * reply buffer. That distinction is the whole point: `reason` and `source` are free text
+ * the server echoes back into this reply, so a ban stored with the reason
+ * `"Bob was banned by me: spam"` makes a raw-buffer search answer "Bob is banned" for a
+ * Bob who is not — and since this function is what proves a ban or pardon took effect,
+ * that bought a green toast for a ban that did not happen. A per-entry match cannot be
+ * poisoned that way: the reason always lands in the entry's own `reason` capture, never in
+ * its `target`. Replies whose entry boundaries are unrecoverable are refused rather than
+ * guessed at, which is what the `null` is.
+ *
+ * Case-insensitive: the operator may type `notch` while the server prints the profile's
+ * canonical `Notch`. For an IPv4 target case is irrelevant, so the same comparison is safe
+ * for both kinds.
+ */
+export function banlistLists(reply: BanlistReply, target: string): boolean | null {
+  if (!banlistUsable(reply)) return null;
+  const wanted = target.trim().toLowerCase();
+  return reply.entries.some((e) => e.target.trim().toLowerCase() === wanted);
 }
 
 /**
@@ -668,9 +731,32 @@ export function banlistProves(
   reply: BanlistReply,
   target: string
 ): boolean | null {
-  if (!reply.recognised) return null;
-  const present = banlistContains(reply, target);
+  const present = banlistLists(reply, target);
+  if (present === null) return null;
   return action === "ban" ? present : !present;
+}
+
+/** How much a `banlist` read is worth, as three distinguishable states. */
+export type LiveRead =
+  /** No reply at all — the command threw, so the server was not asked successfully. */
+  | "unreachable"
+  /** A reply arrived and could not be read as a list of entries. */
+  | "unreadable"
+  /** A reply arrived and parsed. Comparisons against it mean something. */
+  | "read";
+
+/**
+ * Which of the three a reply is. `null` in means the RCON call failed.
+ *
+ * The three have to stay apart in the response body because the page says a different
+ * thing about each, and the first version collapsed the middle one: an unrecognised reply
+ * still produced a non-null parse, so "could not read the server's list" was reported as
+ * "the server is enforcing nothing" and every ban on disk was flagged as not enforced. The
+ * `recognised` flag existed and nothing read it, which is how that got through.
+ */
+export function liveReadState(reply: BanlistReply | null): LiveRead {
+  if (!reply) return "unreachable";
+  return banlistUsable(reply) ? "read" : "unreadable";
 }
 
 // ── Which path, and what to say about it ────────────────────────────────────
@@ -792,9 +878,14 @@ export function banMessage(o: BanOutcome): string {
 
 export interface BanDrift {
   /**
-   * Targets the file lists that the running server does not. Each one is a ban that
-   * looks real on the page and is not being enforced — which is what a file edit made
-   * while the server was up leaves behind.
+   * Targets the file lists that the running server's own list does not.
+   *
+   * **The cause is not single**, and saying so was a false claim worth deleting rather than
+   * softening. The common one is a file edit made while the server was up, which it then
+   * rewrites away. But a file entry whose `uuid` the game could not use is also listed here
+   * and never enforced; so is an entry naming an account the server resolves to a different
+   * canonical name. What every member of this list has in common is only what it is called:
+   * on disk, not in the running server's list. The page says that and stops.
    */
   notEnforced: string[];
   /** How many live bans the file does not account for. */
@@ -802,25 +893,35 @@ export interface BanDrift {
 }
 
 /**
- * Compare `banned-*.json` against what the running server reports.
+ * Compare `banned-*.json` against what the running server reports. **`null` when the reply
+ * could not be read**, because there is no comparison to report in that case.
  *
  * The same shape as the memory card's configured-vs-live comparison, and for the same
- * reason: it makes "applied" something the page can show rather than something the
- * reader has to assume. Both directions are reported because they have different
- * causes — `notEnforced` means the file was edited behind the server's back, while
- * `extraLive` means the server holds bans that are not on disk.
+ * reason: it makes "applied" something the page can show rather than something the reader
+ * has to assume.
+ *
+ * The `null` is the fix for a straightforward inversion. An unrecognised reply used to
+ * reach this function as "zero bans live", so every ban on disk came out as `notEnforced` —
+ * a wall of false warnings produced by not being able to read, which is the opposite of
+ * what the comparison is for. `banlistUsable` is the gate, and `liveReadState` is what the
+ * route sends so the page can say which of the two happened.
  */
-export function banDrift(fileTargets: string[], reply: BanlistReply): BanDrift {
-  const notEnforced = fileTargets.filter((t) => !banlistContains(reply, t));
+export function banDrift(fileTargets: string[], reply: BanlistReply): BanDrift | null {
+  if (!banlistUsable(reply)) return null;
+
+  const notEnforced = fileTargets.filter((t) => banlistLists(reply, t) === false);
   const enforced = fileTargets.length - notEnforced.length;
   /**
-   * Clamped, because the header count and the phrase count can disagree — a reply whose
-   * header says 1 while the body holds two entries yields `1 - 2`, and "−1 extra bans" is
-   * not a sentence. One guard rather than two: an unreadable reply has `count === null`
-   * *and* makes `banlistContains` answer false for everything, so `?? 0` covers it and a
-   * separate null branch would be a line no input can reach — which is a line no test can
-   * pin. (Mutation-checked: an earlier version had both, and deleting either left the
-   * suite green.)
+   * Clamped, and the clamp is reachable: a hand-edited file may hold the same target twice
+   * (`removePlayerBan` deletes every copy for exactly that reason), so two file entries can
+   * match one live entry and `enforced` can exceed `count`. "−1 extra bans" is not a
+   * sentence.
+   *
+   * One guard rather than two. `count === null` only happens on an unrecognised reply, and
+   * `banlistUsable` has already returned above for those — so `?? 0` is unreachable
+   * defensive spelling rather than a branch, and a separate null arm would be a line no
+   * input can reach and no test can pin. (Mutation-checked: an earlier version had both,
+   * and deleting either left the suite green.)
    */
   const extraLive = Math.max(0, (reply.count ?? 0) - enforced);
   return { notEnforced, extraLive };

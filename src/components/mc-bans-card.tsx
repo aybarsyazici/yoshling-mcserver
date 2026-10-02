@@ -15,7 +15,7 @@ import { GAMES } from "@/lib/games";
  * builtins in the browser bundle. `import type` is erased, so this costs nothing at
  * runtime; the API sends `createdIso` precisely so no date parsing is needed on this side.
  */
-import type { BannedIpEntry, BannedPlayerEntry } from "@/lib/mc-bans";
+import type { BannedIpEntry, BannedPlayerEntry, LiveRead } from "@/lib/mc-bans";
 
 /**
  * Bans — the third of the whitelist/ops/bans set, and the only one of the three whose
@@ -36,9 +36,14 @@ import type { BannedIpEntry, BannedPlayerEntry } from "@/lib/mc-bans";
  *     nothing enforces it.
  *
  * There is no Save button, deliberately. Ops and whitelist edit a local array and PUT the
- * whole thing, so an un-saved edit sits on screen looking applied; here each add and
- * remove is its own request with its own verified outcome, and the list is **replaced
- * with what the server read back** rather than optimistically mutated.
+ * whole thing, so an un-saved edit sits on screen looking applied; here each add and remove
+ * is its own request with its own verified outcome, and the lists are **replaced with what
+ * the route re-read off disk** rather than optimistically mutated.
+ *
+ * Off *disk* — said precisely because on the RCON path the two are not the same thing. The
+ * files are what the stopped server will load; the `banlist` reply is what the running one is
+ * enforcing. The rows come from the files and the drift notice is what compares them, so
+ * "read back" here does not mean "confirmed by the server".
  */
 
 interface BanDrift {
@@ -62,11 +67,18 @@ interface BansState {
    * remove from the power controls.
    */
   path: "rcon" | "file" | "refuse";
-  live: {
-    players: { count: number | null; recognised: boolean } | null;
-    ips: { count: number | null; recognised: boolean } | null;
-  } | null;
-  drift: { players: BanDrift; ips: BanDrift } | null;
+  /**
+   * What each `banlist` read was worth — see `liveReadState` in `mc-bans`.
+   *
+   * Three states because "the server never answered" and "the server answered with
+   * something that could not be read" call for different sentences, and this card is the
+   * only place either of them is visible. An earlier version carried `recognised` here and
+   * never read it, which is how an unrecognised reply came to be reported as "the server is
+   * enforcing nothing".
+   */
+  live: { players: LiveRead; ips: LiveRead };
+  /** `null` per list when nothing was compared — no reply, or an unreadable one. */
+  drift: { players: BanDrift | null; ips: BanDrift | null };
 }
 
 const TINT = GAMES.minecraft.tint;
@@ -132,9 +144,13 @@ export function McBansCard() {
 
       if (!res.ok) {
         toast.error(data.error || `Couldn't ${action === "ban" ? "ban" : "unban"} ${target}`);
-        // A refusal can still have changed the files (a partial is impossible here, but a
-        // 409 on a malformed file means the lists on screen are worth re-reading), and a
-        // 503 means the running state may have changed under us.
+        /**
+         * Re-read anyway, because **a refusal does not mean nothing happened**. The 503 for
+         * "answered, then went quiet" is the case that forces this: the command went out on a
+         * socket the probe had just proved live, so the server may have executed it and
+         * rewritten the ban file itself before going silent. The route's own sentence says the
+         * outcome is unknown and points here; the reload is what makes that advice work.
+         */
         await load();
         return;
       }
@@ -142,9 +158,12 @@ export function McBansCard() {
       if (data.noop) toast.info(data.message);
       else toast.success(data.message);
 
+      // Only the field that was submitted. Clearing both wiped a half-typed address when a
+      // player ban succeeded, which is a silent loss of the operator's own input in the one
+      // moment they were told everything went right.
       if (action === "ban") {
-        setNewPlayer("");
-        setNewIp("");
+        if (kind === "player") setNewPlayer("");
+        else setNewIp("");
         setReason("");
       }
       // Replace the lists with what the route read back off disk rather than mutating
@@ -166,18 +185,41 @@ export function McBansCard() {
 
   const totalBans = state.players.length + state.ips.length;
   const drift = state.drift;
-  const notEnforced = [...(drift?.players.notEnforced ?? []), ...(drift?.ips.notEnforced ?? [])];
-  const extraLive = (drift?.players.extraLive ?? 0) + (drift?.ips.extraLive ?? 0);
+  const notEnforced = [...(drift.players?.notEnforced ?? []), ...(drift.ips?.notEnforced ?? [])];
+  const extraLive = (drift.players?.extraLive ?? 0) + (drift.ips?.extraLive ?? 0);
   const unreadable = state.unreadable.players + state.unreadable.ips;
-  const malformed = state.malformed.players || state.malformed.ips;
   /**
-   * Both reasons a change cannot be made right now, so every control reads the one flag.
-   * `refuse` is the container-up-but-silent state and `malformed` is an unparseable ban
-   * file; in both cases the route answers non-2xx, and an enabled button that is certain
-   * to be refused is the exact shape the `can: {}` flags were added to remove from the
-   * power controls.
+   * **Both** lists were compared. The green "in effect" line below speaks for everything on
+   * the card, so one readable list out of two does not earn it — a player list that checked
+   * out says nothing about the IP bans sitting underneath it.
    */
-  const cannotChange = malformed || state.path === "refuse";
+  const compared = drift.players !== null && drift.ips !== null;
+  /** The server answered and its list could not be parsed — not the same as not answering. */
+  const unparsedReply = state.live.players === "unreadable" || state.live.ips === "unreadable";
+
+  /**
+   * **Per kind, and gated on the path that is actually in use.**
+   *
+   * A malformed ban file only blocks a change that has to go *through* that file. On the
+   * RCON path the route never opens it — it sends `ban`/`pardon` and reads the server's own
+   * list back — so disabling the controls for a bad `banned-players.json` took away the one
+   * working way to ban somebody, and the notice beside it said bans could not be changed
+   * while they could. `refuse` is the other reason, and that one really does apply to both
+   * kinds: nothing can be changed while the container is up and silent.
+   *
+   * Per kind because the two files fail independently: an unparseable `banned-players.json`
+   * says nothing about whether an IP can be banned.
+   */
+  const blockedForFile = (kind: "players" | "ips") =>
+    state.path === "file" && state.malformed[kind];
+  const cannotChangePlayers = state.path === "refuse" || blockedForFile("players");
+  const cannotChangeIps = state.path === "refuse" || blockedForFile("ips");
+
+  /** Which files are unparseable, named, so the notices can say which and what follows. */
+  const badFiles = [
+    state.malformed.players && "banned-players.json",
+    state.malformed.ips && "banned-ips.json",
+  ].filter(Boolean) as string[];
 
   return (
     <Card className="border-border/50 shadow-sm" style={{ ["--tint" as string]: TINT }}>
@@ -186,9 +228,9 @@ export function McBansCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {/*
-          Which path a change will take, stated before the button rather than after the
-          fact. The two cards below this one can honestly say "restart to apply" because
-          a whitelist edit is only ever a file write; a ban is not.
+          Which path a change will take, stated before the button rather than after the fact.
+          The ops and whitelist cards further up this page can honestly say "restart to apply"
+          because an edit to either is only ever a file write; a ban is not.
         */}
         <p className="text-xs text-muted-foreground">
           {state.path === "rcon"
@@ -209,10 +251,30 @@ export function McBansCard() {
           </Notice>
         )}
 
-        {malformed && (
+        {/*
+          Two different things to say about an unparseable file, because what follows from it
+          depends entirely on which path a change takes. On the file path it blocks the edit;
+          on the RCON path it does not block anything, and claiming it did was false — but
+          the list below is still short by however much the file holds, so silence would be
+          wrong too.
+        */}
+        {badFiles.length > 0 && state.path === "file" && (
           <Notice tone="bad">
-            One of the ban files isn&apos;t valid JSON. Bans can&apos;t be changed until
-            that&apos;s fixed — rewriting the file would delete the bans already in it.
+            {badFiles.join(" and ")} {badFiles.length === 1 ? "isn't" : "aren't"} valid JSON.
+            The server is stopped, so a change has to go through{" "}
+            {badFiles.length === 1 ? "that file" : "those files"} — and rewriting{" "}
+            {badFiles.length === 1 ? "it" : "them"} would delete the bans already there, so
+            that half of this card is blocked until it&apos;s fixed.
+          </Notice>
+        )}
+
+        {badFiles.length > 0 && state.path !== "file" && (
+          <Notice tone="warn">
+            {badFiles.join(" and ")} {badFiles.length === 1 ? "isn't" : "aren't"} valid JSON,
+            so the {badFiles.length === 1 ? "list" : "lists"} below {" "}
+            {badFiles.length === 1 ? "leaves" : "leave"} out whatever the file holds. Bans
+            still work — the server is running, so they go over RCON and never touch the file
+            — but fix the file before stopping it, or it will start with no bans.
           </Notice>
         )}
 
@@ -224,16 +286,25 @@ export function McBansCard() {
         )}
 
         {/*
-          The configured-vs-live comparison. `notEnforced` is the one that matters: those
-          bans are on disk, shown on this page, and the running server is not applying
-          them — which is what editing the file behind a running server leaves behind.
+          The configured-vs-live comparison. `notEnforced` is the one that matters: those bans
+          are on disk, shown on this page, and the running server's own list does not hold
+          them.
+
+          Deliberately **not** attributed to one cause. The copy used to assert "the files
+          were changed while it was up" for every entry; that is the common cause and not the
+          only one — an entry whose uuid the game cannot use lands here too, and so does one
+          naming an account the server resolves to a different canonical name. A sentence that
+          names the wrong cause sends the reader to fix the wrong thing, so this one says what
+          was observed and offers the restart as what to try.
         */}
         {notEnforced.length > 0 && (
           <Notice tone="warn">
-            The running server isn&apos;t enforcing {notEnforced.length} of these:{" "}
-            <strong className="text-foreground">{notEnforced.join(", ")}</strong>. The files
-            were changed while it was up, so it still has its own list. Restart it to load
-            these.
+            {notEnforced.length} of these {notEnforced.length === 1 ? "is" : "are"} on disk but
+            not in the running server&apos;s own ban list:{" "}
+            <strong className="text-foreground">{notEnforced.join(", ")}</strong>. Nothing is
+            enforcing {notEnforced.length === 1 ? "it" : "them"} right now. Most often the
+            files were changed while the server was up, in which case restarting it loads{" "}
+            {notEnforced.length === 1 ? "this" : "these"}.
           </Notice>
         )}
 
@@ -245,19 +316,28 @@ export function McBansCard() {
         )}
 
         {/*
-          "Up, but its list could not be read" is not the same as "no drift", and must not
-          render as the green line below. The `refuse` notice already covers the common
-          cause; this catches the case where one of the two banlist reads came back and the
-          other did not, so no comparison was made.
+          Two distinct failures, and they used to share one sentence. "Nothing answered" is
+          usually a server on its way up or down; "answered with something unreadable" is a
+          reply this parser could not take apart — a non-English locale, a modded reply, or
+          entry lines run together with no separator — and it means the comparison is
+          unavailable for a server that is demonstrably fine. Either way: not "no drift".
         */}
-        {state.running && state.drift === null && state.path !== "refuse" && (
+        {unparsedReply && (
+          <Notice tone="warn">
+            The server answered, but its ban list came back in a form this page
+            couldn&apos;t read, so nothing below has been checked against what it&apos;s
+            actually enforcing.
+          </Notice>
+        )}
+
+        {state.running && !compared && !unparsedReply && state.path !== "refuse" && (
           <Notice tone="warn">
             The server&apos;s ban list couldn&apos;t be read, so nothing below has been
             checked against what it is actually enforcing.
           </Notice>
         )}
 
-        {state.drift && notEnforced.length === 0 && extraLive === 0 && totalBans > 0 && (
+        {compared && notEnforced.length === 0 && extraLive === 0 && totalBans > 0 && (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Check className="h-3.5 w-3.5" style={{ color: TINT }} />
             In effect: the running server is enforcing every ban listed here.
@@ -277,9 +357,9 @@ export function McBansCard() {
                   icon={User}
                   label={p.name}
                   meta={[p.reason, p.source && `by ${p.source}`, shortDate(p.createdIso)]}
-                  stale={drift?.players.notEnforced.includes(p.name) ?? false}
+                  stale={drift.players?.notEnforced.includes(p.name) ?? false}
                   busy={busy === `player:${p.name}`}
-                  disabled={busy !== null || cannotChange}
+                  disabled={busy !== null || cannotChangePlayers}
                   onRemove={() => change("pardon", "player", p.name)}
                 />
               ))}
@@ -290,14 +370,19 @@ export function McBansCard() {
               placeholder="Minecraft username"
               value={newPlayer}
               onChange={(e) => setNewPlayer(e.target.value)}
+              // Gated on the same flag as the button beside it. A `disabled` button does not
+              // disable the Enter key in the field next to it, so without this the one path
+              // that is certain to be refused stayed reachable by the quickest input there is.
               onKeyDown={(e) => {
-                if (e.key === "Enter" && newPlayer.trim()) change("ban", "player", newPlayer.trim());
+                if (e.key === "Enter" && newPlayer.trim() && !busy && !cannotChangePlayers) {
+                  change("ban", "player", newPlayer.trim());
+                }
               }}
               className="max-w-xs"
             />
             <Button
               variant="outline"
-              disabled={busy !== null || cannotChange || newPlayer.trim() === ""}
+              disabled={busy !== null || cannotChangePlayers || newPlayer.trim() === ""}
               onClick={() => change("ban", "player", newPlayer.trim())}
             >
               {busy === `player:${newPlayer.trim()}` ? "Banning..." : "Ban player"}
@@ -318,9 +403,9 @@ export function McBansCard() {
                   icon={Globe}
                   label={ip.ip}
                   meta={[ip.reason, ip.source && `by ${ip.source}`, shortDate(ip.createdIso)]}
-                  stale={drift?.ips.notEnforced.includes(ip.ip) ?? false}
+                  stale={drift.ips?.notEnforced.includes(ip.ip) ?? false}
                   busy={busy === `ip:${ip.ip}`}
-                  disabled={busy !== null || cannotChange}
+                  disabled={busy !== null || cannotChangeIps}
                   onRemove={() => change("pardon", "ip", ip.ip)}
                 />
               ))}
@@ -332,13 +417,15 @@ export function McBansCard() {
               value={newIp}
               onChange={(e) => setNewIp(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && newIp.trim()) change("ban", "ip", newIp.trim());
+                if (e.key === "Enter" && newIp.trim() && !busy && !cannotChangeIps) {
+                  change("ban", "ip", newIp.trim());
+                }
               }}
               className="max-w-xs font-mono"
             />
             <Button
               variant="outline"
-              disabled={busy !== null || cannotChange || newIp.trim() === ""}
+              disabled={busy !== null || cannotChangeIps || newIp.trim() === ""}
               onClick={() => change("ban", "ip", newIp.trim())}
             >
               {busy === `ip:${newIp.trim()}` ? "Banning..." : "Ban address"}
