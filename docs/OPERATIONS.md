@@ -201,7 +201,7 @@ own response instead.
 
 # The test suite — added 2026-09-30
 
-`npm test` → **731 tests, ~2 s, no Docker, no network, no running server.** (This said 199 and
+`npm test` → **1151 tests, ~2.11 s, no Docker, no network, no running server.** (This said 199 and
 the section below said 549 — one file holding two different counts, which is how a number
 stops being read.) That last
 constraint is the point: a suite that needs the box up is a suite nobody runs on a laptop,
@@ -271,7 +271,7 @@ instead — the sentence no longer depends on each route author choosing `done` 
 
 # Closing the last open items — 2026-09-30
 
-`npm test` is now **731 tests, ~2 s**, still with no Docker, network or server.
+`npm test` is now **1151 tests, ~2.11 s**, still with no Docker, network or server.
 
 ## `game-manager.ts` is testable, and the seam is the point
 
@@ -395,11 +395,18 @@ world access are independent axes and only varying one leaves the other deletabl
 
 Two mechanical traps worth not re-learning:
 
-- **`vi.clearAllMocks()` in `beforeEach`, never `resetAllMocks()`.** The latter drops the
-  implementations the module factories installed, leaving every fake returning `undefined`
-  for the rest of the file. Without *some* per-test clear, the `not.toHaveBeenCalled()`
-  assertions pass on accumulated history from earlier tests — which is how the first draft
-  of this file reported `installMod` "called 24 times" on a request that refused.
+- **A per-test `vi.clearAllMocks()` is load-bearing**, because several tests assert
+  `expect(installMod).not.toHaveBeenCalled()` on a request that refused. Delete the line and
+  exactly three go red on the *previous* test's calls — which is also what the
+  `installMod` "called 24 times on a request that refused" anecdote was.
+  - This bullet first said those assertions would **pass** on accumulated history. Backwards,
+    and self-contradictory with the anecdote in its own sentence. It also claimed
+    `resetAllMocks()` "drops the implementations the module factories installed, leaving every
+    fake returning `undefined`" — that is vitest **2** behaviour. This repo pins vitest 3,
+    where `mockReset()` restores the implementation given to `vi.fn(impl)`, so swapping it in
+    leaves all 36 tests green (measured). `clearAllMocks` is the clearer statement of intent,
+    not a requirement. Both halves were plausible, neither was checked, and a reviewer caught
+    them by running the swap — which is the only reason this correction exists.
 - **The `child_process` fake must be callback-shaped**, because the route wraps it in
   `promisify`. A promise-returning fake hangs forever waiting for a callback.
 

@@ -363,7 +363,7 @@ npm run dev      # dev server (needs .env — see below)
 npm run build    # production build (also the deploy build)
 npm run lint     # eslint (not run during build; pre-existing `any` warnings exist)
 npx tsc --noEmit # typecheck
-npm test         # vitest, 731 tests, ~2s, no Docker/network/server needed
+npm test         # vitest, 1151 tests, ~2.11s, no Docker/network/server needed
 ```
 
 **Run `npm test` before you ship.** It exists because the same classes of defect kept
@@ -678,9 +678,12 @@ connect **directly to the box IP `89.58.50.155`**:
   - **Not yet run against a live pack.** The enum and the hashes were measured against the
     real Modrinth API, but no modpack has been applied through it. The three saved packs that
     could exercise it are the ones a version guard refuses anyway (below).
-  - **`environment` has ten values, not six and not nine.** This said nine over 200 projects /
-    360 versions, which was an intermediate scan; the one the code is built from is **527
-    projects / 2,751 versions** and it is the table on `ENVIRONMENT_TO_SERVER` in
+  - **`environment` has ten values, not six and not nine.** This said nine over "200 projects /
+    360 versions". **No such scan ever ran** — that figure came from a review report and was
+    written in here at merge time without being checked against the code, which already said
+    otherwise; a later edit then invented "an intermediate scan" to explain it. Two fabrications
+    on top of each other, in the file whose whole job is to be true. The real measurement is
+    **527 projects / 2,751 versions** and it is the table on `ENVIRONMENT_TO_SERVER` in
     `src/lib/mod-admission.ts` — ten rows, with each value's count and its sampling written
     out beside it. Don't restate the list here; a second copy of an enum Modrinth can extend
     is how one of them goes stale, which is exactly what happened to this bullet. The narrow
@@ -742,7 +745,7 @@ Still open — and the list is now short enough to state precisely.
 **Closed 2026-09-29/30, listed only so nobody re-reports them:** PZ's five-minute
 SIGKILL stop (now ~12 s, exit 0, via RCON `quit`); the app writing `docker-compose.yml`
 (now `.env`, gitignored, survives `git checkout -f` — compose hashes verified identical
-on deploy); no test suite (`npm test`, 731 tests); no co-residency detection; backups
+on deploy); no test suite (`npm test`, 1151 tests); no co-residency detection; backups
 having no retention/pruning/checksums/download/schedule; Minecraft's in-game whitelist
 and ops writing `uuid: ""`; the 7DTD `TelnetPassword` (rotated and telnet control
 re-verified end to end); the 224 dead `ModpackMod` rows (re-imported). Details in

@@ -190,7 +190,12 @@ describe("the error box", () => {
         warning: "The server's reply is exactly 4096 characters…",
       },
     });
-    expect(screen.queryByText(/exactly 4096 characters/)).not.toBeNull();
+    // `waitFor`, not a bare `queryByText`. `panel()` only awaits the "Game rules" heading,
+    // which renders before the fetched body is applied, so a synchronous query here races the
+    // second render pass — this test failed once in a full-suite run and passed alone and in
+    // three subsequent full runs, which is the signature. Its siblings in this file all await
+    // their post-condition; this one did not.
+    await waitFor(() => expect(screen.queryByText(/exactly 4096 characters/)).not.toBeNull(), WAIT);
     expect(screen.queryByText(/mob_griefing/)).not.toBeNull();
   });
 });

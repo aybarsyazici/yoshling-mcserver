@@ -280,11 +280,18 @@ const { POST: installOne } = await import("@/app/api/mods/install/route");
 const { listFinished } = await import("@/lib/operations");
 
 beforeEach(() => {
-  // `clearAllMocks`, never `resetAllMocks`: the latter drops the implementations the module
-  // factories above installed, leaving `installMod` and friends as spies that return
-  // `undefined` for every later test in the file. Call history is what has to be per-test —
-  // several assertions below are `not.toHaveBeenCalled()`, and those pass or fail entirely
-  // on whether the previous test's calls were cleared.
+  // **A per-test clear is load-bearing, and the reason is the opposite of what this comment
+  // first said.** Several tests assert `expect(installMod).not.toHaveBeenCalled()` on a
+  // request that refused. Without a clear those FAIL on the previous test's calls — measured:
+  // deleting the line below reddens exactly three. The first version of this said the
+  // assertions would *pass* on accumulated history, which is backwards, and it is the kind of
+  // plausible inversion that gets copied rather than checked.
+  //
+  // `clearAllMocks` is chosen over `resetAllMocks` for clarity of intent, not necessity: on
+  // the pinned vitest 3, `mockReset()` restores the implementation passed to `vi.fn(impl)`
+  // rather than dropping it, so `resetAllMocks()` here also leaves all 36 green — measured.
+  // An earlier version of this comment claimed it would leave every fake returning
+  // `undefined`, which is vitest 2 behaviour and not what this repo runs.
   vi.clearAllMocks();
   signedIn = true;
   role = "ADMIN";
