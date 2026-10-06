@@ -40,9 +40,47 @@ line is a hard error.
 recorded. That is what makes "a route cannot write its own success sentence" a fact
 about the compiler instead of a convention in a comment.
 
-Four terminal outcomes: `ok`, `partial`, `failed`, and **`unverified`** — the last
-exists specifically because this codebase needed "it finished and I could not read the
-evidence back" to be sayable.
+**Five** terminal outcomes (`Outcome`, `src/lib/operations-types.ts:87`). `concludeOperation`
+(`operations.ts:639`) tests them in this order, first match wins: **`failed`**, **`nothing`**,
+**`partial`**, **`unverified`**, **`ok`**. Two of them exist because of specific defects here:
+
+- **`unverified`** — "it finished and I could not read the evidence back". Any operation
+  that records no facts at all gets it, so not checking has a visible price.
+- **`nothing`** — "it ran and changed nothing", and it is the **most common** outcome on
+  this box: clicking the running world's card, or Stop on a world that is already down,
+  produces one. Measured on production 2026-09-29, **eight of a full ring's twenty slots**
+  were `nothing` records.
+
+Each has its own `summarize()` branch, and `nothing` also has its own TTL class
+(`isCleanOutcome`, `:259`) and its own eviction behaviour (`evictionIndex`, `:1165`).
+**This said four outcomes and omitted `nothing`** — believable, because the four it listed
+are the four a reader thinks of as verdicts and `nothing` was added later for the no-op
+power path. Worth recording rather than deleting: a `summarize()` or UI `switch` written
+from the short list loses the "Nothing to do — X was already Y" sentence that the whole
+guard exists to produce, and TypeScript will not call a non-exhaustive `switch` with a
+`default` an error.
+
+### `op.reject()` is the one place a route decides anything, and the rule is narrow
+
+Everything above says a route may not state an outcome. `op.reject(label)` is the single
+exception worth a stated rule, because it is easy to read as a general escape hatch:
+
+- **What it decides is the HTTP status, not the outcome.** Use it when the route refuses
+  *input* on its own terms and wants a 4xx — an unsafe zip, a name it cannot derive, a
+  client-only mod — then `return` a `NextResponse` with that status instead of throwing.
+- **The outcome is still `failed`, and the route does not get a say.** `reject` pushes a
+  step with `kind: "failed"` (`operations.ts:444`), and `concludeOperation` returns
+  `failed` on any failed step before it reaches the `nothing` / `partial` branches. From
+  the user's point of view the thing they asked for did not happen; all that changed is
+  that the route owns the status code rather than falling through to a 500.
+- **The label is the sentence.** For a `failed` record `summarize()` takes the reason from
+  a thrown error first, then the rejected step's label, then a `bad` fact
+  (`operations.ts:802`). So the label has to read as a reason, not as a step name.
+- **It works before the first `op.step()`.** `/api/7dtd/reset` validates `GameWorld`
+  before touching anything, and with no step to settle this used to record nothing at all
+  — which `concludeOperation` read as "finished and checked nothing" → `unverified`, so a
+  *rejected* request told the user to go and inspect a world list. `reject` now pushes its
+  own failed step in that case.
 
 ## Traps, each paid for
 
@@ -80,9 +118,16 @@ evidence back" to be sayable.
   derivation** — a mix toward `--foreground` does not guarantee anything on a tinted
   background.
 - **A stalled synthetic boot is a third reachability state** (`OperationView.stalled`),
-  bounded by the same 12 minutes `game-controls.tsx` uses for "Not responding". Keep the
-  two thresholds in step or the strip and the controls will disagree about the same
-  container — which is what `a7d76b8` was about.
+  bounded by the same 12 minutes the controls use for "Not responding". **There are
+  exactly two sites** — `grep -rn '12 \* 60 \* 1000' src` returns `BOOT_STALL_MS` in
+  `src/lib/operations.ts:1362` and `STUCK_AFTER_MS` in `src/lib/operation-ui.ts:122`.
+  Keep *those two* in step or the strip and the controls will disagree about the same
+  container, which is what `a7d76b8` was about. **Not `game-controls.tsx`:** it holds no
+  threshold of its own and calls the shared `powerState()` out of `operation-ui`, as
+  `game-overview.tsx` does. This bullet named `game-controls.tsx` for months and
+  `operations.ts:1352`'s own comment still does — adding a third copy there to satisfy
+  either is precisely the drift `power-surfaces.test.tsx` and "Prefer a drift guard"
+  (below) exist to prevent.
 - **`busy` locks the buttons; `ownBusy` describes the world.** Conflating them made the
   Project Zomboid page report "Working…", wear the "Booting" pill and animate a blue
   Power Core while *Minecraft* was starting and PZ was stopped. Pre-dated this work (the
@@ -110,14 +155,40 @@ than one-off fixes:
   read the *previous* run's exit code and fabricated a save, a stop, a `Shutdown`
   verdict and a durable `Activity` row for work that never happened — **and, because
   admission is what marks live file operations `preempted`, it deleted a valid 290 MB
-  backup that was 11 minutes into copying.** `powerOff`, `restartGame` and
-  `narratedStop` now check state first and answer that case as outcome `nothing`.
-  The no-op deliberately runs with **`resources: []`** so it can pre-empt nothing — do
-  not give it `POWER_RESOURCES` for symmetry.
+  backup that was 11 minutes into copying.** All three power paths now check
+  `containerState` first — but **they do not all answer the same way**, so read the one
+  you are copying rather than the pattern:
+  - **`powerOff`** (`game-manager.ts:1483`) and **`powerOn`**'s already-running-*and*-
+    answering branch (`:1377`) return before admission with **`resources: []`** and settle
+    a `noop` step, so they conclude **`nothing`**. Do not give the no-op
+    `POWER_RESOURCES` for symmetry: a record that holds nothing can pre-empt nothing, and
+    that is the whole repair. (`powerOn`'s *other* branch — container up, game silent —
+    `op.reject`s and concludes `failed`. That is the honest answer and the one `a7d76b8`
+    is about; it also holds no resources.)
+  - **`restartGame`** (`:1637`) checks the same state and then **still starts the world**,
+    recording `Shutdown: nothing to stop — it was already off` as a fact. It concludes
+    **`ok`**, deliberately: a `noop` step would drag the record to `partial` and attach
+    "but it did not go cleanly" to an operation that did exactly what was asked. It must
+    never early-return either — a Restart is a request to have the world **up**, so one
+    aimed at a world that is already down has to start it.
+  - **`narratedStop`** (`:1214`) is an internal helper returning a boolean. It settles the
+    `noop` step and sets **no outcome at all**; its callers decide.
+
+  This bullet used to say all three "answer that case as outcome `nothing`". Copying that
+  into a restart-shaped path turns Restart into a no-op for exactly the state in which
+  somebody presses Restart, which is the `a7d76b8` recovery path undone.
 - `powerOff` returns whether it actually stopped something and `powerOn` returns `[]`
-  when nothing happened; both control routes gate the durable `Activity` row and the
-  `GameState` write on that. A new caller that ignores it reintroduces "a log of things
-  that did not happen".
+  when nothing happened. **There is one caller.** `src/app/api/games/control/route.ts` is
+  the only route that calls `powerOn` / `powerOff` / `restartGame` — the four other files
+  that match those names only mention them in comments, there is no `/api/server/control`,
+  and `src/lib/server-manager.ts` now exports nothing but `getModsDir()`. It gates the
+  durable `Activity` row on one flag, `changed` (`:61`), which **`start` and `stop` set
+  from the return value and `restart` deliberately leaves `true`** — a restart always acts,
+  per the bullet above. The `GameState` write is gated on it for `stop` only (`:78`);
+  `start` writes `activeGame` unconditionally, which is correct, because a world that was
+  already up *is* the active one. A new caller that ignores the return value reintroduces
+  "a log of things that did not happen". (This said "both control routes", which sends an
+  auditor hunting for a second one.)
 - **`assertResourceFree()` / `fileLaneBusy()`** is how a sub-second writer joins the
   resource lanes without entering a record of its own (a record would double-toast).
   **25 handlers across 20 route files** use it (`grep -rl fileLaneBusy src/app/api`); this
@@ -135,31 +206,81 @@ than one-off fixes:
   unavoidable SIGKILL is a genuine `warn`. The summaries are correct and the colour
   agrees with them. Making `concludeOperation` ignore that warn would trade a truthful
   amber for a comfortable lie.
-- **Pre-emption cannot cancel work.** `refuseIfPreempted` declines to *publish* a torn
-  archive and deletes it, so the confirm dialog's promise is true for backups, and a
-  live pre-empted record now says so in the strip. But an in-flight `cp -r` or a
-  166-mod install still runs to completion; the mod path has no artefact to delete, so
-  its dialog's "some mods will be missing" remains a prediction.
-- **No `Activity` row on any operation's failure path**, so the durable log still records
-  only successes. Non-`ok` records are kept in memory for 6 hours, which covers a
-  distracted admin but not a web-container restart.
-- `/api/7dtd/world` still buffers up to 2 GB with `Buffer.from(await file.arrayBuffer())`,
-  which blocks the event loop and is what stalls the heartbeat on a large upload. A
-  pre-existing performance defect, not a notification one.
+- **Pre-emption cannot *interrupt* work — but it can stop more of it being started, and
+  there are two guards for that.** A new long operation wants the second one more often
+  than the first, and this list named only the first for months:
+  - **`refuseIfPreemptedEarly(op, what)`** — `src/lib/backup-archive.ts:76`, called **8
+    times** in `backup-create.ts` (`:521, 641, 666, 711, 816, 898, 912, 939`). The
+    step-boundary check: it fires *before* anything is written, and its sentence ends
+    "Nothing was changed — try again once the server has settled". It exists because of a
+    measurement: on production 2026-09-29 `op.preempted` was set **94 s into a 9m 43s** PZ
+    backup and the only check ran *after* the 291 MiB tar finished, so the app spent a
+    further **~7m 55s** competing for disk for a result it had already condemned, then
+    handed the user nothing. Two of three PZ attempts that afternoon were pre-empted.
+  - **`refuseIfPreempted(op, what)`** — `operations.ts:491`, called **twice**
+    (`backup-create.ts:325, 346`). The post-artefact check: it declines to *publish* a
+    torn archive, and the route's `catch` does the `rm`. That is why its sentence ends "It
+    has been deleted" — and why calling it at a step boundary would be a lie, since
+    nothing exists to delete yet.
+
+  What still cannot be cancelled is an in-flight `cp -r` or a 166-mod install. The mod
+  path has no artefact to delete, so its dialog's "some mods will be missing" remains a
+  prediction.
+
+  While you are in there: **`src/lib/backup-archive.ts` holds three things and its name
+  only suggests one**, and no doc mentioned any of them. Besides `refuseIfPreemptedEarly`
+  there is `BadArchiveError`, which is how an unreadable upload becomes a **400** rather
+  than a 500; and the manifest **sidecar** (`manifestSidecarPath` /
+  `writeManifestSidecar` / `readManifestSidecar`), which exists because reading the
+  embedded `./manifest.json` costs a full gzip decompression for ~100 bytes — measured,
+  `GET /api/7dtd/backups` took **7.9 s** for six 290 MB archives, and that is the backups
+  page's first paint. **The sidecar is a cache; the copy inside the tar is the source of
+  truth**, because the in-tar copy is what keeps an archive self-describing after it is
+  copied off the box. Writing the sidecar is never fatal. Do not "simplify" to one of the
+  two — that is an invariant somebody breaks by tidying.
+- **A thrown failure writes no `Activity` row**, so the durable log is mostly successes —
+  but **not only successes**, and anything reconciling over `Activity` has to know that.
+  `/api/mods/install-modpack` writes its `apply_modpack` row at `route.ts:691`, *before*
+  `applyReport` computes `complete` (`:716`), so a short apply — outcome `partial`, HTTP
+  500 — does leave a durable row carrying `installed` and `total`. The route's own comment
+  scopes the guarantee correctly ("written **after** the mods were replaced, never on a
+  refusal path"), which is narrower than "only successes". `/api/mods/installed:72` already
+  reads these rows with a `findFirst` to name the installed pack, so it can name a pack
+  that only partly installed.
+- **In-memory retention of a finished record is not one number.** `isCleanOutcome`
+  (`operations.ts:259`) calls `ok` **and `nothing`** clean, and those get
+  `FINISHED_TTL_MS = 10 min`; only `partial`, `failed` and `unverified` get
+  `FINISHED_TTL_BAD_MS = 6 h`. Neither survives a web-container restart. This list said
+  "non-`ok` records are kept for 6 hours", which is wrong for the most frequent outcome —
+  and moving `nothing` back onto the six-hour side is the measured bug: eight of twenty
+  ring slots held `nothing` records, starving the ring of room for the successes people
+  were actually watching. Do not "restore consistency".
+- ~~`/api/7dtd/world` buffers up to 2 GB with `Buffer.from(await file.arrayBuffer())`.~~
+  **Fixed — and this list carried it as a standing constraint while the same file described
+  the fix** (see the streaming-upload bullet under "Mutation checking", below). The upload
+  now streams through `src/lib/upload-stream.ts`, a multipart reader with `pipeline()`
+  back-pressure and an injectable `createSink`, pinned by `upload-stream.test.ts`; peak
+  memory is one chunk. The old path held the payload twice — measured, **+104.9 MB of
+  `arrayBuffers` for a 50 MB file** — and blocked the event loop while it did, which is
+  what silenced the heartbeat during the one operation somebody was watching. So: do not
+  attribute a heartbeat stall to this path, and do not cap upload size on its account.
 
 ## Proven on production, 2026-09-29
 
 Deployed and exercised against real containers, not inferred:
 
-- **The cross-layer `globalThis` fix is proven for two of three layers.** A
-  `backup.create` entered by a **route handler** appeared in `/api/operations` *and* in
-  the server-rendered HTML of `/home` (the **server component** layer), so
-  refresh-survival is real — confirmed three times on live operations with `curl`, no JS
-  executed. **The third layer, `instrumentation.ts`, is still unproven**: there were 0
-  stale Workshop mods all session, so `zomboid-updates.ts` returns `{action:"none"}`
-  before reaching either of its `runOperation` sites. The timer was observed ticking
-  eight times, so it is alive — the only missing ingredient is a genuinely stale mod.
-  **This is the last unproven path and it is the one nobody clicks.**
+- **The cross-layer `globalThis` fix is proven for all three layers.** A `backup.create`
+  entered by a **route handler** appeared in `/api/operations` *and* in the
+  server-rendered HTML of `/home` (the **server component** layer), so refresh-survival is
+  real — confirmed three times on live operations with `curl`, no JS executed. The third
+  layer, `instrumentation.ts`, could not be exercised *on this date*: there were 0 stale
+  Workshop mods all session, so `zomboid-updates.ts` returns `{action:"none"}` before
+  reaching either of its `runOperation` sites. The timer was observed ticking eight times,
+  so it was alive; the only missing ingredient was a genuinely stale mod. **It was proven
+  on 2026-09-30 and has run unattended since** — see "The instrumentation layer is finally
+  proven", below. This bullet said "the last unproven path" in bold for days after that
+  section was written three screens further down, which is how a reader who stops at the
+  first relevant heading ends up avoiding work on the timer.
 - **A real PZ backup's summary matched disk exactly.** `Backup created — 291 MB, world
   map included.` against a 291 M file; `tar -tzf` reads every member; the claimed parts
   are all present (`Saves` 444,028 members, `db` 7, `Server` 9, plus `manifest.json`).
@@ -172,18 +293,56 @@ Deployed and exercised against real containers, not inferred:
   `action`** for a power operation, with `beat` advancing while `since` stays put — the
   heartbeat-not-total-duration lock policy working.
 
-**Measured, and worth knowing:** a PZ backup copies **442,064 files and takes ~11
-minutes**, not the ~4m20s the route's own comment predicts. It is far past Cloudflare's
-100 s origin timeout, so the browser request is dead long before the work finishes —
-which is the whole argument for the persistent ledger. The world copy is also a single
-opaque step for 10.5 of those minutes; file count *is* knowable here, so that row is the
-least informative in the system and is the obvious next improvement.
+**Measured, and worth knowing:** a PZ backup copies **442,064 files (1.9 GB) and takes
+~11 minutes**. Recorded on production 2026-09-29 and now carried in the code too
+(`backup-copy.ts:7`, `backup-create.ts:824`, `api/zomboid/backups/route.ts:131`), so it is
+checkable without this doc. It is far past Cloudflare's 100 s origin timeout, so the
+browser request is dead long before the work finishes — which is the whole argument for
+the persistent ledger. (This sentence used to end "not the ~4m20s the route's own comment
+predicts"; that comment is gone, and so is every other prediction in the backup path.
+`op.progress` takes real counts only.)
+
+**The world copy is no longer one opaque step — and this doc named that as "the obvious
+next improvement" after it had already shipped.** `countTree()` and `copyTreeCounting()` in
+`src/lib/backup-copy.ts` walk metadata first and then report a real count;
+`backup-create.ts:841-856` opens *Counting the world's files*, then *Copying the world*
+with `op.progress({kind:"count", done, total, noun:"files"})` per batch, and settles with
+the count. The rule it follows is in `backup-copy.ts:11`: file count *is* knowable here, so
+it reports a count rather than a percentage of anything — no byte total, no ETA. It then
+drops back to `indeterminate`, or the file count would keep rendering as live progress
+through the ten minutes of `tar` that follow, which is a number about the wrong step. Worth
+recording as wrong rather than deleting, because "the obvious next improvement" is exactly
+the line a fresh agent picks up first.
 
 ## Also verified by rendering it, not by reading it
 
-Driven locally against a real build with a fixture operation
-(`next start`, a hand-minted session cookie — see the recipe in
-"Local development"):
+Driven locally against a real build with a fixture operation — `npm run build && next
+start`, plus a hand-minted session cookie.
+
+**The recipe, because nothing else in this repo holds it.** This line used to say "see the
+recipe in 'Local development'" and there is no such recipe in `CLAUDE.md`, any `docs/*.md`,
+`MIGRATION.md` or `scripts/` — it lived only in one agent's private memory, which does not
+travel. Without it every bullet below is unreproducible, and so is any future DOM assertion
+or screenshot of an authed page:
+
+1. **Discord OAuth cannot complete on localhost**, so there is no way to sign in for real.
+2. Insert a row in `dev.db`'s `User` table with a `discordId`, the `role` you want and the
+   `games` CSV you want (`"minecraft,7dtd,zomboid"` for everything). Role *and* `games` are
+   independent axes — see "Roles & per-world access" in `CLAUDE.md`.
+3. Mint the cookie with `encode()` from `next-auth/jwt`, using `AUTH_SECRET` from `.env`
+   and `salt: "authjs.session-token"`. `src/lib/auth.ts` sets no custom `cookies` block, so
+   the name is NextAuth v5's default: **`authjs.session-token`** over plain http — **no
+   `__Secure-` prefix**, which is the part that silently fails if you copy a production
+   cookie name.
+4. Set that cookie in the browser. Playwright with `channel: "chrome"` drives the installed
+   Chrome, so no browser download is needed.
+5. **`ThemeProvider` uses `defaultTheme="dark"`** (`src/components/theme-provider.tsx:7`),
+   so Playwright's `colorScheme: "light"` alone does nothing: `enableSystem` is on, but the
+   OS preference only wins when the stored theme is `"system"`, and with nothing stored the
+   explicit default applies. Set `localStorage.theme = "light"` via `addInitScript`, or you
+   will capture dark twice and conclude the Latte contrast work never shipped.
+
+What that setup established:
 
 - the hand-off renders as **one** operation whose rail tint changes at a labelled
   `SWITCHING SERVERS` transfer row, PZ-blue steps above, MC-green below;
@@ -275,9 +434,17 @@ isolation — pinning an estimate would dress a guess as a measurement.
 the `wasRunning` gating are the highest-value untested code left**, and both have caused
 real incidents. Testing them needs the Docker calls behind an injectable seam.
 
-Also uncovered: the three backup routes' flush helpers (module-private, they call
-`containerIsRunning`), which is why the honesty guarantee was moved into `summarize()`
-instead — the sentence no longer depends on each route author choosing `done` over `noop`.
+Also *partly* uncovered: the three flush helpers. They are module-private to
+**`src/lib/backup-create.ts`** — `flushMinecraft` (`:425`), `flushSaves` (`:594`),
+`flushWorld` (`:774`) — **not** to the three route files, which is where this used to send
+people looking and where they find nothing. And the Minecraft one **is** covered:
+`backup-create-minecraft.test.ts:149` ("flushes and pauses autosave when the server is up,
+and resumes it") sets `serverRunning = true` specifically to exercise it and asserts the
+exact RCON sequence `save-off` → `save-all flush` → `save-on`. The PZ (`flushSaves`) and
+7DTD (`flushWorld`) ones are genuinely uncovered — there is no `backup-create-zomboid` or
+`-7dtd` suite. Either way the honesty guarantee does not rest on any of them: it was moved
+into `summarize()`, so the sentence no longer depends on each route author choosing `done`
+over `noop`.
 
 ---
 
@@ -293,8 +460,8 @@ author had named as the highest-value untested thing in the repo — **eviction 
 `wasRunning` gating** — pinnable. Both have caused real incidents.
 
 `powerOn` deliberately **keeps its own eviction loop** rather than calling the shared
-`admitStart`. Rewriting a path pinned by 34 tests to remove a two-line probe loop is the
-churn that has broken this code before. Instead the two copies are asserted to **agree**
+`admitStart`. Rewriting a path pinned by 37 tests (`game-manager-control.test.ts`, counted
+2026-10-06) to remove a two-line probe loop is the churn that has broken this code before. Instead the two copies are asserted to **agree**
 over every combination of running worlds — slicing the loop to one world reddens it.
 
 ## Mutation checking is the answer to "does this test pin anything"
@@ -373,6 +540,13 @@ mods.update   startedBy=None   ok
 `instrumentation.ts` bundler layer. (That sentence also exposed a `"1 mods"` pluralisation
 bug, now fixed and pinned.)
 
+**And it has run unattended since, so the synthetic experiment is no longer the only
+evidence.** Re-measured on production 2026-10-06: the watcher has applied **three** Workshop
+updates by itself since 2026-10-01 — `W900 Semi-Truck [B42]`, `Mini Health Panel` and
+`[B42] I Don't Need A Lighter` — each with the container's `StartedAt` inside a second of
+the recorded `appliedAt`, and `lastError` empty throughout. If PZ restarts when nobody
+asked it to, this is still the first place to look (`src/lib/zomboid-updates.ts`).
+
 ---
 
 # The mod installers get a harness — 2026-10-02
@@ -385,10 +559,19 @@ its own by producing **eleven surviving mutants**, every one of them a variation
 route computes the right answer and then drops it on the floor*. Two files close them:
 
 - **`src/lib/__tests__/mod-install-routes.test.ts`** — both installers driven as routes,
-  36 tests.
-- **`tests/modpack-report.test.tsx`** — the report dialog, rendered, 9 tests. `modpacks.tsx`
-  had no test of any kind, which left the whole UI half of the client-only filter unverified
-  — and the filter's justification is that the user can *see* the decision.
+  **53 tests**.
+- **`tests/modpack-report.test.tsx`** — the report dialog, rendered, **12 tests**.
+  `modpacks.tsx` had no test of any kind, which left the whole UI half of the client-only
+  filter unverified — and the filter's justification is that the user can *see* the
+  decision.
+
+Both counts were written as 36 and 9 at `ab0f1e3` and the very next commit (`934a2bd`,
+"Give the mods page the single-mod install it never had") grew both suites without touching
+this line. Re-counted 2026-10-06 two ways that agree: `vitest run --reporter=json`
+per-file `assertionResults.length`, and `grep -c '^\s*it('` on each file. A reader
+reconciling 36 against 53 cannot tell whether 17 tests arrived or whether the doc is
+describing some other file, and the top of this section opens by complaining about exactly
+that.
 
 ## Only the edges are faked, and that is the whole design
 
@@ -416,7 +599,7 @@ Two mechanical traps worth not re-learning:
     `resetAllMocks()` "drops the implementations the module factories installed, leaving every
     fake returning `undefined`" — that is vitest **2** behaviour. This repo pins vitest 3,
     where `mockReset()` restores the implementation given to `vi.fn(impl)`, so swapping it in
-    leaves all 36 tests green (measured). `clearAllMocks` is the clearer statement of intent,
+    left all 36 tests green when measured (the file holds 53 now). `clearAllMocks` is the clearer statement of intent,
     not a requirement. Both halves were plausible, neither was checked, and a reviewer caught
     them by running the swap — which is the only reason this correction exists.
 - **The `child_process` fake must be callback-shaped**, because the route wraps it in
