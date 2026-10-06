@@ -15,9 +15,27 @@ Control is **telnet on 8081**, which 7DTD only binds if a `TelnetPassword` is se
 `sdtdserver.xml` — **the `TELNET_PASSWORD` env var does not set it.** The service is
 `restart: "no"` so it never auto-starts. A **fresh install wipes `sdtdserver.xml` back
 to defaults, and a host migration counts as fresh**; the app's `SevenDaysConfig` DB row
-survives that and is the recovery source. The live save is `GameWorld=Reveo Valley` +
-`GameName=Fresh2`. Client↔server build mismatch is the number one cause of "stuck at
-Starting game".
+survives that and is the recovery source. The live save is `GameWorld="Reveo Valley"` +
+`GameName="Fresh2"`, with `ServerVisibility=2` — **re-read off
+`/sevendtd-config/sdtdserver.xml` (13,726 bytes) on 2026-10-06.** Client↔server build
+mismatch is the number one cause of "stuck at Starting game".
+
+> ### 7DTD is STOPPED in production (as of 2026-10-06)
+>
+> Only `yoshling-pz` and `yoshling-web-1` are up; Minecraft is stopped too. **This changes
+> what you can do here on day one**, and none of it is a fault to debug:
+>
+> - Every telnet read reports the world unreachable — the status probe, the console, the
+>   configured-vs-live comparison on Settings, `getgamepref`.
+> - **The Update button 409s**, by design, because Project Zomboid holds the box (below).
+> - Exercising anything live means a **Power on, which stops Project Zomboid** — and
+>   people play on that daily. It is a decision, not a step.
+> - The 2026-10-06 `TelnetPassword` rotation is unverified end to end for the same reason:
+>   the xml is read only at server start. The first start after that rotation is the moment
+>   to check the dashboard still sees the world.
+>
+> Confirm before assuming, since this is the fact most likely to have moved:
+> `ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 'docker ps --format "{{.Names}}\t{{.Status}}"'`.
 
 - First boot runs a one-time **SteamCMD install (~17 GB, ~10-20 min)**. The
   `sevendtd` service is `restart: "no"` so it never auto-starts on reboot — the
@@ -40,6 +58,30 @@ Starting game".
     and `maxMemory` (`6G`) are dead the same way: the Steam branch is read from
     compose and 7DTD has no JVM heap. The four are no longer written at all
     (2026-10-01); dropping the columns needs a hand-applied production migration.
+    - **The SQL, and the order it has to run in.** This was "needs a hand-applied
+      migration" with the migration written nowhere, which leaves the schema as a trap:
+      the next person to read `prisma/schema.prisma` sees four columns and assumes four
+      live settings. Prisma Client always `SELECT`s an **explicit column list**, so
+      **the schema change must ship first.** Drop the columns while the deployed client
+      still names them and every `db.sevenDaysConfig` read starts failing, which blinds the
+      whole 7DTD settings page — and the DB is then the half that cannot be rolled back.
+      Order: remove the four fields from the model → `prisma generate` → deploy → then,
+      against the prod DB (the libSQL snippet is under "Applying DB migrations in
+      production" in [`../CLAUDE.md`](../CLAUDE.md)):
+
+      ```sql
+      ALTER TABLE "SevenDaysConfig" DROP COLUMN "gameDifficulty";
+      ALTER TABLE "SevenDaysConfig" DROP COLUMN "dayLength";
+      ALTER TABLE "SevenDaysConfig" DROP COLUMN "version";
+      ALTER TABLE "SevenDaysConfig" DROP COLUMN "maxMemory";
+      ```
+
+      Four separate statements because SQLite takes one column per `ALTER`. There is no
+      backfill and nothing to preserve — that is the whole point of the drop — but back the
+      DB up anyway (`docker cp yoshling-web-1:/app/data/yoshling.db …`), because
+      `DROP COLUMN` rewrites the table. Verify with
+      `PRAGMA table_info(SevenDaysConfig)`: five columns left (`id`, `serverName`,
+      `password`, `maxPlayers`, `sandboxCode`). **Not yet applied.**
   - **Which save is live is decided by two XML values**, and getting them wrong
     silently starts yet another empty world rather than erroring:
     `GameWorld=Reveo Valley` + `GameName=Fresh2`. Identify the right one from disk
@@ -77,6 +119,17 @@ Starting game".
   rather than being hidden. 8080 is published by compose but DROPped at `eth0` in
   `DOCKER-USER` by the `yoshling-firewall` unit (checked 2026-10-01), so the game's
   web dashboard answers only on the box itself; map rendering exists only to feed it.
+  - **`CLAUDE.md` and [`AUDIT-2026-09-28.md`](AUDIT-2026-09-28.md) say `DOCKER-USER` is
+    *empty*. That reading is from 2026-09-28 and is the older one**; the rules were added
+    on 2026-10-01 and the literal rule is recorded beside `ENVIRONMENT_INERT` in
+    `src/lib/sdtd-settings.ts`
+    (`-A DOCKER-USER -i eth0 -p tcp -m tcp --dport 8080 -j DROP`, plus 8081 and 3000).
+    Believe the newer one, but know that **nothing in the repo can prove either** — the
+    `yoshling-firewall` unit file is not checked in, and `MIGRATION.md` step 5 is where it
+    belongs. Settle it with
+    `ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 'iptables -S DOCKER-USER; systemctl cat yoshling-firewall'`,
+    and whatever it prints, **commit the unit** — ports 3000/8080/8081 being closed is
+    currently one undocumented systemd unit deep.
 - **Sandbox code** (`SandboxCode` in `sdtdserver.xml`) is the game's encoded
   difficulty/loot/XP preset from *New Game → Sandbox Options → Copy Code*. It is the
   highest-impact setting, so it is in Quick settings, not just All settings. The
@@ -107,17 +160,38 @@ Starting game".
   default `NorthAmericaEast`). A fresh/empty server can still take 15-30 min to
   appear and is best found by searching its exact `ServerName`.
 - **Game version / Steam branch:** set by the `VERSION` env on the `sevendtd`
-  service — `stable` (Default Public) or `latest_experimental`. **Currently
-  `latest_experimental`, installed build V 3.3.0 (b14)** as of 2026-09-26 — the
-  fresh netcup install pulled whatever was current, up from V3.1.0 b11 on the old
-  box. Anyone whose client is older will hang at "Starting game" and must let Steam
-  update first. Switching branches needs a one-time update run: recreate the
-  container with `START_MODE=3` (update+start) so the ~17GB files re-download, then
-  it goes back to `START_MODE=1` normal start.
-  IMPORTANT: recreate with **`docker compose up -d sevendtd`** (NOT `docker
-  compose run`, which omits the `sevendtd` network alias and breaks the web
-  app's telnet-by-name). Branch switches can break existing saves — back up
-  first.
+  service — `stable` (Default Public) or `latest_experimental`. The branch is
+  `latest_experimental` (a compose literal, so this one is checkable in the repo).
+  **Installed build V 3.3.0 (b14) — read on 2026-09-26 and unverified since**; the fresh
+  netcup install pulled whatever was current, up from V3.1.0 b11 on the old box. The branch
+  gets frequent Steam patches, so assume it has moved and re-read before relying on it:
+  `grep -E '"buildid"|"betakey"' /var/lib/docker/volumes/yoshling_sdtd-server/_data/steamapps/appmanifest_294420.acf`
+  on the box, or the Server maintenance card once 7DTD is up. Anyone whose client is older
+  will hang at "Starting game" and must let Steam update first. Switching branches needs a one-time update run: the container has to come
+  up with `START_MODE=3` (update+start) so the ~17 GB re-downloads, then go back to
+  `START_MODE=1`.
+  - **Do it in two steps, and let the app run the second one.** `VERSION` is a compose
+    literal, read by `/api/7dtd/update` and never written by the UI, so changing the branch
+    is a compose edit and a deploy. The `START_MODE=3` run is then the **Update button** on
+    7DTD Settings → Server maintenance, which flips `START_MODE` to `3`, calls
+    `recreateService`, and restores `"1"` in a `finally`.
+  - > **This said: "IMPORTANT: recreate with `docker compose up -d sevendtd`".** Don't.
+    > That command starts 7DTD **with no eviction, no control lock and no co-residency
+    > check**, and the app grew a deliberate refusal for exactly this situation —
+    > `/api/7dtd/update` calls `refuseCoResidency("7dtd", …)` and 409s rather than stopping
+    > somebody else's game without consent. Project Zomboid is up in production right now,
+    > so typing this by hand today puts two worlds on a 15.6 GB box: the 2026-09-26
+    > co-residency incident, from the command the doc presented as the careful option. It
+    > stayed believable because the half it warns about **is** still true (next bullet), so
+    > the whole instruction read as current, and because naming one service looks like the
+    > narrow, careful form of `up -d` rather than a start with no guards.
+  - The warning it carried **still stands**: never `docker compose run`, which omits the
+    `sevendtd` network alias and so breaks the web app's telnet-by-name.
+  - If you must drive it by hand, the service is behind `profiles: ["games"]`, so name it
+    explicitly (`docker compose create --force-recreate sevendtd`) or pass
+    `--profile games`. Naming a service explicitly enables its profile; a bare
+    `docker compose up -d` cannot reach any world, which is the point of the profile.
+  - Branch switches can break existing saves — back up first.
 - **CLIENT↔SERVER BUILD MISMATCH = the #1 "stuck at Starting game" cause.**
   `latest_experimental` gets frequent Steam patches; players' clients auto-update
   but the **server only re-downloads on `START_MODE=3`**. If the server build ≠
@@ -130,6 +204,26 @@ Starting game".
     vs the branch's latest via `api.steamcmd.net`; POST patches `START_MODE: "3"` into the
     `sevendtd` compose block with `patchServiceEnv`, calls **`recreateService`**, and writes
     `START_MODE: "1"` back in a `finally`). Surfaces build + "update available".
+    - **The POST refuses while another world is running, and that is not a bug.**
+      `refuseCoResidency("7dtd", containerIsRunning, "The update")` throws
+      `CoResidencyError` → **HTTP 409**, recorded in the ledger with the blocker named. The
+      asymmetry with `powerOn` — which evicts — is deliberate and the route's own comment
+      says why: *"Nobody pressing 'Update' consented to stopping someone else's game."*
+      **Project Zomboid is up in production right now, so the Update button is currently
+      unusable**; power PZ down first. Without knowing this, the 409 looks like a broken
+      route or a permission gate, which is where the debugging goes.
+    - **The update *check* can never resolve the `stable` branch.** `branchInfo` reads
+      `data.data[APPID].depots.branches[branch]` with no aliasing, and **Steam's key for
+      the default branch is `public`, not `stable`** — so on `stable` the lookup misses,
+      `latest.buildid` is `null`, and `updateAvailable: !!(installed && latest.buildid &&
+      …)` is therefore always `false`. The card reports "up to date" **permanently**, which
+      is the worst possible failure for a server whose #1 join failure is a client↔server
+      build mismatch. The same `null` is returned when the `fetch` fails, so a Steam outage
+      reads as "up to date" too. Found by the 2026-09-28 audit and never carried into a
+      live doc until now; **it bites the moment anyone follows the branch-switch
+      instructions above.** On `latest_experimental` — the current branch — the key matches
+      and the check works. Fix is a `stable` → `public` alias in `branchInfo`, plus
+      distinguishing "no answer" from "no update".
     - > **This said "recreates the container via `docker run` … so the web container can
       > update without compose", which has not been true for some time, and was the bug
       > rather than the design.** `docker run` produced a container with no compose labels
@@ -219,6 +313,18 @@ the game. Its verdict for this game was *"ours is adequate"* — pasting a sandb
 the right design — so what follows is the mechanics around it, not a redesign. The
 measurements are in `src/lib/sdtd-settings.ts`, which is where the pure logic lives so it
 can be asserted (`src/lib/__tests__/sdtd-settings.test.ts`, 27 tests).
+
+> **Neither of those two numbers is re-derivable from the repo, and the 219 is also
+> copied in [`SETTINGS.md`](SETTINGS.md).** `grep -rn 219 src/` finds nothing;
+> `sdtd-settings.ts` carries the sandbox-code and clamp measurements with their
+> methodology, but no property census. They are descriptive, not operative — nothing
+> branches on them — so they are kept rather than deleted, and the doc at least records
+> *how* they were produced. If either matters to a decision, re-count instead: the
+> denominator is `grep -c '<property' /sevendtd-config/sdtdserver.xml` (the live file is
+> 13,726 bytes and the audit era's count was 69–72 properties, so **219 is counting
+> something other than the properties in this file** and the discrepancy is unexplained).
+> Two copies of a number the game can change is how one of them goes stale; don't add a
+> third.
 
 - **`ServerMaxPlayerCount` is clamped to 1–16 and now says so.** `PUT maxPlayers=99`
   stored 16, answered `{success:true}` with no mention, and left `99` in the box. The route

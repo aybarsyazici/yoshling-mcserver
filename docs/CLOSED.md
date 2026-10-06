@@ -15,13 +15,41 @@ per-game depth is in [`MINECRAFT.md`](MINECRAFT.md), [`PROJECT-ZOMBOID.md`](PROJ
 [`7-DAYS-TO-DIE.md`](7-DAYS-TO-DIE.md), [`SETTINGS.md`](SETTINGS.md) and
 [`OPERATIONS.md`](OPERATIONS.md).
 
+That guarantee is what makes this file cheap to read, and **it had stopped being true**: a
+"Still open here:" paragraph listing three live problems sat near the bottom until 2026-10-06,
+duplicating what `CLAUDE.md` already said. Both halves of that are bad — a reader either
+re-evaluates every paragraph here for open-ness, which is the cost the split was done to
+remove, or trusts the guarantee, skims the paragraph, and misses the real item. The three
+items are in `CLAUDE.md`'s "Genuinely open" and only there.
+
+**Where a thing lives, now that there are three files.** The split only works if each has
+one job:
+
+| File | Holds | Does not hold |
+|------|-------|---------------|
+| `CLAUDE.md` "Genuinely open" | **every** open item, and nothing else open lives anywhere | history |
+| **this file** | what closed, dated, with the measurement that closed it | anything open |
+| [`AUDIT-2026-09-28.md`](AUDIT-2026-09-28.md) | a frozen 2026-09-28 snapshot — the reasoning, the refutations, the mechanisms | closure status, and it is **not** a backlog despite a table headed "Fix first" |
+
+So "was this already fixed?" is a question for this file; "has anyone looked at this before,
+and what did they conclude?" is a question for the audit.
+
 ## The full audit, 2026-09-28
 
-A 22-agent audit covered every feature and route: **[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md)**.
+A 22-agent audit covered every feature and route: **[`AUDIT-2026-09-28.md`](AUDIT-2026-09-28.md)**.
 185 findings, each adversarially reviewed. Read its §5 (refuted/downgraded) before
 acting on anything in it — **9 of 13 criticals were downgraded by their own
 verifier**, several findings are simply wrong, and two prescribe fixes that don't
-work. The corrections it produced are already applied throughout this file.
+work. Two rows *in §5 itself* were also wrong and are marked as such; one of them
+("the PZ entrypoint saves on SIGTERM") is the belief that stopped three audits finding
+the five-minute SIGKILL stop. The corrections it produced are already applied
+throughout this file.
+
+**All 25 rows of its §2 "Fix first" table are closed** — re-checked against the code on
+2026-10-06, except #9, where the harm is gone and a hand map reorder still does not survive
+a restart. Nine of those rows were recorded below and sixteen were recorded nowhere, which
+is why a 25-row table ranked by blast radius read as a backlog for a week. The per-row
+evidence now sits in the table's own header rather than being restated here.
 
 Two conclusions outrank the individual findings. **The recently-rewritten core is
 good — don't spend time there**; the control lock, reachability states, staged
@@ -31,8 +59,6 @@ findings blaming them were refuted by forensics. And **the recurring defect clas
 add anything here, make the success path *prove* it succeeded, the way the memory
 card's configured-vs-live comparison does.
 
-Outstanding across the project:
-
 **Fixed and deployed 2026-09-28** (kept here only so nobody re-reports them): the MC
 backup shell injection; the public exposure of ports 3000/8080/8081; `install-modpack`
 clobbering compose; restores that never stopped the server; the missing `mem_limit`s
@@ -40,26 +66,37 @@ and log rotation; the Minecraft version mismatch (**Minecraft now boots — veri
 `Done (1.661s)!`**); `/api/settings` starting a stopped world outside the lock; the
 file-browser GETs exposing `rcon.password`; and the zombie-process leak. Details and
 the per-finding corrections are in
-[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
-
-Still open — and the list is now short enough to state precisely.
+[`AUDIT-2026-09-28.md`](AUDIT-2026-09-28.md).
 
 **Closed 2026-09-29/30, listed only so nobody re-reports them:** PZ's five-minute
 SIGKILL stop (now ~12 s, exit 0, via RCON `quit`); the app writing `docker-compose.yml`
 (now `.env`, gitignored, survives `git checkout -f` — compose hashes verified identical
 on deploy); no test suite (`npm test`, 1502 tests); no co-residency detection; backups
 having no retention/pruning/checksums/download/schedule; Minecraft's in-game whitelist
-and ops writing `uuid: ""`; the 7DTD `TelnetPassword` (rotated and telnet control
-re-verified end to end); the 224 dead `ModpackMod` rows (re-imported). Details in
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) and
-[`docs/AUDIT-2026-09-28.md`](docs/AUDIT-2026-09-28.md).
+and ops writing `uuid: ""`; the 224 dead `ModpackMod` rows (re-imported). Details in
+[`OPERATIONS.md`](OPERATIONS.md) and
+[`AUDIT-2026-09-28.md`](AUDIT-2026-09-28.md).
+
+> **The 7DTD `TelnetPassword` was in that list as "rotated and telnet control re-verified
+> end to end", and the second half is not true of the current password.** It has now been
+> exposed in a transcript **twice** and rotated twice — 2026-09-30, and again **2026-10-06**
+> after an agent printed the web container's whole env. The 2026-10-06 rotation is verified
+> on the env side only (the xml value and the `.env` value byte-equal, the recreated web
+> container's `process.env` matching), because 7DTD is **stopped** and only reads the xml at
+> server start. **End-to-end telnet is unverified until 7DTD next starts**, and that first
+> start is the moment to confirm the dashboard still sees the world. A mismatch between
+> `sdtdserver.xml` and `.env` is exactly what blinds the dashboard to 7DTD. Kept as a
+> correction rather than deleted, because this is the shape to watch for: "closed" was
+> written truthfully about a credential that was then rotated underneath the claim, so a
+> closure note about a *secret* has a shorter shelf life than one about code. Depth:
+> [`7-DAYS-TO-DIE.md`](7-DAYS-TO-DIE.md).
 
 **Closed 2026-10-02 — the Minecraft content revision.** A design review asked whether the
 mods/modpacks feature was the right shape. It was not, and the answer **reversed a
 recommendation this repo had written**: delegating pack installs to the image's
 `mc-image-helper` would install nothing, because `applyServiceEnv` recreates with
 `start: false` and Minecraft spends most of its time stopped. Depth, the measurements and the
-two claims that were wrong: **[`docs/MINECRAFT.md`](docs/MINECRAFT.md)**.
+two claims that were wrong: **[`MINECRAFT.md`](MINECRAFT.md)**.
 
 Shipped and verified on the live box, in five increments:
 
@@ -76,8 +113,15 @@ Shipped and verified on the live box, in five increments:
 4. **The inventory is reconciled against the directory.** `/api/mods/installed` was a bare
    `findMany()` and nothing had ever compared it with `/minecraft/mods`; it now reports
    `matched` / `untracked` / `missing` **by name**, with optional sha512. Verified live: three
-   matched, every digest and byte count identical to an independent `sha512sum`.
-   `InstalledMod.source` + `versionId` applied by hand (below).
+   matched, 0 untracked, 0 missing, every digest and byte count identical to an independent
+   `sha512sum` (re-read live 2026-10-06).
+   `InstalledMod.source` + `versionId` were applied to production by hand — **verified
+   applied 2026-10-06**: `PRAGMA table_info(InstalledMod)` carries both columns and all
+   three rows read `source: manual`. The SQL and the reasoning are under "Applying DB
+   migrations in production" in [`../CLAUDE.md`](../CLAUDE.md), not here; this used to say
+   "(below)" and point at nothing, which is a bad way to lose a migration whose backfill
+   `WHERE` clause is the part that must not be dropped — a second paste without it rewrites
+   every `pack` row to `manual`.
 5. **One page instead of three tabs.** "Browse mods / Installed / Modpacks" cut across the
    task — it nested a *source* under a *collection*, and the collection's empty state was where
    the install instructions lived. Now: the pack as a header (it is server state, not a library
@@ -85,17 +129,17 @@ Shipped and verified on the live box, in five increments:
    sheets. Rendered in Chrome in both themes to check it, which is how three copy bugs and a
    wrong accent colour were found that no test asserted.
 
-Still open here: pack imports are **unpinned** (566 of 569 rows), so applying a saved pack
-installs the newest build of each mod rather than the pack, and a re-import duplicates the row
-instead of updating it. Both are one increment's work — `dependencies[].version_id` is already
-in the API response and discarded. The apply also still runs with the world possibly up.
+Three things the revision did **not** close — unpinned pack imports, the duplicating
+re-import, and the apply running with the world possibly up — are in `CLAUDE.md`'s
+"Genuinely open" and deliberately not restated here, so this file keeps its promise to hold
+nothing open. They used to be stated twice, which is how the same work drifts in two places.
 
 **Closed 2026-10-01 — the settings revision.** Every settings page now shows **configured
 next to live**: the game is asked what it believes (`showoptions` over RCON for PZ,
 `getgamepref` over telnet for 7DTD, `difficulty`+`list` over RCON for Minecraft) and the
 answer is compared with the file, with "not reported" as a third verdict so an unanswered
 question never renders as a disagreement. Full architecture, coverage numbers and the write
-discipline: **[`docs/SETTINGS.md`](docs/SETTINGS.md)**. Also closed: the PZ sandbox options
+discipline: **[`SETTINGS.md`](SETTINGS.md)**. Also closed: the PZ sandbox options
 are editable from the dashboard and the writer is **verified against the live 74 KB /
 335-option file** (new inode, hard-linked `.bak`, a real value round-tripped and the file
 returned to its exact starting md5); the `server.properties` help layer; the 7DTD
@@ -122,4 +166,4 @@ scheduled backup and wrong for an archive taken as a side effect of a destructiv
 wired in without the opt-out, pressing Apply deleted other people's restore points. It passes
 `prune: false`; a test fails if that is removed.
 
-Details, and the properties not to break: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+Details, and the properties not to break: [`MINECRAFT.md`](MINECRAFT.md).
