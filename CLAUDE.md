@@ -401,38 +401,12 @@ again only if it was running, and holds the control lock throughout. `setMemory`
 all of that right and `/api/settings` had open-coded a bare `docker compose up -d`
 with none of it.
 
-### Background work — three timers, all in `src/instrumentation.ts`
+### Background work — three timers
 
-Nothing else in this app runs on a clock, **two of the three can stop or start a game
-container**, and until 2026-10-06 only one was documented anywhere — so this is the first
-place to look when something moved by itself. All three are a plain `setInterval` with a
-re-entry guard, never a tick that re-arms from a `finally`: that shape died permanently on
-one hung call (2026-09-15).
-
-| Timer | Cadence | Off switch |
-|-------|---------|-----------|
-| `collectStats` (`:66`) — the monitor graphs | 5 s | — |
-| PZ Workshop watcher (`:84`, `src/lib/zomboid-updates.ts`) — **restarts PZ itself when empty** | `PZ_UPDATE_PENDING_POLL_MS` 15 s tick, `PZ_UPDATE_POLL_MS` 5 min full check | **`PZ_UPDATE_WATCH=false`** |
-| `backupTick` (`:168`, `src/lib/backup-schedule.ts`) | `BACKUP_CHECK_MS` 5 min; first run 5 min after boot | **`BACKUP_SCHEDULE=off`** |
-
-**Scheduled backups** — `shouldRunScheduledBackup` is the whole decision in one tri-state
-function (`run`/`skip`/`probe`), so a `readdir` gates the expensive half of probing three
-game servers. Default **24 h per world** (`BACKUP_SCHEDULE_HOURS[_<GAME>]`), and "when did
-we last back up" is the newest archive's mtime — no state file to get stuck. It refuses
-when: off; the last automatic attempt failed under `FAILURE_COOLDOWN_MS` (**1 h**) ago; the
-newest archive is younger than the interval; the world is in any state but
-`online`/`offline`; or **anyone is connected**.
-
-**Retention deletes archives without asking, and every backup prunes — manual ones too**
-(`applyRetention` from `backup-create.ts:359` unless `prune: false`), which is what "five
-archives disappeared" means. `src/lib/backup-retention.ts`:
-`DEFAULT_POLICY = { keep: 5, maxAgeDays: 0 }` (0 = no age rule), per world via
-`BACKUP_KEEP[_<GAME>]` / `BACKUP_MAX_AGE_DAYS[_<GAME>]`, `keep` floored at 1, journalled to
-`BACKUP_JOURNAL_FILE` (`/app/data/backup-journal.jsonl`), and reaching **only inside
-`/app/data`** — the `/root` sets are nobody's job (open list). Three deliberate properties,
-each easy to "simplify" away and all three reasoned out in that file's header: the two rules
-are **OR, not AND**; **the newest archive is never a candidate**; and **the oldest is exempt
-from the count rule but not the age rule**.
+Three `setInterval`s in `src/instrumentation.ts`, and **two of them can stop or start a game
+container** — so this is the first place to look when something moved by itself. Cadences, the
+off switches, the scheduled-backup decision and the retention policy:
+**[`docs/OPERATIONS.md`](docs/OPERATIONS.md#background-work--three-timers-all-in-srcinstrumentationts)**.
 
 ### Roles & per-world access
 
@@ -534,9 +508,19 @@ on `tsc --noEmit` while `schema.prisma` declared both and `mod-manager.ts:149` w
 "tsc is clean" is not evidence the client matches the schema. Re-generate after any
 schema change.
 
-**`npm run lint` exits non-zero and always has**: 59 problems — **45 errors** (all
-`@typescript-eslint/no-explicit-any`, in `src/lib/db.ts` and `src/lib/mod-manager.ts`) and
-14 unused-var warnings. `next build` does not run it.
+**`npm run lint` exits non-zero and always has**: 59 problems — **45 errors** and 14
+warnings. `next build` does not run it. The errors are **not** all `any`, and the breakdown
+matters because two of the rules are about behaviour rather than style (counted 2026-10-06
+with `eslint -f json src/`):
+
+| count | rule |
+|---|---|
+| 38 | `@typescript-eslint/no-explicit-any` — style, and genuinely pre-existing |
+| **6** | `react-hooks/set-state-in-effect` |
+| **1** | `react-hooks/immutability` |
+
+The seven `react-hooks` errors are the ones worth a look: that rule fires on a `setState`
+inside an effect, which is the shape of a render loop. Nobody has triaged them.
 > **Corrected 2026-10-06.** This called them "`any` **warnings**" — they are errors — and
 > until that date the command printed **349,969 problems** over five-plus minutes, so the
 > one command whose job is to report problems was unusable while this file called it benign.
@@ -837,14 +821,19 @@ connect **directly to the box IP `89.58.50.155`**:
   (25565/tcp, 26900/tcp, 26900-26902/udp, 16261-16262/udp, 8766-8767/udp) — but
   Docker publishes ports with a DNAT rule, and the `FORWARD` chain reaches Docker's
   own chains **before** any ufw chain, so that traffic never passes through `INPUT`
-  at all. `DOCKER-USER` is the only place a rule can intercept it, and on this box
-  `iptables -S DOCKER-USER` is empty. Measured 2026-09-28 from outside:
-  `curl http://89.58.50.155:3000/login` → **200, cleartext, bypassing Cloudflare
-  and Caddy entirely**, and 7DTD's telnet on 8081 accepted a connection from a
-  public IP (it logged `INF Telnet connection from: …`). So **every `ports:` entry
-  in `docker-compose.yml` is world-reachable regardless of ufw** — publish to
-  `127.0.0.1:` when only the host needs it, and put DROP rules in `DOCKER-USER`,
-  not in ufw. (On Hetzner this was two layers and missing either meant "connect
+  at all. `DOCKER-USER` is the only place a rule can intercept it. Measured 2026-09-28,
+  when that chain was **empty**: `curl http://89.58.50.155:3000/login` → **200, cleartext,
+  bypassing Cloudflare and Caddy entirely**, and 7DTD's telnet on 8081 accepted a connection
+  from a public IP (it logged `INF Telnet connection from: …`).
+  - **The chain is no longer empty — three DROP rules are installed and that is the fix.**
+    Re-measured 2026-10-06: `-A DOCKER-USER -i eth0 -p tcp --dport 8081 -j DROP`, same for
+    **8080** and **3000**, put there by a `yoshling-firewall` systemd unit. **That unit's file
+    is not in this repo** — it lives only on the box, so a rebuild does not recreate it. See
+    `MIGRATION.md`.
+  - The rule still holds: **every `ports:` entry in `docker-compose.yml` is world-reachable
+    regardless of ufw** — publish to `127.0.0.1:` when only the host needs it, and put DROP
+    rules in `DOCKER-USER`, not in ufw. The three above are a patch over three specific ports,
+    not a default-deny. (On Hetzner this was two layers and missing either meant "connect
   hangs, nothing in logs"; the move removed the cloud layer, which is what made
   this gap consequential.)
 - Server-browser listing: 7DTD `ServerVisibility=2` (public) in `sdtdserver.xml`;
@@ -861,134 +850,26 @@ Read the per-game bullets below as "what it does when it is up", not "what answe
 now": if a game's telnet or RCON is silent, **check `docker ps -a` before debugging the
 protocol**.
 
-- **Minecraft: boots and has been exercised end to end** (2026-09-29/30). The old
-  version mismatch is gone — compose, `ServerConfig.mcVersion` and the jars on disk all
-  say **26.1.2**, and it starts in `Done (1.661s)!`. Power on, off, restart, backups
-  (including a real restore), mods, modpack refusals, `server.properties`, the file
-  browser and the console have all been run against the live container.
-  **Its in-game whitelist and ops never worked until 2026-09-30** — both files were
-  written with `uuid: ""`, which matches nobody, so enabling the whitelist and adding
-  yourself locked *everyone* out with a green success toast. `src/lib/mc-identity.ts`
-  now derives the offline UUID the way the server does
-  (`md5("OfflinePlayer:" + name)`, v3). The MC layer is still the oldest code here.
-  **Game rules became reachable 2026-10-01** (`/api/server/gamerules` + the Game rules
-  panel) — see Routes and [`docs/MINECRAFT.md`](docs/MINECRAFT.md#game-rules). Before that
-  the dashboard could *detect* that a `server.properties` key had moved to a game rule,
-  refuse the write, and then only tell you to type the command yourself, for 58 rules none of
-  which it listed. Someone was doing exactly that: production has
-  `enable-command-block=false` in the file against `command_blocks_work = true` in the world,
-  and `mob_griefing` is false with nothing in this app having set it. **The live
-  `help gamerule` reply has been captured and is a test fixture** — 5 KB, no newlines, 58
-  rules each listed twice; it is parsed by the suite. The first version of this shipped a
-  parser that read **one** rule out of it and a route that answered 200 with that one rule,
-  and the write path is now **exercised on the live container too** (2026-10-02): the GET
-  reads all **58** rules in **0.787 s** (58 RCON round trips, against a 4 s budget), a write
-  lands and is confirmed by an independent `rcon-cli` read, a camelCase id is refused with
-  *"not one of the 58 game rules this server just listed, so nothing was sent"*, and
-  `random_tick_speed=banana` is refused with the current value so the control can snap back.
-  Production also confirms two things this file already claimed: `mob_griefing` is `false`
-  with nothing in this app having set it, and `command_blocks_work = true` against
-  `enable-command-block=false` in the file.
-  **The mods feature was revised on 2026-10-02** — one page instead of three tabs, an
-  `Install` button that exists, a rollback that restores the mods it deletes, and an inventory
-  reconciled against the real directory. It also **reversed a recommendation this file used to
-  make** about delegating pack installs to the image. What is still open: pack imports are
-  unpinned, so applying a saved pack installs the newest build of each mod rather than the
-  pack. All of it: **[`docs/MINECRAFT.md`](docs/MINECRAFT.md)**.
-  **Ban management was added 2026-10-01** (`/api/server/bans` + a card on the MC settings
-  page), closing the whitelist/ops/bans set. It is routed on a live RCON socket rather than
-  on `docker inspect` and reads every outcome back. **Exercised end to end on the live
-  container 2026-10-02**: ban → the game reports it → the file carries a real UUID
-  (`95911851-…`, *not* the `uuid: ""` that used to lock everyone out) → pardon → verified by
-  read-back → files and game both empty again. **One hard limit, and it is the server's:**
-  `banlist` sends no separator between entries, so a reply with two or more bans cannot be
-  parsed and the live cross-check honestly answers "cannot confirm". The files stay
-  authoritative. Measured, with the real reply committed as a fixture, and the obvious fix is
-  wrong — see [`docs/MINECRAFT.md`](docs/MINECRAFT.md#bans).
-- **The mod installers now filter by side and verify downloads** (2026-10-01,
-  `src/lib/mod-admission.ts`, tested). Two holes, both the house defect class. Every pack
-  mod went into the *server's* mods dir regardless of side — a large pack is 30–50%
-  client-only (Sodium, Iris), where the good case is wasted disk and the bad case is Fabric
-  Loader aborting on a jar with no server entrypoint, i.e. a permanent "Starting…" with the
-  cause nowhere on screen. And `ModrinthFile.hashes` had been typed since the file was
-  written with nothing reading it, so a truncated download wrote a bad jar and the route
-  answered `{success:true}`. Now: **skip only on a positive `unsupported`** (`environment` is
-  a *string* on the API, not the `env:{client,server}` object the `.mrpack` format uses), skips
-  are **named** in the response and the ledger, and `downloadVerifiedJar` hashes in memory and
-  throws `ModIntegrityError` **before** any write, so a bad jar never exists in the mods
-  directory. One helper for both `/api/mods/install` and `install-modpack`. **The denominator
-  changed and that is the load-bearing part:** "installed n of m" counts *mods that belong on
-  this server* (pack rows − client-only), because counting the skips would make every correct
-  apply settle `noop` → outcome `partial` → amber, which is the backup-`noop` regression the
-  test suite exists for. See `serverModTotal`.
-  - **Not yet run against a live pack.** The enum and the hashes were measured against the
-    real Modrinth API, but no modpack has been applied through it. The three saved packs that
-    could exercise it are the ones a version guard refuses anyway (below).
-  - **`environment` has ten values, not six and not nine.** This said nine over "200 projects /
-    360 versions". **No such scan ever ran** — that figure came from a review report and was
-    written in here at merge time without being checked against the code, which already said
-    otherwise; a later edit then invented "an intermediate scan" to explain it. Two fabrications
-    on top of each other, in the file whose whole job is to be true. The real measurement is
-    **527 projects / 2,751 versions** and it is the table on `ENVIRONMENT_TO_SERVER` in
-    `src/lib/mod-admission.ts` — ten rows, with each value's count and its sampling written
-    out beside it. Don't restate the list here; a second copy of an enum Modrinth can extend
-    is how one of them goes stale, which is exactly what happened to this bullet. The narrow
-    160-version sample missed `singleplayer_only`, the one value that changes an answer from
-    install to skip. An earlier version of this paragraph also said the two signals "never
-    disagree on a skip, only on an install"; true of the 160-version sample, false of the
-    wider one (17 counter-examples). An unmapped value now fails loudly rather than silently.
-  - **Both installers and the report UI have behavioural tests** (2026-10-02):
-    `src/lib/__tests__/mod-install-routes.test.ts` drives `/api/mods/install-modpack` and
-    `/api/mods/install` as routes with only the edges faked — the real gates, the real plan,
-    the real operation registry — and `tests/modpack-report.test.tsx` renders the report
-    dialog. Written against eleven named mutants; see
-    [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
-  - **`/api/mods/install` finally has a caller** (2026-10-02): an **Install** button on every
-    search result, with add-to-pack demoted to secondary. The route was written, hardened and
-    tested with *nothing calling it*, so the only way to install one jar was to make a one-mod
-    pack and apply it — which tars the world and deletes every installed mod first. Three gaps
-    closed with it: the search facet now defaults to the server's own version and loader
-    (it listed mods for every Minecraft version ever against a 26.1.2 server, and widening is
-    now the explicit literal `any`); `/api/mods/install` and `/api/mods/[id]` now
-    **defer to** `files:minecraft`, so an install arriving during an apply is refused with the
-    lane named (`fileLaneBusy` only *reads* the registry — it is one-directional by design, so
-    an install already in flight when an apply starts is still not waited for); and the
-    client-only 409 — whose `serverSide`, `decidedBy` and `allowClientOnly` opt-in nothing had
-    ever read — is a named dialog that states the consequence and offers the override.
-    **Not yet pressed against the live container.** Depth:
-    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#installing-one-mod).
-  - **The Installed tab stopped reciting the database** (2026-10-02).
-    `GET /api/mods/installed` was `db.installedMod.findMany()` and there was **no `readdir`
-    anywhere in the mod code**, so "what is installed" was the app's memory of its own
-    writes rather than a reading of the directory the server loads from. It now reconciles
-    the two and answers three groups — `matched`, `untracked` (a jar with no row),
-    `missing` (a row with no jar) — **by file name, never by count**, because "2 untracked
-    jars" sends somebody to the file browser to guess which two. `InstalledMod` gains
-    `source` (`"pack"` / `"manual"`, written by both writers) and `versionId`, so "which of
-    these did the pack put there" is answerable for the first time —
-    **needs the hand-applied migration above**. Hashing is opt-in (`?hash=1`) and
-    `stat` is not; the reasoning, and the three mutants that went green before the tests
-    were fixed, are in
-    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02).
-    **Read against the live container 2026-10-02**, and the strong form: 3 matched, 0
-    untracked, 0 missing, and with `?hash=1` every `sha512` **and** byte count identical to an
-    independent `sha512sum` run on the volume. So the endpoint is reading the directory the
-    server loads from, not reciting the rows. No drift to find there yet — the DB and disk
-    agree — which is the answer it should give.
-  - **`/minecraft/mods` is one page, with the pack as a header** (2026-10-02). It was
-    three tabs — Browse mods / Installed / Modpacks — the last holding two sub-tabs, which
-    put every write on the page inside a nested tab and the install instructions in the
-    *collection's* empty state. Searching Modrinth is an **action** now (`Add a mod`,
-    `Change pack`), the list of what is on the server is the page, and saved sets are a
-    section below. **Change pack shows the comparison before the button**: a new
-    `GET /api/modpacks/preview` resolves what a pack needs *without writing a `Modpack`
-    row*, so a version mismatch is a refusal you can read rather than a toast that
-    disappears — which matters because COBBLEVERSE and `Hoplite` can never install here and
-    production already carries nine rows for six packs from attempts. A modpack apply also
-    writes **one `apply_modpack` `Activity` row** at last (its 166 `installMod` calls wrote
-    the leaves and not the act), which is what lets the header name the pack. No schema
-    change. Full shape, and why there is deliberately **no "Remove pack"**:
-    [`docs/MINECRAFT.md`](docs/MINECRAFT.md#the-mods-page-is-one-surface--2026-10-02).
+- **Minecraft: boots and has been exercised end to end.** Compose, `ServerConfig.mcVersion`
+  and the jars on disk all say **26.1.2**; it starts in `Done (1.661s)!`. Power, backups
+  (including a real restore), the file browser and the console have all been run live. Since
+  2026-09-30 the in-game whitelist, ops **and bans** work — all three were writing
+  `uuid: ""`, which matches nobody, so enabling the whitelist locked *everyone* out with a
+  green toast; `src/lib/mc-identity.ts` now derives the offline UUID the way the server does.
+  **Game rules** (2026-10-01) and the **revised mods page** (2026-10-02) are both live and
+  both verified against the container. **No in-game join has ever been observed on netcup.**
+  Everything specific — the modpack decision that reversed itself, the `banlist` parsing
+  limit, the 58-rule discovery, the provenance reconcile, and what is still open — is in
+  **[`docs/MINECRAFT.md`](docs/MINECRAFT.md)**. The MC layer is still the oldest code here.
+- **Mod installs filter by side and verify hashes** (`src/lib/mod-admission.ts`). Two holes,
+  both the house defect class: every pack mod went into the *server's* mods dir regardless of
+  side (a large pack is 30–50 % client-only, and Fabric Loader aborts on a jar with no server
+  entrypoint), and `ModrinthFile.hashes` had been typed since the file was written with
+  nothing reading it, so a truncated download wrote a bad jar and the route answered
+  `{success:true}`. Now: skip only on a positive `unsupported`, name every skip in the
+  response and the ledger, and hash in memory **before** any write. **Not yet run against a
+  live pack.** Depth, including why the denominator counts mods-that-belong rather than pack
+  rows: **[`docs/MINECRAFT.md`](docs/MINECRAFT.md)**.
 - **7 Days to Die: installed and configured on netcup, container STOPPED** (checked
   2026-10-06). It last ran from 2026-09-26; game **V 3.3.0 (b14)** on
   `latest_experimental`, measured then and not since. The first netcup start re-downloaded
@@ -1052,6 +933,11 @@ Genuinely open:
   depend on them, only its size does.
   `dependencies[].version_id` is already in the Modrinth response and discarded at import;
   `/v2/versions?ids=[…]` returned all 168 of COBBLEVERSE's pins in 424 ms. One increment.
+- **Seven `react-hooks` lint errors have never been triaged.** `npm run lint`'s 45 errors are
+  38 `no-explicit-any` (style) plus **6 `react-hooks/set-state-in-effect` and 1
+  `react-hooks/immutability`** — the first of which fires on a `setState` inside an effect,
+  i.e. the shape of a render loop. They were lumped in as "pre-existing `any` warnings" in
+  this file and in a commit message until 2026-10-06. Nobody has looked at whether any is real.
 - **`isPathSafe` is three private copies with divergent signatures.** The *security* half is
   already shared and correct — `isPathInside` in `src/lib/file-guard.ts` compares with a
   separator, so the sibling-root escape (`/sevendtd-config` satisfying

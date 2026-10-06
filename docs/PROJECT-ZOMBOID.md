@@ -611,9 +611,13 @@ Three things not to re-break:
   interfaces, and **every `ports:` entry is world-reachable regardless of ufw**: Docker
   publishes with a DNAT rule and the `FORWARD` chain reaches Docker's own chains before
   any ufw chain, so that traffic never passes through `INPUT` at all. `DOCKER-USER` is
-  the only place a rule can intercept it, and on this box `iptables -S DOCKER-USER` is
-  empty (measured 2026-09-28; from outside, `curl http://89.58.50.155:3000/login`
-  returned 200 in cleartext, and 7DTD's telnet on 8081 accepted a public connection).
+  the only place a rule can intercept it. It was **empty** when measured 2026-09-28 — from
+  outside, `curl http://89.58.50.155:3000/login` returned 200 in cleartext and 7DTD's telnet
+  on 8081 accepted a public connection. **It is not empty now:** re-measured 2026-10-06 it
+  carries DROP rules for **8081, 8080 and 3000**, installed by a `yoshling-firewall` systemd
+  unit whose file is not in this repo. Those are three specific ports, not a default-deny —
+  **PZ's four UDP ports are still open to the internet by design**, because players connect
+  to them directly.
   So: publish to `127.0.0.1:` when only the host needs a port, and put DROP rules in
   `DOCKER-USER`, never in ufw.
   - > This said the ports "must be open in BOTH the box's `ufw` and the Hetzner Cloud

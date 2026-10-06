@@ -195,7 +195,7 @@ than one-off fixes:
   said "seven" and had been right at the time. Any new short writer should — and *writer* is
   broader than "config": `/api/mods/install` and `/api/mods/[id]` joined on 2026-10-02
   because they write into the Minecraft mods directory that `mods.apply` is busy emptying
-  (see [`MINECRAFT.md`](MINECRAFT.md#both-single-mod-writers-now-hold-filesminecraft)).
+  (see [`MINECRAFT.md`](MINECRAFT.md#both-single-mod-writers-now-defer-to-filesminecraft)).
 - **Pre-emption is global, so every confirm dialog must be.** `liveFileOperations()` +
   `namedFileOperations()` in `operation-ui.ts` are the one definition. `powerBlocker`
   stays per-world — that is the *disable* decision and it is correct.
@@ -649,3 +649,36 @@ happen, so each guarantee is pinned from both sides: a clean apply answers 200 w
 `warnings`, a pack whose values the enum all knows warns about nothing, and an apply with no
 skips and no failures opens **no** dialog and raises **no** toast. Without that last one,
 "always open the report" passes every other test in the file.
+
+## Background work — three timers, all in `src/instrumentation.ts`
+
+Nothing else in this app runs on a clock, **two of the three can stop or start a game
+container**, and until 2026-10-06 only one was documented anywhere — so this is the first
+place to look when something moved by itself. All three are a plain `setInterval` with a
+re-entry guard, never a tick that re-arms from a `finally`: that shape died permanently on
+one hung call (2026-09-15).
+
+| Timer | Cadence | Off switch |
+|-------|---------|-----------|
+| `collectStats` (`:66`) — the monitor graphs | 5 s | — |
+| PZ Workshop watcher (`:84`, `src/lib/zomboid-updates.ts`) — **restarts PZ itself when empty** | `PZ_UPDATE_PENDING_POLL_MS` 15 s tick, `PZ_UPDATE_POLL_MS` 5 min full check | **`PZ_UPDATE_WATCH=false`** |
+| `backupTick` (`:168`, `src/lib/backup-schedule.ts`) | `BACKUP_CHECK_MS` 5 min; first run 5 min after boot | **`BACKUP_SCHEDULE=off`** |
+
+**Scheduled backups** — `shouldRunScheduledBackup` is the whole decision in one tri-state
+function (`run`/`skip`/`probe`), so a `readdir` gates the expensive half of probing three
+game servers. Default **24 h per world** (`BACKUP_SCHEDULE_HOURS[_<GAME>]`), and "when did
+we last back up" is the newest archive's mtime — no state file to get stuck. It refuses
+when: off; the last automatic attempt failed under `FAILURE_COOLDOWN_MS` (**1 h**) ago; the
+newest archive is younger than the interval; the world is in any state but
+`online`/`offline`; or **anyone is connected**.
+
+**Retention deletes archives without asking, and every backup prunes — manual ones too**
+(`applyRetention` from `backup-create.ts:359` unless `prune: false`), which is what "five
+archives disappeared" means. `src/lib/backup-retention.ts`:
+`DEFAULT_POLICY = { keep: 5, maxAgeDays: 0 }` (0 = no age rule), per world via
+`BACKUP_KEEP[_<GAME>]` / `BACKUP_MAX_AGE_DAYS[_<GAME>]`, `keep` floored at 1, journalled to
+`BACKUP_JOURNAL_FILE` (`/app/data/backup-journal.jsonl`), and reaching **only inside
+`/app/data`** — the `/root` sets are nobody's job (open list). Three deliberate properties,
+each easy to "simplify" away and all three reasoned out in that file's header: the two rules
+are **OR, not AND**; **the newest archive is never a candidate**; and **the oldest is exempt
+from the count rule but not the age rule**.

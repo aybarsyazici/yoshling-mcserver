@@ -45,9 +45,11 @@ work. Two rows *in §5 itself* were also wrong and are marked as such; one of th
 the five-minute SIGKILL stop. The corrections it produced are already applied
 throughout this file.
 
-**All 25 rows of its §2 "Fix first" table are closed** — re-checked against the code on
-2026-10-06, except #9, where the harm is gone and a hand map reorder still does not survive
-a restart. Nine of those rows were recorded below and sixteen were recorded nowhere, which
+**24 of the 25 rows in its §2 "Fix first" table are closed** — re-checked against the code on
+2026-10-06. The exception is **#9**: the harm is gone, but a hand map reorder still does not
+survive a restart, because `entry.sh` rewrites `Map=` a few seconds into boot. (This sentence
+opened "All 25 rows … are closed — except #9", which disagreed with itself inside one clause
+and with `AUDIT-2026-09-28.md`'s own heading, which says 24.) Nine of those rows were recorded below and sixteen were recorded nowhere, which
 is why a 25-row table ranked by blast radius read as a backlog for a week. The per-row
 evidence now sits in the table's own header rather than being restated here.
 

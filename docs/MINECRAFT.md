@@ -11,7 +11,7 @@ been observed on netcup** — only a person with the game can prove a client con
 ## Where the files are, and what a live measurement costs
 
 **`MC_DIR` is `/minecraft` in the web container and `/data` in the game's** — one volume,
-two mounts. Compose gives `mc` `mc-data:/data` and `web` `mc-data:/minecraft` plus
+two mounts. Compose gives the `minecraft` service `mc-data:/data` and `web` `mc-data:/minecraft` plus
 `MC_SERVER_DIR: "/minecraft"`; the app reads it as `RUNTIME.minecraft.dir`
 (`process.env.MC_SERVER_DIR || "/minecraft"`, `src/lib/game-manager.ts`) and re-exports it as
 `MC_DIR` from `backup-create.ts`, which is the symbol the rest of this doc uses without
@@ -25,11 +25,15 @@ up, and re-checking one means starting it again:
 
 - `docker exec yoshling-mc rcon-cli "<command>"` is the route to anything RCON, and the one
   the 2026-10-02 game-rule write was independently cross-read with (recorded in
-  `CLAUDE.md`'s Status). **RCON 25575 is not published to the host** — `mc` publishes only
+  `CLAUDE.md`'s Status). **RCON 25575 is not published to the host** — the service publishes only
   `25565:25565` — so `CLAUDE.md`'s note that `scripts/rcon.py` "also works against Minecraft
   on 25575" holds only from inside the compose network, which is the thing
   `scripts/pz-rcon.sh` handles for PZ. There is no Minecraft equivalent of that wrapper.
-- the `mc` service carries `profiles: ["games"]`, so a by-hand `docker compose up mc` needs
+- **The compose *service* is `minecraft`; `mc` is only part of the container and volume
+  names** (`yoshling-mc`, `mc-data`). `docker compose up mc` fails with "no such service",
+  profile or no profile — an earlier version of this section called the service `mc` three
+  times.
+- the service carries `profiles: ["games"]`, so a by-hand `docker compose up minecraft` needs
   `--profile games`. `docker start yoshling-mc` does not.
 - **powering it on through the dashboard stops whichever world is running** (`powerOn` evicts
   every other game), and `docker start yoshling-mc` instead leaves both up: MC's
@@ -797,6 +801,21 @@ curated 104-slug exclude list at `/image/modrinth-exclude-include.json`. Driving
 Those capabilities are real and the 104-slug list is a genuinely useful artifact — it is the
 `env.server` half and the hash half that do not hold up, and the `start: false` behaviour that
 makes the whole shape unprovable here.
+
+### Sidedness: `ENVIRONMENT_TO_SERVER` is the table, and it is in the code on purpose
+
+`src/lib/mod-admission.ts` holds the mapping from Modrinth's per-version `environment` string
+to an install/skip decision, **ten rows**, each with the count and sampling that produced it
+(527 projects / 2,751 versions). It is not restated here: a second copy of an enum Modrinth can
+extend is how one of them goes stale, and that has already happened once in `CLAUDE.md`.
+
+Two things worth knowing without opening it:
+
+- **`singleplayer_only` is the value that changes an answer from install to skip**, and it was
+  missing from the first draft's table — so every `singleplayer_only` mod was being installed
+  onto a server. A narrow 160-version sample did not contain one.
+- An **unmapped** value now fails loudly rather than falling through to install. The enum is
+  Modrinth's to extend, so silence was the wrong default.
 
 ### Pack facts that are not bugs
 
