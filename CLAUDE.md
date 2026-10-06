@@ -350,7 +350,19 @@ the `signIn` callback now share `src/lib/whitelist.ts`. Before that the page wro
 adding someone in the UI silently did nothing and Discord refused them. The file
 wins; the env var is only the seed for a fresh install; a missing or corrupt file
 falls back to env rather than locking everyone out; and matching accepts the
-Discord @handle *or* the display name. Refusals are logged with the attempted
+Discord @handle *or* the display name.
+
+**"Invite-only" is conditional on the list being non-empty, and an empty list FAILS OPEN.**
+`isWhitelisted` (`src/lib/whitelist.ts:101`) returns `true` when the resolved list has no
+entries and there was no read *error* — logging *"the list is empty — anyone with a Discord
+account can sign in"*. That is deliberate: failing closed on an empty list would lock the
+owner out of their own dashboard with no way back in, since the only way to add somebody is
+to be signed in. But it means **a fresh box, or a restore whose `/app/data/whitelist.json` is
+missing while `ALLOWED_DISCORD_USERS` is unset, is a public dashboard that believes it is
+invite-only.** A read *error* fails closed; only a cleanly-empty list fails open.
+Production's gate holds — 6 entries in the file, 5 in the env var, checked 2026-10-06 — so
+this is a provisioning hazard, not a live hole. **Check it after any restore or new
+deployment**, and the warning in the log is the thing to grep for. Refusals are logged with the attempted
 name. Being whitelisted grants **no** world — that's `User.games` on the Crew page.
 
 Enforcement, in layers:
@@ -849,6 +861,15 @@ Genuinely open:
   duplicates the row instead of updating it (production has 9 rows for 6 packs).
   `dependencies[].version_id` is already in the Modrinth response and discarded at import;
   `/v2/versions?ids=[…]` returned all 168 of COBBLEVERSE's pins in 424 ms. One increment.
+- **`isPathSafe` is three private copies with divergent signatures.** The *security* half is
+  already shared and correct — `isPathInside` in `src/lib/file-guard.ts` compares with a
+  separator, so the sibling-root escape (`/sevendtd-config` satisfying
+  `startsWith("/sevendtd")`) is closed. But each of `/api/server/files`, `/api/7dtd/files` and
+  `/api/zomboid/files` still wraps it in its own `isPathSafe`, and **the Minecraft one takes a
+  different argument list** (`(requestedPath)` against `(baseDir, requestedPath)`). That is
+  the same shape as the power control ending up in three versions where two were missing a
+  fix. One shared wrapper; found 2026-10-06 in an abandoned branch that had proposed exactly
+  this and been superseded.
 - **The modpack apply still runs with the world possibly up** — it deletes and writes jars under
   a live JVM and then tells the user to restart. It should be wrapped in `withGameStopped(…,
   {restartOnFailure: false})` and claim `power` alongside `files:minecraft`, and call

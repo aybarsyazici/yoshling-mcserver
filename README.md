@@ -26,6 +26,17 @@ Live at **https://yoshling.xyz**.
 
 ```bash
 npm install
+
+# Required before anything else runs. The Prisma client is generated into
+# src/generated/prisma, which is gitignored — so a fresh clone has no `@/generated/prisma`
+# and every command below fails with a module-not-found until you do this.
+#
+# It also needs Node >= 20.19: on older Node every `prisma` command dies with
+# ERR_REQUIRE_ESM, because prisma@7 require()s an ESM-only dependency. There is
+# deliberately no `postinstall` doing it for you, since on the wrong Node that would make
+# `npm install` itself fail.
+PATH="$HOME/.local/share/mise/installs/node/22.18.0/bin:$PATH" npx prisma generate
+
 npm run dev        # http://localhost:3000
 ```
 
@@ -38,6 +49,9 @@ npm test           # vitest — ~1500 tests, no Docker, no network, no server ne
 npx tsc --noEmit
 npm run build
 ```
+
+(The Docker build does the generate itself — `Dockerfile:12` — and `node:20-alpine` is new
+enough, which is why this trap only bites locally.)
 
 ## Stack
 

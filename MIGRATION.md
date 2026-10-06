@@ -37,9 +37,25 @@ Only **~1.6 GB**. Most of the 19 GB of volumes is re-downloadable game content.
 | `yoshling_sdtd-saves` | 490 MB | **Yes** — 7DTD worlds + `GeneratedWorlds` |
 | `yoshling_pz-data` | 25 MB | **Yes** — PZ `Server/*.ini`, save, player db |
 | `yoshling_sdtd-backup` | 1 MB | Yes (tiny) |
-| `yoshling_sdtd-server` | 16.8 GB | **No** — 7DTD game files, SteamCMD re-downloads on first boot |
+| `yoshling_sdtd-server` | 16.8 GB | **The 16 GB of game files: no. `sdtdserver.xml` inside it: YES — see below** |
 | `yoshling_pz-workshop` | 624 MB+ | **No** — Workshop mods, the server re-downloads them |
 | `yoshling_sdtd-log` | 18 MB | No |
+
+> ### ⚠️ `sdtd-server` is not only game files — it holds the 7DTD config
+>
+> **This row said a flat "No" and that is how the last migration cost what it cost.**
+> `yoshling_sdtd-server` is mounted at `/home/sdtdserver/serverfiles` in the game container
+> **and at `/sevendtd-config` in the web container**, and `sdtdserver.xml` — every 7DTD
+> setting, including the `TelnetPassword` without which the dashboard has no control at all —
+> lives in it. Verified 2026-10-06: `/sevendtd-config/sdtdserver.xml`, 13,726 bytes, carrying
+> `GameWorld="Reveo Valley"`, `GameName="Fresh2"`, `ServerVisibility=2`.
+>
+> Skipping the volume wholesale is right for the 16 GB SteamCMD payload and **wrong for that
+> one file**. A fresh SteamCMD install writes a default `sdtdserver.xml`, which boots a
+> brand-new empty world with telnet disabled and the dashboard blind — exactly what happened
+> on 2026-09-26. So: **copy `sdtdserver.xml` out before you migrate, and put it back after the
+> first boot has finished re-downloading.** The app's `SevenDaysConfig` DB row is the other
+> recovery source; see [`docs/7-DAYS-TO-DIE.md`](docs/7-DAYS-TO-DIE.md).
 
 Plus `/opt/yoshling` (the git checkout, 262 MB) and critically **`/opt/yoshling/.env`**,
 which is gitignored and holds secrets that exist nowhere else:

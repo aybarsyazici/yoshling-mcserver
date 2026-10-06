@@ -101,16 +101,20 @@ Every settings writer in this app:
 
 ### The PZ sandbox file is the concentrated risk
 
-`sandbox-lua.ts` + `zomboid-sandbox.ts` rewrite a 74,711-byte, 1,804-line Lua file holding
-**335 options** — the world's entire ruleset, with no backup other than the one this writer
+`sandbox-lua.ts` + `zomboid-sandbox.ts` rewrite a 74,711-byte Lua file holding **742
+options** — 253 at the top level, the rest contributed by mods — the world's entire ruleset, with no backup other than the one this writer
 makes. So it carries guards nothing else needs:
 
 - **A structural guard.** `assertWholeFile` refuses to rewrite unless the first non-blank
   line is `SandboxVars = {`, the last is `}`, and at least `MIN_PLAUSIBLE_OPTIONS` (200)
   options parsed. A partial read — the server rewriting the file at that moment — would
-  otherwise be serialised back as the whole truth and take the other ~300 options with it.
+  otherwise be serialised back as the whole truth and take the other ~700 options with it.
   The floor is injectable so tests can use a short fixture; production uses 200 against a
-  real 335.
+  real **742** — so it is a 27 % floor, not the comfortable 60 % that an earlier version of
+  this page implied by quoting 335. **335 is what the API returns for one `scope`**, because
+  `/api/zomboid/sandbox` filters by scope and drops preset-only keys; the *file* is 742, and
+  the file is what the writer rewrites. Do not confuse a panel's row count with the blast
+  radius.
 - **A unique temp name per write.** The settings page renders two sandbox panels and both
   Save buttons PUT the same route, so a fixed `.tmp` let two concurrent writes rename each
   other's half-written file over the live one.
@@ -135,7 +139,7 @@ writes:
 1. `DayLength=4` when it was already `4` — a semantic no-op, but a full parse → serialise →
    rename. It produced a **new inode** carrying the original's `node:node 664`, a `.bak` on
    the **original inode** with the original mtime, and a file whose md5 was **unchanged**.
-   That last fact is the important one: a complete rewrite of all 1,804 lines and 335
+   That last fact is the important one: a complete rewrite of all 1,803 lines and **742**
    options reproducing the file byte for byte is the strongest available evidence that the
    round trip is lossless. Had the writer dropped, reordered or reformatted anything, the
    md5 would have moved.
@@ -152,7 +156,7 @@ temps.
 |------|---------|-----------|-----|
 | Minecraft | `server.properties` via a generic panel with a hand-written help table, plus version/loader, memory, in-game whitelist and ops | ~90 properties, 48+ game rules, bans | Game rules and bans were unreachable from the dashboard; see Status below. |
 | 7 Days to Die | **64 of 219** XML properties, plus a quick-settings card and the sandbox code | 219 properties | Deliberate: the audit's verdict was "ours is adequate" — pasting a sandbox code is the right design for the long tail, and 7DTD has no memory control (Unity native server, no JVM). |
-| Project Zomboid | **137 of 144** `.ini` keys + 335 sandbox options + the mod/map order cards | 144 + 335 | 7 hidden: 4 `INFRA_KEYS` (ports and the RCON password, deployment-owned) and 3 `CARD_OWNED_KEYS` (`Map`, `Mods`, `WorkshopItems` — owned by the mod cards, which is why a generic editor must not also offer them). |
+| Project Zomboid | **137 of 144** `.ini` keys + the sandbox options (742 in the file; the panel shows 335 for the world scope and the rest under mods) + the mod/map order cards | 144 + 742 | 7 hidden: 4 `INFRA_KEYS` (ports and the RCON password, deployment-owned) and 3 `CARD_OWNED_KEYS` (`Map`, `Mods`, `WorkshopItems` — owned by the mod cards, which is why a generic editor must not also offer them). |
 
 The 137/132 accounting is **derived, not a constant** — recompute it from `INFRA_KEYS` and
 `CARD_OWNED_KEYS` rather than trusting a number. An earlier comment said "133 of the 138"
