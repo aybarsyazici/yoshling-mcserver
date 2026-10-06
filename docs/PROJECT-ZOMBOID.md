@@ -469,8 +469,15 @@ Hetzner 2026-09-13 — see MIGRATION.md.
 
 Working and verified in production:
 
-- 89 mods load from 75 Workshop items; `SERVER STARTED`, RCON on 27015, 16261/udp
-  reachable, 0 failed downloads, `OOMKilled=false`.
+- **87** mods load from **75** Workshop items, across **22** maps — re-measured off the live
+  `.ini` on 2026-10-06 (`Mods=` 87 non-empty ids, `WorkshopItems=` 75, `Map=` 22). This said
+  **89** mods, which was true when written; a mod list that people edit is not a constant, so
+  **re-measure rather than quoting this number**:
+  `grep -oE '^Mods=.*' /zomboid/Server/yoshling.ini | tr ';' '\n' | sed '/^$/d' | wc -l`.
+  The Workshop count has not moved, which is the expected shape — one Workshop item can carry
+  several mod ids.
+- `SERVER STARTED`, RCON on 27015, 16261/udp reachable, 0 failed downloads,
+  `OOMKilled=false`.
 - Power on/off/restart, console, file browser (Config/Saves/All data), backups,
   settings, config import, the mods page, and the maps card.
 - `Map=` carries all 22 maps and **16 register cells** (was 2 before the scanner
@@ -482,8 +489,14 @@ Working and verified in production:
   to apply it with nobody watching. The evidence is a one-second correlation: the
   container's `StartedAt` is `16:10:30Z` and the watcher's own `appliedAt` is
   `16:10:31Z`, with `[pz-updates] applying (server restart): [B42] I Don't Need A
-  Lighter` in the web log. Still healthy 16 hours later — `lastError: ""`,
-  `pendingIds: []`, last check `2026-10-02T07:55:32Z`.
+  Lighter` in the web log.
+  - **Five days on it has applied three, and that is the result worth having.** The web log
+    shows `applying (server restart):` for `[B42] I Don't Need A Lighter`, `W900 Semi-Truck
+    [B42]` and `Mini Health Panel`; the most recent restarted PZ at `2026-10-05T19:51:34Z`
+    against an `appliedAt` of `19:51:34.962Z` — the same one-second correlation, three times,
+    unprompted. Checked 2026-10-06: `lastError: ""`, `pendingIds: []`, last poll three minutes
+    earlier. One restart per update and no flap, which is what the unbounded-retry fix below
+    was for.
 - 12 GB heap; peak RSS 9.7 GB of 16 GB.
 
 Outstanding:

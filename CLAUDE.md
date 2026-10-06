@@ -804,7 +804,9 @@ connect **directly to the box IP `89.58.50.155`**:
   control verified working again (the app's status probe runs every ~10s). **An
   in-game join on netcup has still not been observed** — the server reported
   `Total of 0 in the game` when it was handed back.
-- **Project Zomboid:** running, 89 mods, played on daily. Full status, what's
+- **Project Zomboid:** running, **87** mods across 22 maps (re-measured 2026-10-06; this
+  said 89, and a mod list people edit is not a constant — the doc gives the command), played
+  on daily. Full status, what's
   verified and what's outstanding: **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md#status)**.
 - **Per-world access:** deployed; `User.games` + `ZomboidMod` applied to the prod
   DB and all 5 accounts backfilled with all three worlds. **They are all ADMIN**, a

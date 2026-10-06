@@ -165,9 +165,21 @@ Starting game".
   published container ports; see the firewall note in `CLAUDE.md`. Now dropped in
   `DOCKER-USER` by the `yoshling-firewall` systemd unit. 8080 (web admin) was published
   too but refused connections, since `WebDashboardEnabled=false`.
-- **The `TelnetPassword` has been exposed in a chat transcript and should be rotated.**
-  It must change in **both** `sdtdserver.xml` and `SDTD_TELNET_PASSWORD` in `.env`, or
-  the dashboard loses telnet control and reports the server as offline.
+- **The `TelnetPassword` has now been exposed in a transcript twice, and rotated twice** —
+  2026-09-30 and again **2026-10-06**. The second exposure was an agent printing the web
+  container's whole env to check an unrelated variable, which is worth stating because it is
+  the easy way to do it by accident: **`docker inspect --format '{{range .Config.Env}}'`
+  prints every secret the container holds.** Filter to the key you actually want, or compare
+  lengths and equality instead of printing values.
+  - It must change in **both** `sdtdserver.xml` and `SDTD_TELNET_PASSWORD` in `.env`, or the
+    dashboard loses telnet control and reports the server as offline. Env is fixed at container
+    creation, so `.env` needs the web container **recreated**, not restarted.
+  - The 2026-10-06 rotation is verified on the env side: the xml value and the `.env` value are
+    byte-equal (compared by equality and length, without printing either) and the recreated web
+    container's `process.env.SDTD_TELNET_PASSWORD` matches `.env`. **End-to-end telnet is
+    unverified**, because 7DTD was stopped and the xml is only read at server start — so the
+    first start after this picks it up, and that is the moment to confirm the dashboard still
+    sees the world.
 - **Two quick settings write XML properties that do not exist.** The live
   `sdtdserver.xml` has neither `GameDifficulty` nor `DayNightLength` — both moved into
   the sandbox preset. `/api/7dtd/config/all` now returns them in an `ignored` array
