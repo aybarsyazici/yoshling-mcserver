@@ -8,6 +8,35 @@ Status: boots and has been exercised end to end. Compose, `ServerConfig.mcVersio
 jars on disk all say **26.1.2**; it starts in `Done (1.661s)!`. **No in-game join has ever
 been observed on netcup** — only a person with the game can prove a client connects.
 
+## Where the files are, and what a live measurement costs
+
+**`MC_DIR` is `/minecraft` in the web container and `/data` in the game's** — one volume,
+two mounts. Compose gives `mc` `mc-data:/data` and `web` `mc-data:/minecraft` plus
+`MC_SERVER_DIR: "/minecraft"`; the app reads it as `RUNTIME.minecraft.dir`
+(`process.env.MC_SERVER_DIR || "/minecraft"`, `src/lib/game-manager.ts`) and re-exports it as
+`MC_DIR` from `backup-create.ts`, which is the symbol the rest of this doc uses without
+expanding. So `MC_DIR/mods` and `/data/mods` are the same bytes, and `mc-properties.ts`
+reasoning about `/data/versions/26.1.2/server-26.1.2.jar` is the *game's* name for a path
+this doc writes as `MC_DIR/versions/…`. `MC_SERVER_DIR` is set in compose, not in `.env`.
+
+**Minecraft is normally stopped** — `exited exit=0`, and on 2026-10-06 only Project Zomboid
+and web were running. So every live figure in this doc was taken while it was deliberately
+up, and re-checking one means starting it again:
+
+- `docker exec yoshling-mc rcon-cli "<command>"` is the route to anything RCON, and the one
+  the 2026-10-02 game-rule write was independently cross-read with (recorded in
+  `CLAUDE.md`'s Status). **RCON 25575 is not published to the host** — `mc` publishes only
+  `25565:25565` — so `CLAUDE.md`'s note that `scripts/rcon.py` "also works against Minecraft
+  on 25575" holds only from inside the compose network, which is the thing
+  `scripts/pz-rcon.sh` handles for PZ. There is no Minecraft equivalent of that wrapper.
+- the `mc` service carries `profiles: ["games"]`, so a by-hand `docker compose up mc` needs
+  `--profile games`. `docker start yoshling-mc` does not.
+- **powering it on through the dashboard stops whichever world is running** (`powerOn` evicts
+  every other game), and `docker start yoshling-mc` instead leaves both up: MC's
+  `mem_limit: 6g` on top of PZ's `14g` does not fit 16 GB, and `src/lib/coresidency.ts`
+  *reports* co-residency rather than preventing it. Re-measuring a game rule is a decision
+  about somebody's PZ session, not a read.
+
 ## Identity: the offline UUID
 
 `src/lib/mc-identity.ts` derives a player's UUID the way the server does for an offline-mode
@@ -41,7 +70,15 @@ See [`SETTINGS.md`](SETTINGS.md) for the shared layer. Minecraft-specific:
   `keep_inventory`, `fall_damage`), measured 2026-10-01; `server.properties` keys are
   kebab-case. This doc said camelCase (`mobGriefing`, `keepInventory`, `doFireTick`) — that
   is the **1.21.x** spelling, which is still right for the 1.21.4 jars on the volume and
-  wrong for what is running. Nothing in the app hardcodes either, and that is on purpose.
+  wrong for what is running. **Nothing hardcodes an id that reaches a console command** —
+  that is the invariant, and this sentence used to overstate it as "nothing in the app
+  hardcodes either". `MC_GAME_RULES` *does* hardcode 54 ids, 50 of them the camelCase 1.21.x
+  spellings (`mobGriefing`, `keepInventory` and `doFireTick` are literal entries) plus the
+  four 26.x created out of `server.properties` keys — but only as help text and defaults,
+  joined to a discovered id by `canonicalGameRuleId`, never interpolated into a command. An
+  agent reading the old sentence literally would delete that table as a violation and lose
+  the help for the 34 live ids it covers; see
+  [the defaults table](#the-defaults-table-states-a-default-or-states-none).
 
 ## Game rules
 
@@ -71,9 +108,14 @@ not what was typed. A disagreement is a 502 carrying both values, never a 200 wi
 Measured against the live server on 2026-10-01, and committed as
 `src/lib/__tests__/fixtures/mc-help-gamerule.txt`:
 
-- the full reply is **5,099 bytes** (5,082 as captured) and contains **zero newlines**.
+- the full reply is **5,082 bytes** and contains **zero newlines**.
   `RconConsoleSource.sendSystemMessage` appends each feedback message to one buffer with no
   separator, so brigadier's usage lines arrive as one run-together string.
+  (This bullet said *"5,099 bytes (5,082 as captured)"*, and `src/lib/rcon.ts`'s comment
+  still says 5,099 — **one measurement with two numbers and nothing explaining the 17-byte
+  gap.** 5,082 is the checkable one: `wc -c` on the fixture, `Buffer.byteLength` the same,
+  `mc-gamerules.test.ts` pins `FIXTURE.length === 5082`, and every other mention in the tree
+  agrees. Treat 5,082 as the reply and 5,099 as unsourced.)
 - it lists **58 rules, each twice** — bare and `minecraft:`-namespaced — so 116 occurrences
   of the literal `/gamerule `.
 
@@ -302,9 +344,16 @@ answers three named groups. Logic in `src/lib/mod-inventory.ts`, rendered by
 
 **It was `db.installedMod.findMany()` and nothing else, and there was no `readdir` anywhere
 in the mod code.** So the tab headed "Installed" showed what the app last remembered
-writing, which is a different claim from what the server will load. Production agrees today
-(3 rows, 3 jars, 5.8 MB) — but nothing had ever looked, so *"they agree"* was not something
-anybody could know, and this app's named defect class is exactly the one that produces.
+writing, which is a different claim from what the server will load. Nothing had ever looked,
+so *"the two agree"* was not something anybody could know, and this app's named defect class
+is exactly the one that produces.
+
+**Something has looked now.** Read against the production container — 3 matched, **0
+untracked, 0 missing**, and with the opt-in hash path every `sha512` and byte count equal to
+an independent `sha512sum` on the volume (recorded 2026-10-06). That is the measurement that
+moves this section from "pinned by tests" to "read against the thing it reads", and it is the
+only part of the mods work with a production datum behind it. The three jars totalled 5.8 MB
+when that was last measured, on 2026-10-02.
 
 | group | means | what it is called by |
 |---|---|---|
@@ -322,8 +371,17 @@ cannot get different answers. There are four ordinary ways the two sides part:
 - `removeMod`'s `unlink` hit `ENOENT` (it is swallowed), so the row went and the jar did not
   — or the reverse;
 - a restore replaced `mods` from an archive whose manifest carried no `installedMods`, so
-  the whole set is on disk with nothing naming it. `/api/server/backups` already says so and
-  points here;
+  the whole set is on disk with nothing naming it — **and nothing tells the operator.** This
+  doc said `/api/server/backups` "already says so and points here"; it does not. The row
+  restore sits behind
+  `if (result.replaced.includes("mods") && manifest?.installedMods?.length)`, so an archive
+  with no rows skips the whole branch silently: no `op.fact`, no warning, `restoredMods`
+  simply absent from the 200. The only prose about the recovery is a code comment on that
+  block's `catch`, which is the *other* case (the row write threw). It is reachable two ways,
+  because `archiveMembersPresent` probes for the directory while the manifest's
+  `installedMods` needs `installedMods.length > 0`: an apply on a server that has a `mods/`
+  directory and no `InstalledMod` rows, or a hand-made archive. Taking this reading is
+  currently the only way to see it;
 - an install landed inside a `mods.apply` window — the half `fileLaneBusy` cannot cover, see
   the table above.
 
@@ -352,7 +410,12 @@ Four things worth not re-deriving:
 ### Provenance: `source` and `versionId`
 
 Two nullable columns on `InstalledMod`, migration
-`20261002143000_add_installed_mod_provenance`.
+`20261002143000_add_installed_mod_provenance` — **applied in production on 2026-10-02, and
+do not paste it again.** Verified 2026-10-06: `PRAGMA table_info("InstalledMod")` carries
+both `source` and `versionId`, and all three live rows read `source: manual`,
+`versionId: NULL`. `CLAUDE.md` headed the SQL "NOT YET APPLIED" for four days after it was
+applied, which is why this — the doc its own rule 2 sends you to for the depth — now states
+the status in both directions rather than only the reasoning.
 
 - **`source`** is `"pack"` or `"manual"`, written at both writers —
   `/api/mods/install-modpack` (both its paths, including the Technic direct-create) and
@@ -462,10 +525,26 @@ cannot disagree about the same server.
 | "81 jars in the mods folder — 78 from a pack, 3 added one at a time" | a **measurement** of the directory |
 
 **They are never joined.** `source` is `"pack"` / `"manual"` with no pack id, so "78 jars
-from Vanilla Perfected" is not a sentence the data supports. There is a third header state
-for exactly this reason: *"A pack was applied, but not from here"* — jars whose `source` is
-`"pack"` with no `apply_modpack` row to name. "No pack" would be false and a pack name would
-be invented.
+from Vanilla Perfected" is not a sentence the data supports.
+
+`packHeadline` (`src/lib/mod-provenance.ts`) therefore has **four** states, and this section
+listed three — the one it left out is the first branch and the load-bearing one:
+
+| when | header | `named` |
+|---|---|---|
+| a row, and `counts.fromPack === 0` | *"`<pack>` was applied, and none of it is left"* | false |
+| a row, and jars from a pack | the pack's name, with the apply's own counts | true |
+| no row, `counts.fromPack > 0` | *"A pack was applied, but not from here"* | false |
+| no row, no pack jars | *"No pack applied"* | false |
+
+**A recorded apply is not evidence the pack is still on the server**, and the first row is
+the guard for that: it returned `named: true` with the Activity row's pack name under an
+eyebrow reading "Pack on the server", so a pack whose jars had all since been removed went on
+being claimed as the running set. The row says what happened once, `counts.fromPack` says
+what is there now, and the header is about now. Reading `counts.fromPack === 0` as redundant
+and dropping it restores that bug — which is why it is in the table rather than left to the
+code comment. The third row exists for the opposite gap: "No pack" would be false and a pack
+name would be invented.
 
 `packVersionNote` reports a pack applied for a Minecraft version the server no longer runs —
 real drift, because the version dropdown can be changed afterwards and the jars do not move
@@ -624,8 +703,14 @@ file exists, so "covered elsewhere" is checkable rather than a way to silence th
 - **No new animation.** This is a dense reading surface and the shared `Reveal` primitive does
   not consult `usePrefersReducedMotion`, so adding it would be adding motion a reduced-motion
   user still gets.
-- **No live verification.** Everything above is about code and is pinned by tests; nobody has
-  opened this page on the box.
+- **No live verification of the page.** Nobody has opened `/minecraft/mods` on the box, and
+  everything above about the rendering is code pinned by tests. **The reading underneath it
+  has been read against production**, though — `GET /api/mods/installed` answered 3 matched /
+  0 untracked / 0 missing with matching hashes (recorded 2026-10-06, see
+  [What is installed](#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02)) — and
+  the header, the five groups and every count on this page come from that one request. So the
+  reconcile is proven against production and only the rendering is not; this bullet said
+  neither was.
 
 ## Modpacks — and why we are NOT delegating to the image
 
@@ -642,9 +727,14 @@ file exists, so "covered elsewhere" is checkable rather than a way to silence th
 
 Driving `MODRINTH_MODPACK` means patching `.env` and recreating the service, which is what
 `applyServiceEnv` does for the version dropdown. But `applyServiceEnv` calls
-**`recreateService(game, { start: false })`** (`game-manager.ts:1974` and `:2108`) and starts the
-world again only `if (wasRunning)`. **Minecraft is `exited exit=0` on this box** — verified
-2026-10-02 — and it is the world that spends most of its time stopped.
+**`recreateService(game, { start: false })`** and starts the world again only
+`if (wasRunning)` — `setMemory`, a few functions below it in `src/lib/game-manager.ts`, does
+exactly the same, which is why neither can boot a stopped world. (This cited
+`game-manager.ts:1974` *and* `:2108` as both being inside `applyServiceEnv`; `:2108` is
+`setMemory`. The argument holds for both functions, so name the symbols — a line number in
+the decisive citation of a section is wrong after the next edit to that file.)
+**Minecraft is `exited exit=0` on this box** — verified 2026-10-02, still stopped
+2026-10-06 — and it is the world that spends most of its time stopped.
 
 So "apply a pack" would recreate a stopped container, install **nothing**, and the only honest
 ledger entry would be *"requested, not applied"*. The actual download would happen on some
@@ -792,6 +882,21 @@ taken while people play can be torn. And nothing archives `config/`, `logs/` or 
 `server.properties` next to them — `mods` was added because it is the directory an apply
 *destroys*, which is a narrower claim than "a Minecraft backup is complete".
 
+**The apply still runs with the world possibly up, and it is the largest open hazard in the
+Minecraft code.** `/api/mods/install-modpack` deletes every jar and writes a new set under a
+live JVM, then tells the user to restart. Measured against the route: it is **not** wrapped
+in `withGameStopped`; its `runOperation({kind: "mods.apply"})` takes the default resources
+for that kind, which are `["files:minecraft"]` and **not** `power`, so a Power on can start
+the world in the middle of it; and it calls `refuseIfPreempted` **zero** times, against ten
+call sites in `backup-create.ts` (two of it, eight of `refuseIfPreemptedEarly`; counted
+2026-10-06). On Linux a running JVM keeps the descriptors for jars that have been unlinked,
+so the server goes on serving the set it loaded at boot while the directory it will load next
+already says something else — a divergence nothing on screen names, and nothing forces the
+restart that ends it. What it should be is
+`withGameStopped(…, {restartOnFailure: false})` — a half-replaced mod set booted is worse
+than a stopped world — claiming `power` alongside the file lane. Also in `CLAUDE.md`'s
+"Genuinely open" list; this is the depth for it.
+
 ## Bans
 
 `/api/server/bans` (GET list, POST add one, DELETE remove one) + `McBansCard` on the settings
@@ -801,6 +906,13 @@ write is often not a write at all. Logic is in `src/lib/mc-bans.ts`.
 **One target per request, not a whole-list PUT** like ops and whitelist. While the server is up
 a ban is an RCON `ban <name>`, and there is no "set the ban list to exactly this" command — a
 whole-list endpoint would have to diff and then issue N commands, each able to fail separately.
+
+**The GET is gated on `settings.read`, which the ops and whitelist GETs are not** — those gate
+on world access alone. A ban list carries IP addresses, so handing a read-only MEMBER every
+address banned from the box is a privileged read rather than a browse (the same argument the
+7DTD config makes about `ServerPassword`). So a MEMBER gets **403** here by design, not by
+oversight; the reasoning was only in a comment in `src/app/api/server/bans/route.ts`. A second
+reader of these files has to answer the same question.
 
 ### Verified on the live container, 2026-10-02
 
@@ -912,9 +1024,18 @@ entry is not made worse by being preserved; `banDrift` is what surfaces it while
 - **IPv6** is refused with a stated reason. Whether a running 26.1.2 server matches a v6 peer
   against `banned-ips.json` has not been verified on this box, and an entry nobody can show is
   enforced is a ban that silently does nothing.
-- **None of this has been run against the live server.** That is exactly why the read-back
-  outranks the reply strings, and why the card distinguishes "could not read" from "nothing
-  banned" everywhere.
+- ~~**None of this has been run against the live server.**~~ **Wrong since 2026-10-02** —
+  the run is 110 lines above, under "Verified on the live container", and the committed
+  three-ban `banlist` fixture is a live capture too (151 bytes, zero newlines; it could not
+  exist otherwise). The bullet was left behind when that section was added above it, and it
+  reads as "the whole feature is unproven", which invites either banning somebody on the
+  world people play on to settle a settled question or distrusting the measurements this
+  section is built on — the real UUID and the 2-or-more-bans refusal. **The honest residual
+  is narrower:** the IPv6 bullet above, and the `file` path, since the self-test ran against
+  a *running* container and the stopped-server branch has only `tests/mc-bans-route.test.ts`
+  behind it. The read-back still outranks the reply strings for the reasons in
+  [The read-back decides](#the-read-back-decides-and-three-traps-live-in-it), not for want of
+  a live run.
 
 ### Why the card is not just a list
 
