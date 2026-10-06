@@ -270,13 +270,23 @@ isolation — pinning an estimate would dress a guess as a measurement.
 
 ## What it does not cover
 
-`game-manager.ts` entirely — `powerOn` / `powerOff` / `restartGame` / `withGameStopped` /
-`setMemory` / `applyServiceEnv`. Every one shells out to Docker. **The eviction logic and
-the `wasRunning` gating are the highest-value untested code left**, and both have caused
-real incidents. Testing them needs the Docker calls behind an injectable seam.
+> **This section said `game-manager.ts` was uncovered and called its eviction logic "the
+> highest-value untested code left" — while the section thirteen lines below is headed
+> "`game-manager.ts` is testable, and the seam is the point" and describes the suite that
+> covers it.** One file, two opposite claims, a screen apart. Corrected 2026-10-06; the
+> original is kept here because a doc disagreeing with itself is worth seeing once.
 
-Also uncovered: the three backup routes' flush helpers (module-private, they call
-`containerIsRunning`), which is why the honesty guarantee was moved into `summarize()`
+`game-manager.ts` **is** covered — `src/lib/__tests__/game-manager-control.test.ts`, 37 tests,
+with the Docker calls behind the injectable seam the next section explains. The describe blocks
+are the shape of it: *"`powerOn` is the only path that evicts, and it evicts every other
+world"* (including *"evicts exactly the set `admitStart` says it will, for every
+combination"*), *"`withGameStopped` gates both halves on `wasRunning`"*, *"`restartGame` is
+stop-then-start"*, the PZ stop, the control lock, *"`setMemory` recreates without starting"*,
+and the memory card's report. Those were the two things this section called untested, and they
+are the two with the most assertions on them.
+
+What is genuinely uncovered: the three backup routes' flush helpers (module-private, they
+call `containerIsRunning`), which is why the honesty guarantee was moved into `summarize()`
 instead — the sentence no longer depends on each route author choosing `done` over `noop`.
 
 ---

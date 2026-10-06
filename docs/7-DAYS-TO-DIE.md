@@ -127,9 +127,16 @@ Starting game".
   save/world/profile (we chased all those). **Fix = update the server to match.**
 - **In-UI server maintenance** (7DTD Settings → "Server maintenance" card):
   - `/api/7dtd/update` (GET compares installed `appmanifest_294420.acf` buildid
-    vs the branch's latest via `api.steamcmd.net`; POST recreates the container
-    via `docker run` with `START_MODE=3` + the `sevendtd` alias, so the web
-    container can update without compose). Surfaces build + "update available".
+    vs the branch's latest via `api.steamcmd.net`; POST patches `START_MODE: "3"` into the
+    `sevendtd` compose block with `patchServiceEnv`, calls **`recreateService`**, and writes
+    `START_MODE: "1"` back in a `finally`). Surfaces build + "update available".
+    - > **This said "recreates the container via `docker run` … so the web container can
+      > update without compose", which has not been true for some time, and was the bug
+      > rather than the design.** `docker run` produced a container with no compose labels
+      > and no network alias, which compose could then neither adopt nor replace — it cost
+      > the `sevendtd` alias and therefore all telnet control. CLAUDE.md names hand-building
+      > `docker run` as forbidden for exactly this, and the route's own comment records the
+      > change. An agent "restoring" the documented behaviour would reintroduce it.
   - `/api/7dtd/reset` (GET previews; POST = guarded reset): backs up the save,
     stops the server, **wipes `Saves/<world>` but keeps the map** in
     `GeneratedWorlds`, bumps `GameName` (Fresh2→Fresh3) so no client has a stale

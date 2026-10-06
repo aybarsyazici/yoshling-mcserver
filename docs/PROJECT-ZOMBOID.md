@@ -51,11 +51,23 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   .ini on every boot, which is why `RCONPassword` is locked out of the settings
   editor. `IP`/`BIND_IP` is deliberately **not** set, so RCON listens on all
   interfaces and stays reachable from the web container.
-- **Graceful stop:** the image's entrypoint traps SIGTERM, writes `quit` to the
-  server console and blocks until the world is saved. Docker's default 10s grace
-  period would SIGKILL it mid-save, so `stop_grace_period: 120s` is set in
-  compose *and* the driver passes `docker stop -t 120` / `docker restart -t 120`.
-  (`LOCK_MAX_MS` in `game-manager` is 300s to cover a hand-off that includes one.)
+- **Graceful stop: the driver asks the game to `quit` over RCON. `docker stop` has never
+  been able to stop this container.** `zomboidDriver.stop()` sends RCON `save`, then `quit`,
+  then polls the container for up to `PZ_QUIT_WAIT_MS` (60 s), and only falls back to
+  `docker stop -t ${PZ_STOP_TIMEOUT}` if the game never went away. A stop is **~12 s, exit
+  code 0**. `stop_grace_period` on the `zomboid` service is **300s** (Minecraft's and 7DTD's
+  are 120s) and is now only the fallback's budget.
+  - > **This bullet said the opposite until 2026-10-06, and it is the single most expensive
+    > wrong sentence in this repo.** It claimed "the image's entrypoint traps SIGTERM,
+    > writes `quit` to the server console and blocks until the world is saved", with
+    > `stop_grace_period: 120s`. Every clause was false: `grep -c trap entry.sh` is **0**,
+    > `/proc/1/status` shows `SigCgt: 0000000000010002` (SIGINT + SIGCHLD only), and **the
+    > kernel discards uncaught signals aimed at a namespace's PID 1** — so SIGTERM was never
+    > delivered, not once. The result was a flat five-minute stop ending in SIGKILL, and
+    > `docker-compose.yml` records that this exact wording "stopped three separate audits
+    > looking". The mechanism was fixed on 2026-09-29; this paragraph was not, and it sat
+    > 520 lines above the section that refutes it. See **Corrections** at the end of this
+    > file, and `docs/CLOSED.md`.
 - **The .ini is the single source of truth, and that's load-bearing.** The image
   rewrites .ini keys from env vars, but only for keys whose env var is *set*. So:
   - `SELF_MANAGED_MODS: "true"` keeps its hands off `Mods` / `WorkshopItems`.
@@ -327,9 +339,20 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
 ## Sandbox options
 
 Sandbox settings are Lua, not `.ini`: `Server/<name>_SandboxVars.lua`. They are
-read at **world load**, so a change needs a server restart. Editable in the
-dashboard file browser under Config (the browser's editable-extension allowlist
-had no `lua` until 2026-09-14, which silently made this page useless).
+read at **world load**, so a change needs a server restart.
+
+**There is a sandbox editor on the Settings page — do not send anybody to the file browser.**
+Shipped 2026-10-01: `/api/zomboid/sandbox` + `src/components/zomboid-sandbox.tsx`, backed by
+`src/lib/sandbox-lua.ts` and `src/lib/zomboid-sandbox.ts`. It parses the live **742** options,
+groups them, refuses the ones that cannot take effect (`PRESET_ONLY` — `Zombies`,
+`ZombieRespawn`, `ZombieMigrate` — plus `CREATION_ONLY` and the version key), and reads every
+write back. The writer is the concentrated data-loss risk in this app and carries four guards
+for it; see [`SETTINGS.md`](SETTINGS.md) for them and for the live verification.
+
+> This section told the reader to hand-edit the Lua in the file browser for five days after
+> the editor shipped — a 74,711-byte, 1,803-line file, by hand, on the one world people
+> actually play. The file browser still *can* edit it (`lua` was added to the editable
+> allowlist on 2026-09-14), which is the fallback, not the route.
 
 - **Muscle strain** is `MuscleStrainFactor` (min 0.00, max 10.00, default 0.70) —
   "a multiplier when applying muscle strain from swinging weapons or carrying
@@ -376,19 +399,25 @@ had no `lua` until 2026-09-14, which silently made this page useless).
 
 ## When the server hangs
 
-**The server can be "running" and completely unjoinable, and the dashboard will
-tell you it is powered down.** This happened 2026-09-22 and cost an evening, so the
-symptoms and the proof are worth keeping.
+**The server can be "running" and completely unjoinable.** This happened 2026-09-22 and cost
+an evening, so the symptoms and the proof are worth keeping. **The dashboard now tells you
+so** — that half was fixed on 2026-09-27 and this section described the old behaviour for
+nine days.
 
 What it looks like:
 
 - Players get "we crashed and now we can't rejoin — the server thinks we're still
   in". The PZ log fills with `Steam client <id> is initiating a connection.`
   repeated, with **no** following `Connected new client`.
-- The dashboard shows the world as **powered down**, and pressing **Power on**
-  toasts success and does nothing (see the KNOWN BUG note in CLAUDE.md: the probe
-  fails → renders as stopped → offers Power on → `docker start` on an
-  already-running container is a no-op). There is no route to recovery from the UI.
+- The dashboard shows **"Not responding"** and names **Restart** as the way out. That is the
+  recovery route; use it.
+  - > It used to show the world as **powered down** and offer **Power on**, which runs
+    > `docker start` on an already-running container — a no-op that toasts success and
+    > changes nothing, leaving no route out of the UI. Fixed 2026-09-27 (`a7d76b8`):
+    > `GameStatus` carries `containerRunning` and `startedAtMs` separately from `status`, the
+    > UI derives *Stopped* / *Starting…* / *Not responding* (unreachable for >12 min), and
+    > **Restart is gated on `containerRunning`, not on `isOnline`** — that inversion is the
+    > whole fix. The "KNOWN BUG note in CLAUDE.md" this bullet pointed at no longer exists.
 - RCON **authenticates but `players` returns an empty body.** That is the tell:
   the RCON thread is healthy, but the answer needs the game loop, which is not
   running. `scripts/pz-rcon.sh players` printing `(no output)` means hung, not idle
