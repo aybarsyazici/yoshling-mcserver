@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Yoshling
 
-## Getting Started
+A web dashboard for running three game servers — **Minecraft**, **7 Days to Die** and
+**Project Zomboid** — on one box, from a Discord login.
 
-First, run the development server:
+One box, three worlds. Only one game runs at a time (16 GB of RAM between them), so powering
+one on gracefully saves and stops whichever other one is up. Access is per world: you only see
+the servers an admin has granted you.
+
+Live at **https://yoshling.xyz**.
+
+## What it does
+
+- **Power** — start, stop and restart each world, with a hand-off confirmation when starting
+  one means stopping another, and a progress ledger that names the step it is on.
+- **Backups** — create, restore, download, prune. Checksums and a manifest per archive.
+- **Mods** — search Modrinth and install to the server; Workshop mods for Project Zomboid,
+  with a watcher that applies updates by itself when nobody is connected.
+- **Settings** — every server's config, showing what you configured next to **what the game
+  says it is actually running**.
+- **Console, live logs, a file browser, RAM allocation**, per-world player counts and graphs.
+- **Crew** — roles and per-world access, so a moderator can run one world and never see the
+  others.
+
+## Running it locally
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+You need a `.env` — see **Local development** in [`CLAUDE.md`](CLAUDE.md) for the required
+keys. Discord OAuth cannot complete against `localhost`, so viewing the signed-in UI locally
+needs a hand-minted session cookie; that is written up in the same place.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm test           # vitest — ~1500 tests, no Docker, no network, no server needed
+npx tsc --noEmit
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Stack
 
-## Learn More
+Next.js 16 (App Router) · React 19 · Prisma 7 on libSQL/SQLite · NextAuth v5 (Discord) ·
+Tailwind v4 with shadcn/base-ui and Catppuccin theming. Server control works by shelling out
+to the Docker CLI against a mounted socket.
 
-To learn more about Next.js, take a look at the following resources:
+## Working on it
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+**Read [`CLAUDE.md`](CLAUDE.md) first — it is the project's memory**, not a summary. It carries
+the architecture, the deployment runbook, and a long list of traps that each cost real
+debugging time. Per-topic depth lives in [`docs/`](docs/), routed by a table at the top of
+`CLAUDE.md`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+If you are an AI coding agent, start at [`AGENTS.md`](AGENTS.md).
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Keeping those files true is part of changing the code here. The reason is written into the
+first line of `CLAUDE.md`: a previous conversation that built the Minecraft side was deleted,
+and the work had to be reconstructed from scratch.

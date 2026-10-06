@@ -12,6 +12,13 @@ a user only sees the servers an admin has granted them.
 chat that built the Minecraft side was deleted and the work had to be
 reconstructed from scratch. Treat the files below as the project's memory.
 
+There is also an **[`AGENTS.md`](AGENTS.md)** at the repo root, because not every agent
+harness reads this file automatically. **It is a pointer to this one plus the few things that
+are specifically about being an agent here — keep it that way.** Do not let it grow into a
+second copy of this file's architecture; two files describing the same thing is how one of them
+goes stale, which is the failure this whole section exists to prevent. `README.md` is for
+humans and was the untouched `create-next-app` scaffold until 2026-10-06.
+
 Two rules, both non-optional:
 
 1. **Keep `CLAUDE.md` current.** It is a *living status doc*, not a one-time
@@ -520,11 +527,18 @@ ALTER TABLE "User" ADD COLUMN "games" TEXT NOT NULL DEFAULT '';
 UPDATE "User" SET "games" = 'minecraft,7dtd,zomboid';
 ```
 
-**NOT YET APPLIED** — migration `20261002143000_add_installed_mod_provenance`. Two
-nullable columns on `InstalledMod` so the Installed page can say which jars a modpack
-apply put there. **The `WHERE` on the backfill is the part not to drop**: without it, a
-second paste after the next pack apply rewrites every `'pack'` row to `'manual'`.
-Reasoning and what reads it: [`docs/MINECRAFT.md`](docs/MINECRAFT.md).
+**APPLIED 2026-10-02** — migration `20261002143000_add_installed_mod_provenance`. Two
+nullable columns on `InstalledMod` so the Installed page can say which jars a modpack apply
+put there. Verified after the fact: `PRAGMA table_info("InstalledMod")` carries `source` and
+`versionId`, and all three live rows read `source: manual` — true of them, since every one
+predates any pack apply.
+
+**Do not run it again, and this file said "NOT YET APPLIED" for four days after it was** —
+caught 2026-10-06 while preparing a handoff. The backfill's `WHERE "source" IS NULL` is what
+makes a second paste survivable at all: without it, a re-run after the next pack apply
+rewrites every `'pack'` row to `'manual'` and the Installed page starts attributing a pack's
+jars to whoever last clicked Add. Reasoning and what reads it:
+[`docs/MINECRAFT.md`](docs/MINECRAFT.md).
 
 ```sql
 ALTER TABLE "InstalledMod" ADD COLUMN "source" TEXT;
@@ -764,8 +778,11 @@ connect **directly to the box IP `89.58.50.155`**:
     `stat` is not; the reasoning, and the three mutants that went green before the tests
     were fixed, are in
     [`docs/MINECRAFT.md`](docs/MINECRAFT.md#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02).
-    **Not yet read against the live container** — on production the DB and disk agreed when
-    last counted (3 rows, 3 jars), so there is no known drift for it to find there yet.
+    **Read against the live container 2026-10-02**, and the strong form: 3 matched, 0
+    untracked, 0 missing, and with `?hash=1` every `sha512` **and** byte count identical to an
+    independent `sha512sum` run on the volume. So the endpoint is reading the directory the
+    server loads from, not reciting the rows. No drift to find there yet — the DB and disk
+    agree — which is the answer it should give.
   - **`/minecraft/mods` is one page, with the pack as a header** (2026-10-02). It was
     three tabs — Browse mods / Installed / Modpacks — the last holding two sub-tabs, which
     put every write on the page inside a nested tab and the install instructions in the
