@@ -76,7 +76,7 @@ Four containers via `docker compose` (see `docker-compose.yml`):
 
 | Container | Image | Purpose | Web reaches it as |
 |-----------|-------|---------|-------------------|
-| `yoshling-mc` | `itzg/minecraft-server` | Minecraft, ports 25565 + RCON 25575 | host `minecraft` |
+| `yoshling-mc` | `itzg/minecraft-server` | Minecraft, port 25565 + RCON 25575 (unpublished) | host `minecraft` |
 | `yoshling-7dtd` | `vinanrra/7dtd-server` | 7DTD, ports 26900-26902, telnet 8081, webadmin 8080 | host `sevendtd` |
 | `yoshling-pz` | `yoshling/project-zomboid` (built from `pz/`) | Project Zomboid, ports 16261-16262/udp + 8766-8767/udp, RCON 27015 (unpublished) | host `zomboid` |
 | `yoshling-web-1` | this app | Next.js dashboard | — |
@@ -98,6 +98,15 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   hand-build `docker run` — that produces a container compose can't adopt, and
   the next `docker compose up` either errors on the name or orphans it. (The 7DTD
   update route used to do exactly that; it flips `START_MODE` in compose now.)
+- **All three game services sit behind `profiles: ["games"]`** (`docker-compose.yml:17`,
+  `102`, `182`, added 2026-10-01) so a bare `docker compose up -d` cannot start a world.
+  It used to start *all* of them: verified on the box with `--dry-run` while PZ was up,
+  compose printed `yoshling-mc Started` **and** `yoshling-7dtd Started` — ~22 GB of
+  configured heap on a 15.6 GB box, the 2026-09-26 co-residency incident with a one-command
+  trigger. **Explicitly named services still work** (`create --force-recreate minecraft`,
+  `up -d --no-deps web`), so the app is unaffected; the cost is that **verifying by hand
+  needs `--profile games`** or `docker compose ps`/`config` omit the worlds entirely, which
+  reads as "the services are gone". Don't remove the profiles to shorten those commands.
 
 ### Game abstraction
 
@@ -109,10 +118,22 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   every *other* world, so nothing assumes there are exactly two.
 - `src/lib/game-manager.ts` — server-side driver per game. `powerOn(game)`
   performs the graceful hand-off: it saves + stops *every other* game that is
-  running, then starts the requested one. **`powerOn` is the only path that
-  evicts** — `/api/settings`, `/api/7dtd/update` and `install-modpack` all start a
-  container without it, and nothing anywhere *detects* two running worlds and says
-  so. Active game is written to the `GameState` table, but **nothing revives
+  running, then starts the requested one. **`powerOn` is the only path that evicts**,
+  and the other paths that could leave a second world running instead refuse or cannot
+  start one: `/api/7dtd/update` calls `refuseCoResidency("7dtd", …)` and answers
+  `conflict: "coresidency"`, `/api/settings` goes through `applyServiceEnv`, which
+  captures `wasRunning` and runs `create` rather than `up`, and `install-modpack` starts
+  no container at all. **Two running worlds *are* detected and reported** —
+  `src/lib/coresidency.ts` (`runningWorlds`, `coResidency`, `admitStart`,
+  `refuseCoResidency`), read by `/api/games/status`, `useGames` and five components.
+  > **Corrected 2026-10-06.** This said those three routes "all start a container without
+  > it" and that "nothing anywhere *detects* two running worlds and says so". Both were
+  > true when written and both were fixed without this line changing — believable because
+  > `coresidency.ts`'s own header opens by describing the old state as its reason to exist.
+  > Acting on it means building a second detector, or reading the 7DTD *refusal* as the
+  > documented bug and replacing it with an eviction.
+
+  Active game is written to the `GameState` table, but **nothing revives
   anything from it**: what comes back after a reboot is decided entirely by each
   service's compose `restart:` policy. (The column is write-mostly; it was
   documented here as the reboot mechanism for months and never was.) A module-level
@@ -152,21 +173,34 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
     `wasRunning` **before** stopping and gates both halves on it, so it can never
     start a world that was already stopped — several audit findings claimed otherwise
     and were refuted; preserve that property. `restartOnFailure` matters and the two
-    callers want opposite things: a **mod update** passes `true`, because `seedMods`
+    *kinds* of caller want opposite things. A **mod update** wants `true` — `seedMods`
     throws on a partial download and leaving the world down for one unfetchable mod is
-    worse than booting the previous version (`restart: "no"` means nothing revives
-    it). A **backup restore** passes `false`, because a half-replaced save booted is
-    worse than a stopped one — the game rewrites the mess on its first autosave and
-    takes the archive's contents with it. Getting this backwards is silent.
-  - **`restartGame()` is stop-then-start, not `driver.restart()`** — deliberately.
-    Every driver's `restart()` is one opaque "save, then `docker restart`" call, so
-    it could not say which half it was in, and it set no stage at all. For PZ the
-    stop half alone is up to 300s, so a manual Restart showed a spinning
-    "Restarting…" with no stage and no bar for minutes, which is indistinguishable
-    from hung — and got reported as exactly that. Splitting into `gracefulStop()` +
-    `start()` is behaviourally identical and lets each phase name itself; `start()`
-    then returns quickly, so the lock releases and the per-boot progress
-    (`snap.boot`) takes over. Don't collapse it back into one call.
+    worse than booting the previous version (`restart: "no"` means nothing revives it);
+    `zomboid-updates.ts:642` gets it by passing nothing, since `true` is the default. A
+    **backup restore** passes `false`, because a half-replaced save booted is worse than
+    a stopped one — the game rewrites the mess on its first autosave and takes the
+    archive's contents with it. Getting this backwards is silent, so note there are
+    **four call sites, three of them restores**: `/api/server/backups:288`,
+    `/api/7dtd/backups:202` and `/api/zomboid/backups:186` each pass `false` separately.
+    A change to the flag has to visit all three, not one. (`game-manager.ts:1554` and
+    this file both said "the two callers" and meant the two kinds.)
+  - **`restartGame()` is `narratedStop()` then `narratedStart()`, never one opaque
+    `docker restart`** (`game-manager.ts:1637`, the two calls at `1652`–`1653`). The
+    `GameDriver` interface is exactly `status()`, `start()`, `save()`, `stop(opts?)`,
+    `readLive()`. Drivers used to also carry `restart()` and `gracefulStop()` and **both
+    were deleted, because both had zero callers** — PZ's `restart()` was a bare
+    `docker restart -t 300` sitting in the driver ready for the next person to reach for.
+    One combined call cannot report which half it is in, and before the RCON-`quit` fix
+    PZ's stop half ran the full 300 s, so a manual Restart spun "Restarting…" with no
+    stage for minutes: indistinguishable from hung, and reported as hung. Deleting them is
+    **not** licence to re-add a `docker restart` — the `save()`/`stop()` split is what
+    lets each phase name itself and what lets `stop()` know whether the game answered the
+    save. `narratedStart` returns once the container is up, so the lock releases early and
+    the per-boot progress (`snap.boot`) takes over.
+    > **Corrected 2026-10-06.** This named the split `gracefulStop()` + `start()` in the
+    > present tense. Neither function exists; `gracefulStop` greps only to the comment
+    > recording its deletion. "Don't collapse it back into one call", with two names that
+    > return nothing, reads as an invitation to re-add `driver.restart()`.
 - `src/lib/rcon.ts` — the shared Source-RCON transport, keyed per target with one
   cached authenticated socket each. Minecraft (25575) and Project Zomboid (27015)
   both speak it; `sendCommand`/`getPlayerList` are the Minecraft wrappers.
@@ -199,8 +233,20 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   `.ini` parser/writer, and the mod-list helpers. Status probe = one RCON
   `players` call, cached ~4s + single-flight like 7DTD's (see `cachedProbe` in
   `game-manager`).
-- `src/lib/server-manager.ts` — thin backward-compat shim delegating to
-  `game-manager` for the legacy Minecraft-only `/api/server/*` routes.
+- `src/lib/server-manager.ts` — **27 lines with one export, `getModsDir()`.** It was the
+  Minecraft-only shim (`startServer`, `stopServer`, `restartServer`, `getServerProperties`,
+  `getServerStatus`); the wrappers went when their only callers,
+  `/api/server/{control,status,stats}`, were deleted. That mattered: `/api/server/control`
+  was a **second power path** drifted from `/api/games/control`, setting `changed = true`
+  unconditionally on start, so a Power on of an already-running world wrote a permanent
+  `server_start` Activity row for something that did not happen. **Do not re-create the
+  wrapper layer** — a dormant duplicate of a power path is how that comes back. None of the
+  eight surviving `/api/server/*` routes imports this module; its three importers all want
+  `getModsDir`.
+  > **Corrected 2026-10-06.** This called it a "shim delegating to `game-manager` for the
+  > legacy `/api/server/*` routes" — what the file was named for and once did. An agent sent
+  > to touch Minecraft power finds a path-joining helper instead, and either assumes the
+  > docs describe another codebase or rebuilds the shim.
 
 ### Routes
 
@@ -222,9 +268,21 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   `/minecraft/whitelist` 301s to it. Minecraft's *in-game* whitelist, ops **and bans**
   live on the MC settings page (`/api/server/{mc-whitelist,ops,bans}`). The activity log
   hides entries for worlds the viewer can't see.
-- API: `/api/games/{status,control,stats}`, `/api/7dtd/{console,backups,config,files,world}`,
-  `/api/zomboid/{console,backups,config,config/import,files,mods}`, and the legacy
-  `/api/server/*` + `/api/mods/*` + `/api/modpacks/*`. `/api/modpacks/preview` is the one
+- API — **complete as of 2026-10-06**; the check is `find src/app/api -name route.ts`. The
+  brace form here used to list a third of them while reading as exhaustive, which is how
+  `/api/7dtd/reset` (**a destructive world wipe**) and `/api/operations` (**what
+  `OperationLedger` polls**) stayed invisible to anyone deciding what already exists.
+  `/api/games/{status,control,stats,memory}`;
+  `/api/7dtd/{console,backups,config,config/all,files,reset,update,world,world/token}`;
+  `/api/zomboid/{console,backups,config,config/import,files,maps,mods,sandbox,updates}`;
+  `/api/server/{properties,console,files,backups,bans,gamerules,mc-whitelist,ops}` — the
+  Minecraft set, and **no longer usefully called "legacy"**, since `gamerules` and `bans`
+  were added 2026-10-01 and are among the newest routes in the repo;
+  `/api/mods/{search,detail,categories,dependencies,installed,install,install-modpack,[id]}`;
+  `/api/modpacks` and `/api/modpacks/{search,import,preview,[id],[id]/mods,[id]/export}`;
+  and shared
+  `/api/{operations,activity,users,users/[id]/role,users/[id]/games,whitelist,settings,minecraft-versions,auth/[...nextauth]}`.
+  Of those, `/api/modpacks/preview` is the one
   that answers "what does this pack need, and can this server run it" **without writing a
   `Modpack` row** — a read, so it answers a MEMBER, and it shares its version choice with
   `/api/modpacks/import` (`src/lib/modpack-resolve.ts`) because a preview that resolved a
@@ -241,9 +299,15 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
   [`docs/MINECRAFT.md`](docs/MINECRAFT.md#game-rules).
 - `src/components/file-browser.tsx` is shared: MC uses the default
   `/api/server/files`; 7DTD and PZ pass their own endpoint + `roots` from
-  `GAMES[game].fileRoots` (7DTD: Config = `/sevendtd-config`, Saves =
-  `/sevendtd`; PZ: Config = `/zomboid/Server`, Saves = `/zomboid/Saves`, All
-  data = `/zomboid`).
+  `GAMES[game].fileRoots`. **A root is two halves in two files**, and this said one:
+  `GameFileRoot` is only `{ key, label }`, and the absolute path lives in the route's own
+  `ROOTS` map — `7dtd/files/route.ts:14` (`SDTD_CONFIG_DIR` ?? `/sevendtd-config`,
+  `SDTD_SERVER_DIR` ?? `/sevendtd`) and `zomboid/files/route.ts:13` (`$PZ_DIR/Server`,
+  `$PZ_DIR/Saves`, `$PZ_DIR`). Add a root in `games.ts` alone and the label renders while
+  every listing falls through to `ROOTS.config`. The 7DTD pair are **siblings sharing a
+  prefix**, which leaked once: `?root=saves&path=/sevendtd-config` returned the whole config
+  tree, writable, because `startsWith` was the test. `isPathInside`
+  (`src/lib/file-guard.ts`) is the test now and must stay it.
 - `src/components/config-panel.tsx` is the shared "All settings" expander. Both
   7DTD's XML and PZ's .ini document themselves with a comment per setting, so
   both config endpoints return the same `{properties:[{name,value,help}]}` shape
@@ -258,7 +322,15 @@ non-root user, drop either docker package, or remove the `./:/opt/yoshling` moun
 silently doesn't — the old heap size stays. This is the trap the Minecraft memory
 setting fell into before. So `setMemory` in `game-manager`:
 
-1. patches **`.env`**, not compose (`lib/dotenv-patch.ts`). Compose interpolates —
+1. patches **`.env`**, not compose. The primitives are in **`src/lib/compose.ts`** —
+   `ENV_FILE` (44), `patchServiceEnv` (133), `parseEnvFile` (158), `patchEnvFile` (197),
+   `writeEnvFile` (298, the writer described below), `readEnvMap` (320) — with
+   `writeServiceEnvToDotEnv` (`game-manager.ts:1892`) as the per-service wrapper. (**There
+   is no `src/lib/dotenv-patch.ts`**, which this file named for weeks; the *test* file is
+   `__tests__/dotenv-patch.test.ts` and imports from `compose.ts`, which is why it was
+   believable. This is the most safety-critical write in the repo, so a wrong path sends
+   the next agent to hand-roll a second `.env` writer, or to edit compose where
+   `git checkout -f` discards it.) Compose interpolates —
    `MEMORY: "${MC_MEMORY:-4G}"` — so the app no longer writes a git-tracked file and
    `deploy.sh`'s `git checkout -f` can no longer discard a setting. The scoping lesson
    survives one layer down as per-service key names (`MC_VERSION` vs the `sevendtd`
@@ -275,15 +347,24 @@ setting fell into before. So `setMemory` in `game-manager`:
 
 The card shows the compose value next to what the existing container was actually
 created with, and warns when they disagree — so "applied" is something you can
-see rather than assume. Verified on the box: `MAX_MEMORY=4096m` in compose →
-`MAX_MEMORY=4096m` on the container → `-Xmx4096m` in the running JVM.
+see rather than assume. Worked example, from production's own container log 2026-09-30:
+`MIN_MEMORY: "2048m"` + `MAX_MEMORY: "${PZ_MAX_MEMORY:-12288m}"` in compose →
+`-Xms2048m -Xmx12288m` in the running JVM. (It read `4096m` throughout until 2026-10-06 —
+a superseded measurement sitting thirteen lines above the current one. Taking 4 GB as PZ's
+heap mis-sizes its `mem_limit` and makes a correct configured-vs-live comparison look like
+drift.)
 
 Per-game support lives in `RUNTIME[game].memory`: Minecraft uses `MEMORY` (`4G`
-form), Project Zomboid uses `MAX_MEMORY` (`4096m` form), and **7 Days to Die has
+form), Project Zomboid uses `MAX_MEMORY` (`12288m` form), and **7 Days to Die has
 none** — it's a Unity native server with no JVM, so the card explains that instead
-of offering a control that does nothing. (It is not actually *mounted* on the 7DTD
-settings page, so that explanation currently never renders — a real gap, not a
-deliberate omission.)
+of offering a control that does nothing. It **is** mounted on the 7DTD settings page
+(`src/app/7dtd/settings/page.tsx:249`), deliberately — an absent card read as "the feature
+is missing here" rather than "it does not apply here" — and the `supported: false` branch
+(`memory-card.tsx:162`) renders the reason with no control. **Do not invent a slider for
+it**: the comment above the mount says so, and it would be a control that changes nothing,
+this repo's named recurring defect. (This file called the mount "a real gap, not a
+deliberate omission" for four days after it was mounted, inviting the one fix the code
+forbids.)
 
 **There is no `MAX_GAME_GB` constant**, and this said "6" and "the 8 GB box" long
 after the move to netcup. The cap is derived at request time:
@@ -312,6 +393,39 @@ stopped world stays stopped rather than being booted into co-residency), starts 
 again only if it was running, and holds the control lock throughout. `setMemory` had
 all of that right and `/api/settings` had open-coded a bare `docker compose up -d`
 with none of it.
+
+### Background work — three timers, all in `src/instrumentation.ts`
+
+Nothing else in this app runs on a clock, **two of the three can stop or start a game
+container**, and until 2026-10-06 only one was documented anywhere — so this is the first
+place to look when something moved by itself. All three are a plain `setInterval` with a
+re-entry guard, never a tick that re-arms from a `finally`: that shape died permanently on
+one hung call (2026-09-15).
+
+| Timer | Cadence | Off switch |
+|-------|---------|-----------|
+| `collectStats` (`:66`) — the monitor graphs | 5 s | — |
+| PZ Workshop watcher (`:84`, `src/lib/zomboid-updates.ts`) — **restarts PZ itself when empty** | `PZ_UPDATE_PENDING_POLL_MS` 15 s tick, `PZ_UPDATE_POLL_MS` 5 min full check | **`PZ_UPDATE_WATCH=false`** |
+| `backupTick` (`:168`, `src/lib/backup-schedule.ts`) | `BACKUP_CHECK_MS` 5 min; first run 5 min after boot | **`BACKUP_SCHEDULE=off`** |
+
+**Scheduled backups** — `shouldRunScheduledBackup` is the whole decision in one tri-state
+function (`run`/`skip`/`probe`), so a `readdir` gates the expensive half of probing three
+game servers. Default **24 h per world** (`BACKUP_SCHEDULE_HOURS[_<GAME>]`), and "when did
+we last back up" is the newest archive's mtime — no state file to get stuck. It refuses
+when: off; the last automatic attempt failed under `FAILURE_COOLDOWN_MS` (**1 h**) ago; the
+newest archive is younger than the interval; the world is in any state but
+`online`/`offline`; or **anyone is connected**.
+
+**Retention deletes archives without asking, and every backup prunes — manual ones too**
+(`applyRetention` from `backup-create.ts:359` unless `prune: false`), which is what "five
+archives disappeared" means. `src/lib/backup-retention.ts`:
+`DEFAULT_POLICY = { keep: 5, maxAgeDays: 0 }` (0 = no age rule), per world via
+`BACKUP_KEEP[_<GAME>]` / `BACKUP_MAX_AGE_DAYS[_<GAME>]`, `keep` floored at 1, journalled to
+`BACKUP_JOURNAL_FILE` (`/app/data/backup-journal.jsonl`), and reaching **only inside
+`/app/data`** — the `/root` sets are nobody's job (open list). Three deliberate properties,
+each easy to "simplify" away and all three reasoned out in that file's header: the two rules
+are **OR, not AND**; **the newest archive is never a candidate**; and **the oldest is exempt
+from the count rule but not the age rule**.
 
 ### Roles & per-world access
 
@@ -381,12 +495,36 @@ user, lit = granted. Admin rows show all three chips lit and locked.
 ## Local development
 
 ```bash
+npm install
+npx prisma generate  # STEP ZERO on a fresh clone — nothing below runs without it
 npm run dev      # dev server (needs .env — see below)
 npm run build    # production build (also the deploy build)
-npm run lint     # eslint (not run during build; pre-existing `any` warnings exist)
+npm run lint     # eslint — exits non-zero, 59 problems (45 errors, 14 warnings)
 npx tsc --noEmit # typecheck
 npm test         # vitest, 1502 tests, ~12.42s, no Docker/network/server needed
 ```
+
+**`npx prisma generate` is step zero and nothing enforces it:** `src/generated/prisma` is
+gitignored (`.gitignore:43`), there is **no `postinstall`**, and `src/lib/db.ts:1` imports
+`PrismaClient` from `@/generated/prisma/client`, so on a fresh clone `dev`, `test` and
+`tsc` all die on a module-not-found. `Dockerfile:12` is the only place it runs. Use the
+Node ≥ 20.19 invocation below. **A *stale* client does not fail typecheck** — measured
+2026-10-06, a copy whose client predated `InstalledMod.source`/`versionId` still exited 0
+on `tsc --noEmit` while `schema.prisma` declared both and `mod-manager.ts:149` wrote both
+(Prisma's `XOR<>` types intersect with `{}`, switching off excess-property checks). So
+"tsc is clean" is not evidence the client matches the schema. Re-generate after any
+schema change.
+
+**`npm run lint` exits non-zero and always has**: 59 problems — **45 errors** (all
+`@typescript-eslint/no-explicit-any`, in `src/lib/db.ts` and `src/lib/mod-manager.ts`) and
+14 unused-var warnings. `next build` does not run it.
+> **Corrected 2026-10-06.** This called them "`any` **warnings**" — they are errors — and
+> until that date the command printed **349,969 problems** over five-plus minutes, so the
+> one command whose job is to report problems was unusable while this file called it benign.
+> The cause was not the generated Prisma client (the first guess, which changed nothing when
+> ignored): `.next/**` matches only the *top-level* build output, and each abandoned
+> `.claude/worktrees/*` carried its own, ~7,000 problems apiece. The measurement is on
+> `eslint.config.mjs`.
 
 **Run `npm test` before you ship.** It exists because the same classes of defect kept
 coming back: the power control drifted into three copies where two missed a fix, and a
@@ -395,9 +533,24 @@ were one assertion away from being caught. Details, and what it deliberately doe
 cover, are in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 `.env` (gitignored) needs at least: `DATABASE_URL`, `DISCORD_CLIENT_ID`,
-`DISCORD_CLIENT_SECRET`, `AUTH_SECRET`, `AUTH_URL`, `RCON_*`,
-`SDTD_TELNET_PASSWORD`, and `PZ_RCON_PASSWORD` + `PZ_ADMIN_PASSWORD`. Local dev
-uses `dev.db`.
+`DISCORD_CLIENT_SECRET`, `AUTH_SECRET`, `AUTH_URL`, `RCON_{HOST,PORT,PASSWORD}`,
+`SDTD_TELNET_{HOST,PORT,PASSWORD}`, `PZ_RCON_{HOST,PORT,PASSWORD}`,
+`ALLOWED_DISCORD_USERS` and `STEAM_API_KEY`. Local dev uses `dev.db`. A `process.env` sweep
+of `src/` on 2026-10-06 found this list wrong in both directions: **`PZ_ADMIN_PASSWORD` is
+compose-only** (`docker-compose.yml:196`, as `ADMINPASSWORD`), so it belongs in the box's
+`.env` and not a local one; **`STEAM_API_KEY` was missing**, and without it
+`/api/zomboid/mods/route.ts:87` cannot resolve a Workshop item's required items;
+**`ALLOWED_DISCORD_USERS` was missing**, and its absence makes the sign-in gate **fail open**
+(see "Signing in vs. seeing a world"); and **`WHITELIST_FILE` defaults to the container path
+`/app/data/whitelist.json`** (`whitelist.ts:16`), so locally a `/api/whitelist` PUT dies on
+the `mkdir` and the gate silently falls back to the env seed. (`.env` here also carries
+`STEAM_API_KEY_DOMAIN_NAME`, which no code and no doc reads.)
+
+**Open gap: no documented way to get an authenticated session locally.** Every page but
+`/login` calls `auth()` and redirects without one, so UI work — and this repo's own standard
+of *verified by rendering it, not by reading it* — needs a session, and nothing in
+`CLAUDE.md`, `AGENTS.md`, `README.md` or `docs/` says how. **Whoever next does it, write the
+recipe here**; today it lives only in somebody's head.
 
 Migrations: `npx prisma migrate dev --name <x>` locally. **Production has no
 automatic migrations** — apply schema changes to the prod DB by hand (below).
@@ -434,13 +587,17 @@ for the script rather than writing the snippet again.
 | Script | Use it for | The trap it removes |
 |--------|-----------|---------------------|
 | `scripts/pz-rcon.sh <cmd>…` | any RCON command against PZ | A naive client reads the **auth** reply as the first command's answer, so every response is shifted by one. That made `players` report 0 while someone was connected, and the wrong reading got reported as fact. Also handles PZ's RCON port not being published — it runs on the compose network and reads the password from the box's `.env`. |
-| `scripts/deploy.sh [--service web\|zomboid] [--verify STR]` | shipping code | Verifies the change is in the **built image**, not just at git HEAD — a correct checkout can sit in front of a stale container and `git rev-parse` looks identical either way. **That check was broken from the day it was written until 2026-10-02** and always reported "found": it was `grep -rql … \| head -1`, and a pipeline's exit status is its last command's, so `head` exiting 0 on empty input certified every deploy. Fixed to `grep -rqF` with no pipe, and `src/lib/__tests__/deploy-guard.test.ts` refuses the shape. Also refuses to run while a SteamCMD seed is in flight, because two seeds race on the same volume and the loser silently updates nothing. |
+| `scripts/deploy.sh [--service web\|zomboid] [--verify STR]` | shipping code | Verifies the change is in the **built image**, not just at git HEAD — a correct checkout can sit in front of a stale container and `git rev-parse` looks identical either way. **That check was broken from the day it was written until 2026-10-02** and always reported "found": it was `grep -rql … \| head -1`, and a pipeline's exit status is its last command's, so `head` exiting 0 on empty input certified every deploy. Fixed to `grep -rqF` with no pipe, and `src/lib/__tests__/deploy-guard.test.ts` refuses the shape. Also refuses to run while a SteamCMD seed is in flight, because two seeds race on the same volume and the loser silently updates nothing. **Three refusals, two escape hatches:** `FORCE_OPS=1` overrides "a backup is copying right now" (`deploy.sh:110`–`125`, written after a deploy destroyed a 4m14s PZ backup copy on 2026-09-30) and `FORCE_COMPOSE=1` overrides "`docker-compose.yml` on the box has local edits" (`151`–`161`). Both print what they are about to lose first. Reaching for the raw `git bundle` snippet below instead gets you past the refusal with **none of the three guards**, which is the wrong way out. |
 | `scripts/pz-stale-mods.py` | "why can nobody join?" | `appworkshop_108600.acf` has **two** id-keyed sections and both carry a `timeupdated`; slicing to EOF makes installed == published and the check silently always answers "nothing to do". |
 | `scripts/pz-jar.py {find,grep,strings,enum}` | turning a mystery number or command name into a fact | There is no `javap` and no `strings` in the game image. `enum` is how `AntiCheatHit=2` becomes "Kick" (`Ban=1 Kick=2 Log=3 Disabled=4`) instead of a guess. |
 
 Run the two Python ones over stdin so nothing needs installing on the box:
 `ssh BOX 'python3 -' < scripts/pz-stale-mods.py`. `scripts/rcon.py` is the plain
-client the wrapper ships; it also works against Minecraft on 25575.
+client the wrapper ships; it also speaks to Minecraft on 25575 — but **only from inside
+the compose network**, because the `minecraft` service publishes 25565 and nothing else
+(`docker-compose.yml:20`). Pointed at `127.0.0.1:25575` on the box it gets connection
+refused, which looks exactly like broken RCON and is not. Reach it the way `pz-rcon.sh`
+reaches PZ's unpublished 27015, or `docker exec yoshling-mc rcon-cli`.
 
 ### Deploying code (the box has NO GitHub SSH key)
 
@@ -461,8 +618,22 @@ ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 '
 The web service gained the `pz-data` + `pz-workshop` mounts and the `PZ_*` env, so
 that deploy **recreates** the web container (not just restarts it) — expected.
 Project Zomboid is a **locally built** image (`pz/Dockerfile`), so a deploy that
-touches it needs `docker compose build zomboid`. It must NOT start automatically —
-see [`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md).
+touches it needs `docker compose build zomboid`.
+
+> **Corrected 2026-10-06.** This said *"It must NOT start automatically — see
+> `docs/PROJECT-ZOMBOID.md`"*. That pointer goes nowhere — no doc has ever carried the rule,
+> so this sentence was the only place it existed — and the sanctioned tool does the opposite:
+> **`scripts/deploy.sh --service zomboid` ends in `docker compose up -d --no-deps zomboid`
+> (`deploy.sh:187`)**, `up` and not `create`, and `profiles` does not hold back an explicitly
+> named service. So it **starts a stopped PZ**, and on a running one it recreates — a
+> `docker stop` PZ's PID 1 ignores, so it waits out `stop_grace_period: 300s` and dies to
+> SIGKILL with no save, bypassing the RCON `quit` that is the only clean stop. Believable
+> because the script's every other `--service` is `web`, where `up -d` is right.
+>
+> **Until `deploy.sh` is fixed**, do it in three steps: power PZ off from the dashboard (the
+> only path that saves), `docker compose build zomboid`, then
+> `docker compose create --force-recreate zomboid` — `create` is what `recreateService()`
+> and every env-change path here use, for this reason — then Power on.
 
 Back up the DB before schema-affecting deploys:
 `docker cp yoshling-web-1:/app/data/yoshling.db /root/yoshling-deploy-backup/`.
@@ -586,7 +757,10 @@ The bare minimum for shared code that has to know PZ exists:
 - The web app also runs a **Workshop update watcher** (`src/lib/zomboid-updates.ts`,
   a 15s interval in `src/instrumentation.ts` that does a full check at most every
   5 min) which can restart the server by itself when it is empty. If PZ restarts
-  unexpectedly, look there first.
+  unexpectedly, look there first — it has applied **three updates unattended since
+  2026-10-01**, so this is the normal case, not a hypothetical. **The off switch is
+  `PZ_UPDATE_WATCH=false` in `.env`**, which is what to set before an investigation
+  that needs PZ to stay up; see "Background work" above for the two poll intervals.
 
 ### TLS / the domain
 
@@ -654,6 +828,12 @@ connect **directly to the box IP `89.58.50.155`**:
 
 **Live** at `https://yoshling.xyz` on **netcup `89.58.50.155`** (Cloudflare Full
 (strict), verified end-to-end). Migrated off Hetzner 2026-09-13 — see MIGRATION.md.
+
+**What is actually running, as of 2026-10-06: `yoshling-pz` and `yoshling-web-1` only —
+Minecraft and 7 Days to Die are stopped**, and `restart: "no"` means nothing revives them.
+Read the per-game bullets below as "what it does when it is up", not "what answers right
+now": if a game's telnet or RCON is silent, **check `docker ps -a` before debugging the
+protocol**.
 
 - **Minecraft: boots and has been exercised end to end** (2026-09-29/30). The old
   version mismatch is gone — compose, `ServerConfig.mcVersion` and the jars on disk all
@@ -780,19 +960,29 @@ connect **directly to the box IP `89.58.50.155`**:
     the leaves and not the act), which is what lets the header name the pack. No schema
     change. Full shape, and why there is deliberately **no "Remove pack"**:
     [`docs/MINECRAFT.md`](docs/MINECRAFT.md#the-mods-page-is-one-surface--2026-10-02).
-- **7 Days to Die: running on netcup since 2026-09-26**, game **V 3.3.0 (b14)** on
-  `latest_experimental`. The first start re-downloaded 17.7 GB and wiped
-  `sdtdserver.xml` to defaults — see the 7DTD section; config was restored from the
-  `SevenDaysConfig` DB row and the save on disk (`Reveo Valley` / `Fresh2`). Telnet
-  control verified working again (the app's status probe runs every ~10s). **An
-  in-game join on netcup has still not been observed** — the server reported
-  `Total of 0 in the game` when it was handed back.
+- **7 Days to Die: installed and configured on netcup, container STOPPED** (checked
+  2026-10-06). It last ran from 2026-09-26; game **V 3.3.0 (b14)** on
+  `latest_experimental`, measured then and not since. The first netcup start re-downloaded
+  17.7 GB and wiped `sdtdserver.xml` to defaults — see the 7DTD section; config was
+  restored from the `SevenDaysConfig` DB row and the save on disk, and
+  `/sevendtd-config/sdtdserver.xml` is now **13,726 bytes** carrying
+  `GameWorld="Reveo Valley"` / `GameName="Fresh2"` / `ServerVisibility=2`. The
+  `TelnetPassword` was **rotated 2026-10-06** after an agent re-exposed it; xml and `.env`
+  agree, but **end-to-end telnet is unverified until 7DTD next starts**. **An in-game join
+  on netcup has still not been observed.**
+  > **Corrected 2026-10-06.** This opened "**running on netcup since 2026-09-26**". It is
+  > not running — and `01b9483` re-measured the Project Zomboid bullet immediately below
+  > without touching this one, which is how a stale line survives a re-measurement pass.
+  > Believing it sends you after the `TelnetPassword`/config-wipe regression this file warns
+  > about twice — a documented multi-hour hunt — when the fix is Power on.
 - **Project Zomboid:** running, 89 mods, played on daily. Full status, what's
   verified and what's outstanding: **[`docs/PROJECT-ZOMBOID.md`](docs/PROJECT-ZOMBOID.md#status)**.
 - **Per-world access:** deployed; `User.games` + `ZomboidMod` applied to the prod
-  DB and all 5 accounts backfilled with all three worlds. **They are all ADMIN**, a
-  leftover from the old signup bug — a non-ADMIN role is what makes the per-world
-  chips actually bite, so demote whoever shouldn't be an admin on the Crew page.
+  DB and all 5 accounts backfilled with all three worlds. **They were all ADMIN** when the
+  table was last read — **2026-09-14, unverified since** — a leftover from the old signup
+  bug. A non-ADMIN role is what makes the per-world chips actually bite, so demote whoever
+  shouldn't be an admin on the Crew page; the Crew page is also the cheapest way to settle
+  whether this is still true.
 - **MOD now has the same capabilities as ADMIN**, scoped to its granted worlds;
   only `users.manage` is ADMIN-only. See "Roles & per-world access".
 
@@ -827,16 +1017,23 @@ Genuinely open:
   pinning, below.
 - **Pack imports are unpinned** — 566 of 569 `ModpackMod` rows have no `versionId`, so applying
   a saved pack installs the newest build of each mod rather than the pack, and a re-import
-  duplicates the row instead of updating it (production has 9 rows for 6 packs).
+  duplicates the row instead of updating it (production has 9 rows for 6 packs). **Those
+  three counts were read from the prod DB on 2026-10-02 and not since**; the defect does not
+  depend on them, only its size does.
   `dependencies[].version_id` is already in the Modrinth response and discarded at import;
   `/v2/versions?ids=[…]` returned all 168 of COBBLEVERSE's pins in 424 ms. One increment.
 - **The modpack apply still runs with the world possibly up** — it deletes and writes jars under
   a live JVM and then tells the user to restart. It should be wrapped in `withGameStopped(…,
   {restartOnFailure: false})` and claim `power` alongside `files:minecraft`, and call
-  `refuseIfPreempted` the way `backup-create.ts` does nine times and this does zero.
+  `refuseIfPreempted` the way `backup-create.ts` does — **ten call sites** (two
+  `refuseIfPreempted`, eight `refuseIfPreemptedEarly`) against zero here. This said "nine";
+  in a file that treats exact counts as evidence, an off-by-one in a worked comparison makes
+  a reader distrust the counts that are load-bearing.
 
-- **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11**, so on a
-  26.1.2 server neither can install no matter how often it is re-imported. The apply
+- **`COBBLEVERSE` publishes only MC 1.21.1 and `Hoplite` only up to 1.21.11** — re-read
+  from the Modrinth API 2026-10-06: `/v2/project/cobbleverse` returns
+  `game_versions: ["1.21.1"]`, and every `hoplite*` modpack hit tops out at `1.21.11`. So
+  on a 26.1.2 server neither can install no matter how often it is re-imported. The apply
   refuses with an honest version mismatch. Not a bug — a fact about those packs. Since
   2026-10-02 it is also a fact you can **see before trying**: `Change pack` shows what a
   pack needs beside what the server runs and refuses the Apply, instead of delivering the
@@ -846,21 +1043,25 @@ Genuinely open:
   operator's call.
 - **Two out-of-band safety sets are on the box** and nothing prunes them:
   `/root/pre-fix-backup-2026-09-28/` (1.1 GB) and `/root/safety-backup-2026-09-29/`
-  (1015 MB), both finished writing on the dates in their names. Retention does not reach
-  outside `/app/data`, so they stay until somebody deletes them — but measured 2026-10-01
-  the box is at **34 % of 314 GB with 201 GB free**, so this is tidiness, not pressure. It
-  read like it needed action; it does not.
+  (1015 MB), both finished writing on the dates in their names — **sizes unverified since
+  2026-09-29**. Retention does not reach outside `/app/data`, so they stay until somebody
+  deletes them — but measured 2026-10-06 the box is at **37 % of 314 GB with 191 GB free**
+  (34 % / 201 GB on 2026-10-01), so this is tidiness, not pressure. It read like it needed
+  action; it does not. The five-day drift, not the absolute number, is the thing to watch.
 - **`/api/7dtd/update` is the last compose writer** (a transient `START_MODE` flip inside
   one operation). Deliberate — see the deployment section.
 - **Needs a human, not code:**
   - **The netcup root password is still the one from a chat transcript.** Rotating it
     needs the netcup control panel; nothing in this repo can do it.
-  - **The old Hetzner box (`178.105.163.254`) is still running** as a paid rollback.
-    Minecraft now boots on netcup and every feature has been exercised here, so the
-    original reason to keep it is gone — but deleting it is a judgement call.
+  - **The old Hetzner box (`178.105.163.254`) is still running** as a paid rollback — but
+    **nothing has checked since 2026-09-28**, when this bullet was last edited, so it may
+    already be gone. Minecraft now boots on netcup and every feature has been exercised
+    here, so the original reason to keep it is gone; deleting it is a judgement call.
+    `ssh -i ~/.ssh/mc_yoshling root@178.105.163.254 uptime` settles whether it is up.
   - **No in-game join has ever been observed on netcup**, for 7DTD *or* Minecraft. The
     dashboard's telnet and RCON views are healthy and the worlds boot, but only a person
-    with the game can prove a client connects.
+    with the game can prove a client connects. Both containers are stopped as of
+    2026-10-06, so this needs a Power on first.
 
 > **Keep this file current** — see "Documentation rules" at the top. Update it after
 > meaningful changes (features, deploys, infra/config, new gotchas) so a fresh
@@ -893,6 +1094,12 @@ Genuinely open:
   close!". **The Project Zomboid pages and the shared pages (Crew, Whitelist,
   Activity) have none** — deliberate, so don't "fix" the inconsistency by adding
   one back.
-- Easter egg: `MikuEasterEgg` (mounted in the root layout) — resting the pointer
-  in the bottom-right corner for ~1.1s reveals British Miku (image only, no
-  caption). Image at `public/british-miku.webp`.
+- **Two easter eggs, and the footer-only rule has one standing exception.**
+  `MikuEasterEgg` (root layout) — resting the pointer in the bottom-right corner for ~1.1s
+  reveals British Miku, image only, `public/british-miku.webp`. And **`RoadhogDrawer`**
+  (`src/components/roadhog-drawer.tsx`, mounted at `dash-shell.tsx:34`) — a collapsed `?`
+  strip at the top of **every** dashboard page, just above the operations ledger, expanding
+  to `public/roadhog.gif`. Above the fold and not in a footer, so it does not fit the rule
+  two bullets up, but it is deliberate (mounted explicitly, with its own comment reasoning
+  about the strip's position and `aria-label`): **do not delete it while enforcing that
+  rule**, which is the obvious reading of a doc that named only the Miku egg.
