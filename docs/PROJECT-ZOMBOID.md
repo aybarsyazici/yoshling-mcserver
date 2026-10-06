@@ -15,7 +15,22 @@ because it gets trusted: every entry in [Corrections](#corrections) was believed
 and acted on first.
 
 Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
-`src/lib/zomboid.ts`, `src/lib/zomboid-maps.ts`, `src/lib/zomboid-updates.ts`.
+`src/lib/zomboid.ts`, `src/lib/zomboid-maps.ts`, `src/lib/zomboid-updates.ts`,
+`src/lib/zomboid-ini-contract.ts`, `src/lib/sandbox-lua.ts`.
+
+**Two committed fixtures are copies of the live server, and with no production access they
+will settle most PZ questions on their own.** Reach for them before reasoning from this
+file:
+
+| File | What it is |
+|------|-----------|
+| `tests/fixtures/pz-server.ini` | The **verbatim** production `Server/yoshling.ini`, 2026-09-29 — 144 keys, 134 comment lines, `Mods=` 87 entries, `WorkshopItems=` 75, `Map=` 22. `RCONPassword` redacted; `Password`, `DiscordToken` and `ServerPlayerID` were already empty |
+| `src/lib/__tests__/fixtures/pz-sandboxvars.lua` | A verbatim **38-option excerpt** of the production `SandboxVars.lua` (2026-10-01), chosen for its traps — a duplicate key at two nesting levels, a key with no comment under another's 27 enum lines, Min/Max on an int and a float |
+| `tests/fixtures/appworkshop-stale.acf` | A Workshop manifest with a **planted** stale mod, the fault the detector has to find |
+
+The invariants are pinned by six test files, all runnable with no Docker, no network and
+no server: `src/lib/__tests__/{sandbox-lua,zomboid-sandbox-io,zomboid-ini-contract,zomboid-maps}.test.ts`
+and `tests/{zomboid-ini,acf}.test.ts`. Extend one rather than re-deriving a fact here.
 
 ## Contents
 
@@ -30,6 +45,7 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
 - [When the server hangs](#when-the-server-hangs) — up but unjoinable, and how to prove it
 - [Known mod defects](#known-mod-defects) — moved to [`PZ-MOD-BACKLOG.md`](PZ-MOD-BACKLOG.md)
 - [Status](#status)
+- [What is measured, and what is not](#what-is-measured-and-what-is-not) — read before quoting a number
 - [Corrections](#corrections) — things this file once got wrong
 
 ## How it runs
@@ -39,12 +55,29 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   there's no long SteamCMD install like 7DTD's; the only thing downloaded at
   runtime is Workshop mods. Build 42 is what the default tag ships.
 - Everything lives in one data dir, mounted into web as `/zomboid`
-  (`PZ_SERVER_DIR`): `Server/<name>.ini` (all ~139 settings **and the mod
-  lists**), `Server/<name>_SandboxVars.lua` (loot/zombie/XP preset),
-  `Server/<name>_spawnregions.lua`, `Saves/Multiplayer/<name>/` (the world),
-  `db/<name>.db` (player accounts). Server name is `yoshling` (`SERVERNAME` /
-  `PZ_SERVER_NAME`); `serverName()` in `src/lib/zomboid.ts` discovers it from
-  disk if it ever differs.
+  (`PZ_SERVER_DIR`): `Server/<name>.ini` (**144** keys **and the mod lists**),
+  `Server/<name>_SandboxVars.lua` (**742** options — loot, zombies, XP; see
+  [Sandbox options](#sandbox-options)), `Server/<name>_spawnregions.lua`,
+  `Saves/Multiplayer/<name>/` (the world), `db/<name>.db` (player accounts).
+  144 counted off the production file 2026-09-29 (the fixture above). This said
+  "~139", worth correcting rather than rounding because **every derived figure in the
+  code is computed off 144** — 137 shown with 7 hidden, 8 restart-only — and none of
+  them reconcile against the old number.
+- Server name is `yoshling` (`SERVERNAME` / `PZ_SERVER_NAME`); `serverName()` in
+  `src/lib/zomboid.ts` discovers it from disk if it ever differs — **by stat-then-guess,
+  and it prefers `servertest.ini` when the configured name's file is absent.** That is
+  the reachable path into a backup with no world: a rename through the settings page, or
+  a config import that drops a second `.ini`, and the create then refuses rather than
+  writing a 4 MB archive (see [Settings, backups, firewall](#settings-backups-firewall)).
+- **The service sits behind `profiles: ["games"]`, so a bare `docker compose up -d`
+  cannot start it — and a human verifying PZ by hand needs `--profile games`.** Verified
+  on the box 2026-10-01: with no profiles, `up --dry-run -d` printed `yoshling-mc
+  Started` *and* `yoshling-7dtd Started` while PZ was running — all three worlds,
+  ~22 GB of configured heap on a 15.6 GB box, i.e. the 2026-09-26 co-residency incident
+  with a one-command trigger. Named services are unaffected, which is what the app uses.
+  The three `mem_limit`s deliberately sum to more than the box because **only one world
+  runs at a time**; `src/lib/coresidency.ts` detects a breach of that invariant and says
+  so, which nothing did before.
 - **Control is RCON on 27015**, not published to the host — the web container
   reaches it as `zomboid:27015`. `PZ_RCON_PASSWORD` (web) must match
   `RCONPASSWORD` (the game container); the entrypoint writes that value into the
@@ -78,20 +111,75 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
 
 ## Memory
 
-- **Measured memory use (2026-09-13):** with just 2 mods installed, PZ sits at
-  **4.83 GiB RSS** of the box's 7.56 GiB (~1.2 GB free) on `-Xmx4096m`. With 76
-  mods it was OOM-killed. So 8 GB is fine for a small list and has room for maybe
-  a handful more mods; a large map-heavy collection needs a 16 GB box, not heap
-  tuning.
+Current values, all in `docker-compose.yml`'s `zomboid` block, and all three measured
+on production 2026-09-30 — the JVM's own command line reads `-Xms2048m -Xmx12288m`, so
+these two env vars land verbatim rather than being interpreted:
+
+| | value | who may change it |
+|---|---|---|
+| `MIN_MEMORY` → `-Xms` | `2048m` | compose only — **not** UI-owned |
+| `MAX_MEMORY` → `-Xmx` | `${PZ_MAX_MEMORY:-12288m}` | the Settings page, via `.env` |
+| `mem_limit` (the cgroup ceiling) | `14g` | compose only |
+
+Three things not to re-break:
+
+- **`setMemory` reads `MIN_MEMORY` and refuses before admission.** It patches only the
+  max, so a heap chosen below the floor would write `-Xmx` under a larger `-Xms` — a JVM
+  that refuses to start. The memory card's buttons therefore begin at 2 GB instead of
+  offering 1.
+- **Do not lower `mem_limit` to 13g. That was tried and measured.** Booted and empty,
+  `anon` (unreclaimable) was 1.1 GiB while `file` (page cache from reading mods and map
+  cells) was 11.6 GiB, so the cgroup sat at 98 % of its limit and had already reclaimed
+  601 times. Cache pressure is harmless, but `-Xmx12288m` means the heap may grow to
+  12 GiB of *anon*, and at that point 13g is an OOM kill mid-session. 14g is also the
+  practical maximum: 15.6 GiB box, minus ~1 GB for the dashboard and the OS. If PZ ever
+  needs more, the heap comes down rather than the ceiling going up.
+- **Judge it from `memory.stat`, not `docker stats`.** The latter's `MemUsage` counts
+  page cache, so a healthy PZ reads as 98 % of its limit — which is how 13g came to look
+  adequate in the first place.
+
+> **This whole section was the pre-migration Hetzner box until 2026-10-06 and stated none
+> of the values above** — "4.83 GiB RSS of the box's 7.56 GiB on `-Xmx4096m`" with 2 mods,
+> "8 GB is fine for a small list", "needs a 16 GB box, not heap tuning". Every sentence
+> was an honest measurement, correctly dated 2026-09-13, of a box decommissioned that same
+> day; it was believable precisely because it was real. The cost was that both traps above
+> were live re-break candidates against a world on a 12 GB heap with 87 mods.
+>
+> The old conclusion is kept because it was right, and it is what bought the 16 GB box: on
+> 2026-09-13 PZ was **kernel** OOM-killed (`OOMKilled=true`, *not* a Java
+> `OutOfMemoryError`) with 76 mods on `-Xmx4096m`, after GC thrash in the log
+> (`SteamnetworkingSockets service thread waited 132ms for lock`). A kernel kill means
+> total RSS was the limit — heap **plus** the off-heap and mmap'd map and tile data — so
+> raising the heap alone would not have helped.
 
 ## Workshop updates
 
 - **Seed a big mod list with SteamCMD, don't let PZ download it.** PZ's own
   downloader fails intermittently on a long list (`result=10` Busy, `result=2`
   Fail) and each failure kills the whole server via the NPE below — so a 75-item
-  list becomes a crash loop. `/root/seed-mods.sh` on the box loops SteamCMD over
-  every id in `WorkshopItems` with `validate` and one retry: 75/75, zero failures,
-  ~15 min for 3.8 GB. Then PZ starts cleanly because nothing needs downloading.
+  list becomes a crash loop. Then PZ starts cleanly because nothing needs downloading.
+  - **The app does this itself now, and that is the path to use.** `seedMods(ids)` in
+    `src/lib/zomboid-updates.ts` runs SteamCMD with `validate` in a throwaway
+    `--rm` container sharing the `pz-workshop` volume, under SteamCMD's own 45-minute
+    exec timeout, and **throws unless SteamCMD reported every item downloaded** — so
+    reaching the end *is* the read-back, and the count is Steam's rather than ours.
+    It deliberately leaves `appworkshop_108600.acf` alone, for the reason in the next
+    bullet. `POST /api/zomboid/updates` forces a round.
+  - **The container carries the label `yoshling.role=pz-seed`, and the label is
+    load-bearing outside the module.** `scripts/deploy.sh` refuses to deploy while a
+    seed is in flight, because two SteamCMD runs race on the same volume and the loser
+    silently updates nothing — the documented "updated 0 of 1 mods". If you rename the
+    label, rename it there too. (The guard used to look for the image name, which meant
+    it never fired once.)
+  - The by-hand equivalent was `/root/seed-mods.sh` on the box, looping SteamCMD over
+    every id in `WorkshopItems` with `validate` and one retry: 75/75, zero failures,
+    ~15 min for 3.8 GB on 2026-09-14. **Unverified since — nothing in git creates or
+    references that file**, so check before reaching for it:
+    `ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 'ls -la /root/seed-mods.sh'`.
+    Prefer the route either way: a host script run by hand is outside the deploy
+    interlock, and the watcher's seed is the **normal** path rather than the edge case
+    (PZ is off whenever another world holds the box), so racing it is the likely
+    outcome, not the unlucky one.
 - **A failed Workshop download crashes the server, and a stale manifest causes
   it.** PZ's `GameServerWorkshopItems.Install` throws an unhandled
   `NullPointerException` when an item fails to download, so the whole server
@@ -143,16 +231,25 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
     everyone has logged off" while the server was already being restarted. The
     watcher also logs when an apply *starts*, not only when it finishes — the
     `running` guard correctly suppresses other ticks meanwhile, so that line is the
-    only signal that exists. `OperationBanner` covers the same window globally.
+    only signal that exists. **`OperationLedger` covers the same window globally** —
+    `src/components/operation-ledger.tsx`, mounted in `src/app/home/layout.tsx` and
+    `src/components/dash-shell.tsx`. This said `OperationBanner`, which no longer
+    exists: the only hit left in `src/` is a comment in `operations-provider.tsx`
+    recording that it is gone, so grepping for it reads as "there is no global progress
+    surface" and invites adding a second one beside the ledger.
   - **The apply is silent for ~6 minutes, and that got misread as broken.** A real
     apply on 2026-09-14 ran 20:42:22 → 20:48:10: a graceful stop, a 137 MB
     download, then a full boot. The watcher logs only *after* it finishes, so the
     log went quiet and it looked like nothing was happening — the operator clicked
     "Check now", which then collided with the apply already in flight (see the lock
-    bug below). Progress is now reported: `withGameStopped` publishes a stage
-    ("Saving and stopping the server" → "Downloading updated mods" → "Starting the
-    server") onto the control lock, and `/api/games/status` exposes it as
-    `busy.stage`.
+    bug below). Progress is now reported as the operation's steps, and these are the
+    strings the code actually emits, so they are greppable:
+    **`Saving Project Zomboid`** → **`Downloading mods from Steam`** →
+    **`Starting Project Zomboid`** (`op.step` in `game-manager.ts`'s `narratedStop` /
+    `narratedStart`, and `downloadStep` in `zomboid-updates.ts`; the world's name comes
+    from `GAMES[game].name`). `/api/games/status` still exposes the current one as
+    `busy.stage`. The three quoted here before — "Saving and stopping the server",
+    "Downloading updated mods", "Starting the server" — appear nowhere in the repo.
   - **Boot progress.** `GameStatus.boot` (`{stage, percent}`) is filled while
     `status === "starting"`, from one `docker logs | awk` pass over the container
     log. Mod loading dominates the wait, and every mod logs `> loading <id>`, so
@@ -183,8 +280,28 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   - Verified in production this way: planted stale mod → detected as
     `Better Push (3715137752)`, one player online → **announced and did not
     restart**, `StartedAt` unchanged, state file written.
-  - It holds the **control lock** via `withGameStopped()`, so it can't interleave
-    with a restart from the UI; a busy lock just skips that round.
+  - **Both branches run inside the operation registry**, not just the control lock, so
+    they cannot interleave with a restart from the UI and a refusal is reported as a
+    refusal. Each enters `runOperation({kind: "mods.update", game: "zomboid", …})`; the
+    restart branch goes through `withGameStopped()`, and the **stopped-server seed branch
+    claims `POWER_RESOURCES`, not merely `files:zomboid`** — the harmful case is a
+    `powerOn("zomboid")` booting the game onto a half-written workshop volume, and the
+    world is already down so nothing is being held hostage that could not wait. An
+    `OperationConflictError` is deliberately **not** recorded as `lastError` and does
+    **not** start a cooldown: nothing was attempted, so the next tick must be free to
+    try, and putting "Project Zomboid is busy" on the card would read as the watcher
+    having broken. If you add any long PZ operation, wrap it in `runOperation` — see
+    [`OPERATIONS.md`](OPERATIONS.md).
+  - **Four knobs, and there are two failure cooldowns rather than one.**
+    `APPLY_RETRY_COOLDOWN_MS` **1 h** guards the restart-the-world path (a failed apply
+    spent the world's uptime); `SEED_RETRY_COOLDOWN_MS` **15 min** guards the
+    stopped-server path (CPU and Steam bandwidth, nobody waiting, so four runs an hour
+    instead of twelve). `REANNOUNCE_MS` **30 min** re-announces a pending update so
+    latecomers see the warning; `APPLY_MAX_MS` **1 h** is the ceiling past which an
+    `applyingSince` marker is treated as stale. The seed branch — the *normal* one — had
+    no cooldown and no `try/catch` at all at first, so one undownloadable item launched a
+    SteamCMD container every poll interval forever. The 1 h cooldown then spent a while
+    not working at all; see [Corrections](#corrections).
   - **There is no push alternative — this was checked, not assumed.** Steam has no
     Workshop webhook. PICS changelists are a timer poll (`changelistUpdateInterval`
     → `ClientPICSChangesSinceRequest`) and carry **only appIDs and packageIDs**, so
@@ -205,11 +322,25 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
 - **When a mod updates on Steam, the server keeps serving the old version until it
   restarts, and clients that auto-updated cannot join.** No mismatch line appears
   in the server log — the join just fails, so it looks like the server is broken.
-  To find the culprit, compare each `WorkshopItems` id's Steam `time_updated`
-  against the newest file mtime under
-  `pz-workshop/_data/content/108600/<id>/`; that pinpointed Authentic Z
-  (`2335368829`) in about a minute. Then `validate`-download that one id and
-  restart. A normal restart with nothing updated downloads nothing.
+  **Run `scripts/pz-stale-mods.py` to find the culprit**, over stdin so nothing has to
+  be installed on the box:
+
+  ```bash
+  ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 'python3 -' < scripts/pz-stale-mods.py
+  ```
+
+  Then `validate`-download the id it names and restart. A normal restart with nothing
+  updated downloads nothing.
+  - **Do not hand-roll the check, and in particular do not compare file mtimes.** This
+    bullet used to tell you to diff each `WorkshopItems` id's Steam `time_updated`
+    against the newest mtime under `pz-workshop/_data/content/108600/<id>/`; it did
+    pinpoint Authentic Z (`2335368829`) in about a minute on 2026-09-14, which is why it
+    was written down. But the app deliberately compares Steam's manifest and **not**
+    mtimes (see "It compares Steam's manifest, not file mtimes" above), the script
+    encodes the two-`timeupdated`-sections trap described with it, and the documented
+    failure mode of getting it wrong is the detector answering **"nothing to do" on a
+    server that genuinely has a stale mod** — [Correction #5](#corrections), the bug
+    agreeing with itself. A wrong answer here is indistinguishable from a healthy server.
 
 ## Mods
 
@@ -233,14 +364,31 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   `Map=`** — it only guards `Mods` and `WorkshopItems`.
   Fixed by `pz/search_folder.sh` + `pz/Dockerfile` (a derived image, because
   entry.sh runs `sed -i` on the script itself so a bind mount fails): finds
-  `media/maps` at any depth, dedupes, orders by cell count so a 22-cell map
-  outranks a 4-cell checkpoint, and honours `MAP_EXCLUDE` from compose.
+  `media/maps` at any depth and dedupes by map name.
   **Measured before/after:** distinct maps registering cells went from **2 → 16**,
-  and `Map=` from 3 entries to 22. If maps ever stop working, check
-  `docker logs yoshling-pz | grep "INFO: Added maps"` first.
+  and `Map=` from 3 entries to 22.
   I previously recorded the opposite in this file — that PZ itself prunes add-on
   maps and that this was correct behaviour. That was wrong; the pruning was the
   image's sed, and the maps genuinely were not loading.
+  - **The script reads the existing `Map=` first and emits those names in that order**,
+    appending only newly-found maps by cell count (bigger first, so a 22-cell base does
+    not lose a shared cell to a 4-cell checkpoint). Added 2026-09-29 (`b580852`), and it
+    is the load-bearing half: because entry.sh's `sed` is unconditional, **whatever this
+    script emits IS the load order**, so before that change an order saved by a human or
+    by `/api/zomboid/maps` "survived exactly zero restarts" while the dashboard's toast
+    told the user to restart to apply it. Verified by writing a reorder to the .ini and
+    finding `Map=` back to the script's output byte for byte after one boot. **If you
+    rewrite or "simplify" this script, keep the saved-order read** — dropping it silently
+    restores that bug, and the UI will keep reporting success.
+  - It also **skips mods whose own `mod.info` `name=` contains DEPRECATED** (including a
+    retired map still shipped inside a live mod), honours `MAP_EXCLUDE` from compose, and
+    **strips `\r`** — the live .ini is LF today, but `/api/zomboid/config/import` writes
+    an uploaded file verbatim, so a CRLF .ini from a Windows server would make the last
+    entry `"Muldraugh, KY\r"`, matching neither the skip nor any installed map.
+  - **The boot log is the oracle, and the string is `map(s)`:**
+    `docker logs yoshling-pz | grep "map(s)"` → `Found N map(s): K kept in the saved
+    order, A newly found`. This said `grep "INFO: Added maps"`, which appears nowhere in
+    this repo, so the first diagnostic step returned nothing.
 - **`MAP_EXCLUDE`** keeps a map out of the generated list. `SZ_Checkpoint6` is in
   it: retired on 42.20 (content moved into `SZ_Riverside_Checkpoint_2`, map title
   says `ONLY 42.19`, its standalone mod is tagged `DEPRECATED`) yet still shipped
@@ -266,31 +414,71 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
   even though the file is right there. Harmless log spam (animation is
   client-side, and clients are on case-insensitive filesystems); silence it with
   lowercase symlinks for the dir and file names if it ever matters.
-- **One Workshop item can ship many maps.** SecretZ Pandemic ships **20** map
-  folders (16 with cells, 4 cell-less spawn/basement definitions), and every one
-  of them needs a `Map=` entry. Its own maps even overlap each other
-  (`SZ_Checkpoint6`/`SZ_Riverside_Checkpoint_2`,
-  `SZ_Checkpoint5`/`SZ_MuldraughCrossroads_Checkpoint`), so the order within a
-  single mod matters too.
-- **Memory: 4 GB is not enough for a big mod list.** On 2026-09-13 the PZ server
-  was **OOM-killed by the kernel** (`OOMKilled=true`) with 76 mods installed and
-  `-Xmx4096m`, after GC-thrash symptoms in the log (`SteamnetworkingSockets
-  service thread waited 132ms for lock`, `IPC function call ... took too long`).
-  The box has 7.6 GB total. Note the failure was a *kernel* OOM kill, not a Java
-  `OutOfMemoryError`, so total RSS — heap **plus** the off-heap/mmap'd map and
-  tile data — was the limit. Raising the heap alone may not be enough; a large
-  collection of map/tile packs may simply not fit on this box. Change it on the
-  Settings page (see "Server memory").
+- **One Workshop item can ship many maps, and every one of them needs its own `Map=`
+  entry** — a cell-less spawn or basement definition included, which is why
+  `search_folder.sh` keys on the map name existing rather than on its cell count.
+  SecretZ Pandemic is the example: production's `Map=` carries **16** `SZ_`-prefixed
+  entries out of its 22, so one Workshop item owns three quarters of the load order. Its
+  own maps also overlap each other (`SZ_Checkpoint6`/`SZ_Riverside_Checkpoint_2`,
+  `SZ_Checkpoint5`/`SZ_MuldraughCrossroads_Checkpoint`), so the order **within** a single
+  mod matters too.
+  - The 16 is counted from `tests/fixtures/pz-server.ini`, the verbatim production .ini
+    taken 2026-09-29 (22 `Map=` entries: `map_distanciado`, 16 × `SZ_*`,
+    `FoxtrotWarehouse`, `AZSpawn`, `ArmyGroup_Spawn`, `DeltaForce_Team_Spawn`,
+    `Muldraugh, KY`). Re-measured 2026-10-06 and still 22.
+  - **How many map folders the mod actually ships is unverified since 2026-09-14**, and
+    the figure that was here cannot be reconciled with the 16. Settle it by listing the
+    folders rather than trusting either number, then diff that list against the `SZ_*`
+    entries in `Map=`:
+
+    ```bash
+    ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 \
+      'docker exec yoshling-web-1 find /zomboid-workshop/content/108600 \
+         -maxdepth 8 -type d -path "*/media/maps/*"' \
+      | grep -i secretz | sed 's#.*/maps/##' | cut -d/ -f1 | sort -u
+    ```
+
+    Do **not** "restore" names to `Map=` from a folder count: the generator only emits
+    names it finds under the workshop mount, so a name that is not there is dropped on
+    the next boot and the generator looks broken.
+    - > This said "**20** map folders (16 with cells, 4 cell-less spawn/basement
+      > definitions)", with "every one of them needs a `Map=` entry". Only one absence is
+      > accounted for (`SZ_Checkpoint6`, via `MAP_EXCLUDE`), which leaves three
+      > unexplained: either three SecretZ maps are silently inert in the live world, or
+      > the 20/16 split is wrong. "16 with cells" is also the same number as two
+      > unrelated whole-server measurements ("distinct maps registering cells went from
+      > 2 → 16"; Status's "16 register cells"), which is what a conflation looks like.
+- **A big map/tile collection costs off-heap RSS, not just heap — see
+  [Memory](#memory).** This bullet used to hold a *second* copy of the 2026-09-13
+  Hetzner measurement, 190 lines from the first, ending in "Change it on the Settings
+  page (see "Server memory")" — a heading that exists only in CLAUDE.md, so the one
+  pointer to the real numbers dead-ended.
 - **Dependency resolution needs `STEAM_API_KEY`.** The keyless Workshop endpoint
   returns no dependency data at all; `IPublishedFileService/GetDetails` with a key
   adds `children`, which is the Workshop's "Required items" list. Adding a mod
   pulls its required items in and puts them **before** it in both lists, since PZ
   loads `Mods=` in order and a library must precede its consumer. Without a key it
   falls back and behaves as before.
-- **Map mods need a THIRD list the mod manager does not own yet: `Map=`.** A map
-  mod that's in `WorkshopItems` and `Mods` still shows nothing in-game until its
-  map name is added to `Map=` (first entry wins where two maps overlap). The add
-  route detects the Workshop "Map" tag and says so, but doesn't edit `Map=`.
+- **Map mods need a THIRD list, `Map=`, and the app owns it: the Maps card on the Mods
+  page.** A map mod that is in `WorkshopItems` and `Mods` still shows nothing in-game
+  until its map name is in `Map=`, where the **first** entry wins any cell two maps both
+  claim. `GET /api/zomboid/maps` returns every installed map with its cell count, its
+  position in `Map=` and every cell conflict; `POST` writes the order, via
+  `writeMapOrder()` in `src/lib/zomboid-maps.ts`.
+  - **Write it through that route and nothing else.** `Map` is in `CARD_OWNED_KEYS`
+    (`src/lib/zomboid-ini-contract.ts`), so the generic "All settings" editor refuses it
+    by name and says which card owns it. That refusal is not tidiness: `search_folder.sh`
+    regenerates the line on every boot and drops any name it cannot find on disk, so a
+    name typed into "All settings" would be written, reported saved, told to restart, and
+    deleted by that restart — and a name *removed* there would come straight back. The
+    Maps card is the only view that knows which names survive.
+  - > This bullet said "a THIRD list the mod manager does not own yet" and that the add
+    > route "doesn't edit `Map=`" until 2026-10-06, 195 lines above a Status section
+    > already listing the maps card as verified working. Believable because it was true
+    > when written and the card arrived without the bullet being revisited; harmful
+    > because the two actions it invites are building a card that exists, or writing
+    > `Map=` through `/api/zomboid/config`, which is the one key that route is locked
+    > against for a reason.
 - **Mods = two lists that must agree** (`/zomboid/mods`, `/api/zomboid/mods`):
   - `WorkshopItems=2169435993;2200148440` — what the server *downloads*.
   - `Mods=\AuthenticZ;\Brita` — what it then *loads* (mod folder names).
@@ -308,33 +496,133 @@ Companions: `pz/search_folder.sh` + `pz/Dockerfile` (the map-scanner fix),
     enabled.
   - Timing to tell players: a mod **downloads on the next start and loads on the
     one after that**.
+  - **`readModState` / `writeModState` rewrite both lines wholesale**, so the structure
+    of those lines is a contract. What is measured: in `tests/fixtures/pz-server.ini`
+    each is **one single line** — `Mods=` 1,518 bytes / 87 entries, `WorkshopItems=`
+    824 bytes / 75 — `;`-separated, no trailing separator, no duplicates, and order in
+    `Mods=` **does** matter because PZ loads it in order and a library must precede its
+    consumer. `splitList()` trims and drops empties, and `modIdPrefix()` mirrors the
+    file's existing backslash convention rather than imposing one.
+  - **What nobody here has measured**, and it is worth knowing you are guessing: the
+    maximum line length PZ tolerates (87 entries work; nothing establishes a ceiling),
+    whether order in `WorkshopItems=` matters at all, and what the game does with a
+    `Mods=` entry whose Workshop item has been removed. Pinned behaviour for the parser
+    and writer is in `tests/zomboid-ini.test.ts`, which runs against that real .ini —
+    extend it rather than reasoning about the format from this paragraph.
 
 ## Settings, backups, firewall
 
 - **Settings:** `/api/zomboid/config` exposes the whole .ini generically (the `#`
-  comment above each key becomes its help text). `INFRA_KEYS` in
-  `src/lib/zomboid.ts` (RCON + the published ports) plus `Mods`/`WorkshopItems`
-  are locked out of that editor — the ports would break connectivity, and the mod lists
-  belong to the Mods page. Quick settings (name/password/max players/public/PVP/
-  pause-when-empty) write to the same endpoint, so there's no second copy to
-  drift. Sandbox options are Lua, not .ini — the page points at the file browser.
+  comment above each key becomes its help text). Quick settings (name/password/max
+  players/public/PVP/pause-when-empty) write to the same endpoint, so there's no second
+  copy to drift. Sandbox options are Lua, not .ini, and have **their own editor** — see
+  [Sandbox options](#sandbox-options), not the file browser.
+- **What that route is allowed to write, and what it may *claim* afterwards, is
+  `src/lib/zomboid-ini-contract.ts`** — a module this doc did not name until 2026-10-06,
+  and the one to read before touching any PZ settings surface. Added 2026-10-01
+  (`4c131bd`, `ff0f0d0`), pure and therefore tested without a server:
+  `src/lib/__tests__/zomboid-ini-contract.test.ts` and `tests/zomboid-ini.test.ts`.
+  - **A .ini write is applied *live* for ~136 of the 144 keys. Do not tell anyone to
+    restart.** `RESTART_KEYS` is the only eight a running server cannot pick up:
+    `Mods`, `WorkshopItems`, `Map` (read once while the world loads), `DefaultPort`,
+    `UDPPort`, `RCONPort` (sockets bound at startup), and `ResetID` /
+    `ServerPlayerID` (the soft-reset handshake, compared at connect). Measured against
+    the live server 2026-10-01. The UI used to say "Restart Project Zomboid to apply"
+    for every key, so a `MaxPlayers` change kicked everyone off the daily-played world
+    for nothing.
+  - **`reloadLiveOptions()` in `src/lib/zomboid.ts` proves it rather than assuming.** It
+    sends `reloadoptions`, re-reads with `pzConsoleLong("showoptions")` — the draining
+    reader, because a truncated reply would report the first 79 keys as checked and leave
+    the rest unverifiable — and buckets every key as **verified** / **unverified** /
+    **stale**. "Absent from `showoptions`" means *unverifiable*, never *rejected*: the
+    game withholds seven of the 144 (`Password`, `RCONPassword`, `RCONPort`,
+    `DiscordToken`, the three `Discord*Channel`) and masks `BadWordReplacement`.
+    `describeIniSave()` builds the sentence the UI says from what the route actually did,
+    and the suite asserts that the word "live" can appear only when something was
+    verified live.
+  - **Two defects already fixed here, both the house class.** An unmatched key used to be
+    **appended** to the file and listed in `applied`, so `PUT {"Maxplayerz":"99"}`
+    answered `{"applied":["Maxplayerz"]}` and added a line the game ignores — it now
+    comes back in `ignored`. And the lock list was compared **case-sensitively**, so
+    `rconpassword` slipped past it and was appended as a second, game-ignored copy of the
+    control channel's password; `canonicalKeyIndex()` resolves every request to the
+    file's own spelling first, which makes every check downstream an exact comparison.
+- **The locks are `INFRA_KEYS` *plus* `CARD_OWNED_KEYS`, and `INFRA_KEYS` is four keys.**
+  `src/lib/zomboid.ts` → `["RCONPassword", "RCONPort", "DefaultPort", "UDPPort"]`: this
+  deployment's own settings, which stay local on an import so control and connectivity
+  survive it. `CARD_OWNED_KEYS` is `{Map, Mods, WorkshopItems}` — the keys another page
+  owns, each mapped to the name of its owner so the refusal says where to go instead of
+  "not editable". `/api/zomboid/config` locks the union.
+  - > **This listed six `INFRA_KEYS`, ending in `SteamPort1`/`SteamPort2`.** They were
+    > removed deliberately on 2026-10-01 because **Build 42 has no such server options**:
+    > the live .ini's 144 keys contain neither, and `showoptions` does not report them.
+    > The Steam query ports are published by docker-compose (`8766-8767/udp`) and are not
+    > in the .ini at all. So two of the six locked and preserved nothing, and the reason
+    > the code records for caring is worth repeating — "a lock list that is a third
+    > fiction invites trusting the rest of it", and this list is also what the import
+    > route promises to carry across. "Restoring" the two entries reinstates dead code;
+    > leaving `Map` out of the lock list re-exposes the one key whose write through this
+    > route *cannot work at all*.
 - **Config import** (`/api/zomboid/config/import`, the card on the Settings page):
   upload an existing server's `.ini` to move a server you already ran. It
   replaces the file wholesale — settings *and* both mod lists, which is usually
-  the point — but **puts this box's `INFRA_KEYS` back** (RCON password/port,
-  DefaultPort, UDPPort, SteamPort1/2), so an imported config can't take the app's
-  control channel or point the server at unpublished ports. POST without
+  the point — but **puts this box's `INFRA_KEYS` back**, so an imported config can't take
+  the app's control channel or point the server at unpublished ports. POST without
   `apply` returns a preview (what changes / what's added / what's dropped / which
   keys stay local / which mods come across); POST with `apply: true` backs the
   current file up to `<name>.ini.bak-<stamp>` and writes. An import whose
   `Mods=` names ids that no Workshop item provides shows up in the Mods page's
-  "Loaded without a Workshop item" list — that's the intended catch.
+  "Loaded without a Workshop item" list — that's the intended catch. It writes the
+  uploaded bytes verbatim, which is why `search_folder.sh` strips `\r`.
 - **Backups** bundle `Saves/Multiplayer/<name>` + `db/<name>.db` + `Server/<name>*`
   + a `manifest.json`, so one restore rebuilds the world, the accounts and the
-  settings together.
-- **Firewall:** as with the other games, the ports must be open in BOTH the box's
-  `ufw` and the Hetzner Cloud Firewall — 16261/udp + 16262/udp (game) and
-  8766-8767/udp (Steam query, needed for the public server list).
+  settings together. **PZ's is the slow and dangerous one of the three**, and that shape
+  is the part to carry (`src/lib/backup-create.ts`, `createZomboid`):
+  - **It takes about eleven minutes, and that is not a hang.** Measured on production
+    2026-09-29: **442,064 files, 1.9 GB, ~11 minutes**, of which the world copy was ~10.5.
+    The `tar` alone was **261,370 ms** on 2026-09-30.
+  - **There is deliberately no wall-clock cap on the archive step** (`TAR_TIMEOUT_MS` is
+    `undefined`). It was 300 s, i.e. 13 % away from breaking PZ's backups for good, and
+    the first *automatic* run had already failed on it. A timeout cannot make a slow
+    archive faster; it can only turn "slow" into "no restore point". **Do not reintroduce
+    one** — a genuinely stuck tar is visible through `runOperation`'s narration and the
+    ledger's elapsed time instead.
+  - **It calls `refuseIfPreemptedEarly` at every step boundary**, not just before the
+    tar. On 2026-09-29 `op.preempted` was set 94 s into a 9m 43s backup and the only
+    check ran last, so the app spent a further **7m 55s** copying 291 MiB it had already
+    decided to discard, competing for disk with the power operation that condemned it,
+    and then handed the user an error.
+  - **With no world on disk it throws rather than writing a world-less 4 MB archive.** It
+    used to settle that as a `noop` and carry on, which concluded `partial` → journal
+    `outcome: "ok"` → scheduler cooldown cleared, *and* the archive took the
+    never-pruned newest slot: simulated against the real `selectForPruning`, five real
+    archives plus one world-less newest at `keep: 5` selected a genuine restore point for
+    deletion. Repeat daily and every real archive is gone, each step logged a success.
+    The reachable trigger is `serverName()` resolving to the wrong `.ini` — see
+    [How it runs](#how-it-runs).
+  - **Automatic backups exist for PZ.** `src/lib/backup-schedule.ts`, driven by a
+    5-minute *check* clock in `src/instrumentation.ts` (the check is a `readdir`; it only
+    probes the game once the clock says one is due). Default one per world per day,
+    **refused while any player is connected** — and refused when the player count cannot
+    be read, because that is not a green light. Retention is `BACKUP_KEEP_ZOMBOID`,
+    falling back to `BACKUP_KEEP`, default `keep: 5`.
+- **Firewall: `ufw` does not gate these ports, and there is no cloud firewall.**
+  docker-compose publishes `16261/udp`, `16262/udp`, `8766/udp` and `8767/udp` on all
+  interfaces, and **every `ports:` entry is world-reachable regardless of ufw**: Docker
+  publishes with a DNAT rule and the `FORWARD` chain reaches Docker's own chains before
+  any ufw chain, so that traffic never passes through `INPUT` at all. `DOCKER-USER` is
+  the only place a rule can intercept it, and on this box `iptables -S DOCKER-USER` is
+  empty (measured 2026-09-28; from outside, `curl http://89.58.50.155:3000/login`
+  returned 200 in cleartext, and 7DTD's telnet on 8081 accepted a public connection).
+  So: publish to `127.0.0.1:` when only the host needs a port, and put DROP rules in
+  `DOCKER-USER`, never in ufw.
+  - > This said the ports "must be open in BOTH the box's `ufw` and the Hetzner Cloud
+    > Firewall". Both halves are wrong. The box has been **netcup** since 2026-09-13 and
+    > netcup has no cloud-firewall product, so there is no console to open anything in —
+    > and a clean `ufw status` says nothing about whether these ports are reachable. It
+    > was believable because it was correct on Hetzner, where two layers really did both
+    > have to be opened and missing either produced "connect hangs, nothing in logs".
+    > The fix landed in CLAUDE.md and `docs/AUDIT-2026-09-28.md` and missed this file.
 
 ## Sandbox options
 
@@ -354,12 +642,28 @@ for it; see [`SETTINGS.md`](SETTINGS.md) for them and for the live verification.
 > actually play. The file browser still *can* edit it (`lua` was added to the editable
 > allowlist on 2026-09-14), which is the fallback, not the route.
 
+**742 is the file's total; a single API response is not.** Of the 742, **403 were added by
+mods** (`BurdJournals` alone contributes 182), so the endpoint partitions on the Lua table
+an option lives in: `?scope=world` is the top level plus the five vanilla tables (~335
+options), `?scope=mods` is every other table, and nothing is dropped by the split. Counting
+one response and calling it the file is how "335 options" gets written down. The writer's
+backstop against a partial read, `MIN_PLAUSIBLE_OPTIONS`, is **200** — a 27 % floor, set low
+on purpose so a build that adds or removes options does not start refusing every save, with
+the delimiter checks as the primary guard. `src/lib/__tests__/sandbox-lua.test.ts` asserts a
+real-shaped truncation is refused at that default.
+
 - **Muscle strain** is `MuscleStrainFactor` (min 0.00, max 10.00, default 0.70) —
   "a multiplier when applying muscle strain from swinging weapons or carrying
   heavy loads". It is the only vanilla strain knob; there is **no** option for
   recovery rate. Weak shoves are a *consequence* of accumulated strain, not a
   separate setting, so this one value covers both complaints. `0.0` disables the
   mechanic, which makes melee strictly better than guns in every situation.
+  - The min/max/default are the file's own `Min: 0.00 Max: 10.00 Default: 0.70` comment,
+    not an inference, and that line is committed as
+    `src/lib/__tests__/fixtures/pz-sandboxvars.lua:123` — a verbatim 38-option excerpt of
+    the production file, so it is checkable without the box. The excerpt is a snapshot
+    (taken with the editor, 2026-10-01); for the live value, read it off the box or the
+    sandbox editor rather than from here.
 - The `ArmStrainGainMultiplier` / `ArmStrainPenaltyMultiplier` / etc. block belongs
   to the **`CyesPushDoors`** mod and applies only to forcing doors open, not
   combat. All at a neutral `1.0`. Don't mistake it for a strain control.
@@ -383,7 +687,11 @@ for it; see [`SETTINGS.md`](SETTINGS.md) for them and for the live verification.
   ships `AntiCheatNoClip=4` and `AntiCheatPacketException=4` for the same reason;
   Speed just wasn't among them.
 - Set it live with RCON **`changeoption AntiCheatSpeed 4`** — no restart needed,
-  and PZ writes the value into the `.ini` itself.
+  and PZ writes the value into the `.ini` itself, which is what makes the file the proof
+  that it stuck. It did: `tests/fixtures/pz-server.ini` (the production file, 2026-09-29)
+  carries `AntiCheatSpeed=4`, `AntiCheatNoClip=4`, `AntiCheatPacketException=4` and
+  `AntiCheatHit=4`, against `=2` for the other six `AntiCheat*` keys. Snapshot, not live —
+  re-read the file if it matters.
 - **Leave `AntiCheatPacketException` at 4.** 16 `logInconsistentPacket` warnings in
   14 h (Thump, PlayerHitSquare, AttackCollisionCheck…) are ordinary MP jitter.
   Tightening it turns them into kicks.
@@ -464,14 +772,29 @@ A graceful stop **cannot work** — the save runs on the wedged loop, so
 short timeout (60s was enough to confirm it wouldn't save) and accept losing
 progress since the last autosave. There is no better option once the loop is gone.
 
-### Separately: the graceful stop has hung twice on the way down
+### Exit 137 and a five-minute stop are now a *symptom*, not the normal case
 
-PZ has exited **137** (SIGKILL after the grace period) on 2026-09-22 and again on
-2026-09-26 during a hand-off to 7DTD. Both times the explicit `pzSave()` completed
-first — the last lines written were `Saving finish` / `Saving took …ms` — so **no
-data was lost**, but the shutdown itself did not finish inside 300s. When you see
-exit 137, check for those save lines before assuming the worst; and expect a
-hand-off away from PZ to take up to five minutes.
+**Budget ~12 seconds for a PZ stop, exit code 0.** Measured through the dashboard on
+production 2026-09-29: request → container exited in **11.4 s**, and **9.0 s** end to
+end on the driver path, with `failed to exit within 5m0s of signal 15` going from 14
+events in three days to 0. The mechanism is in [How it runs](#how-it-runs) — the driver
+asks the game to `quit` over RCON.
+
+So if you see a stop take five minutes and end in **137**, that means **the RCON `quit`
+did not land**: the fallback `docker stop -t 300` ran, SIGTERM was discarded as it always
+is, and the kernel killed it. That is the wedged-server case (see
+[When the server hangs](#when-the-server-hangs)) and it is worth escalating, not waiting
+out. The one reassurance from the old behaviour still holds: both historical 137s
+(2026-09-22, and 2026-09-26 during a hand-off to 7DTD) had `Saving finish` /
+`Saving took …ms` as their last written lines, so the explicit save had completed and
+**no data was lost** — check for those lines before assuming the worst.
+
+> This section was headed "the graceful stop has hung twice on the way down" and ended
+> "expect a hand-off away from PZ to take up to five minutes", 130 lines above the block
+> that measures 11.4 s. True as history, wrong by 25× as an expectation, and the damage
+> is in both directions: a timeout or a UI string sized off five minutes, and — worse —
+> an actual five-minute 137 read as the documented normal case rather than as the one
+> signal that RCON has stopped answering.
 
 ## Known mod defects
 
@@ -528,19 +851,53 @@ Working and verified in production:
     was for.
 - 12 GB heap; peak RSS 9.7 GB of 16 GB.
 
-Outstanding:
+Players connect to **`pz.yoshling.xyz:16261`** or the raw `89.58.50.155:16261`. The `pz`
+A record exists (DNS-only / grey-cloud → the box, correctly bypassing Cloudflare, which
+carries only HTTP), as do `mc` and `7dtd`; resolved 2026-10-02.
 
-- ~~**`pz.yoshling.xyz` DNS record** does not exist yet~~ — **it does.** Resolved
-  2026-10-02: `pz.yoshling.xyz` → `89.58.50.155`, as do `mc` and `7dtd` (all DNS-only /
-  grey-cloud, correctly bypassing Cloudflare, which carries only HTTP). This entry sat
-  under "Outstanding" while CLAUDE.md said the opposite — two docs disagreeing, with the
-  stale one telling players to use a raw IP they did not need.
+Outstanding — everything here is genuinely open:
+
 - The mod defects in [Known mod defects](#known-mod-defects) that are tagged for
   removal — none applied yet; they want one batched restart.
 - `MuscleStrainFactor` is still at the vanilla `0.7`; a player has asked for it to
-  be lowered.
+  be lowered. (Last read 2026-10-01 from the sandbox excerpt in
+  `src/lib/__tests__/fixtures/pz-sandboxvars.lua`, so "still" is unverified since then.)
 - The `x_extends` lowercase log spam could be silenced with lowercase symlinks
   (5 mods, 565 lines/run). Cosmetic, never done.
+
+> **The `pz.yoshling.xyz` record was the first item on this list while it already
+> existed.** It had been struck through in place and annotated "it does" rather than
+> removed, which is the shape CLAUDE.md's documentation rules single out — a migration
+> headed "Pending" 200 lines above a Status section saying it was applied. A list whose
+> first entry is done is a list people stop reading, so the fact moved up into the
+> paragraph above and the entry is gone.
+
+## What is measured, and what is not
+
+`PZ-MOD-BACKLOG.md` has had a "What is NOT verified" section since it was written and this
+file has not, which means it mixes numbers taken off the box with numbers somebody reasoned
+to, in the same voice. For a reader with no memory of how any of it came to be, that is the
+difference between a fact and a plausible sentence. The rule going forward: **say how a
+number was established and when, beside the number.** Where that is missing, assume
+inferred.
+
+Measured, with the measurement named above: the 144 .ini keys and the 742 sandbox options;
+87 / 75 / 22 for `Mods=` / `WorkshopItems=` / `Map=`; the 9.0 s and 11.4 s stops and the
+433 ms save; the 2 → 16 jump in maps registering cells; `442,064` files and `261,370 ms` of
+tar in a PZ backup; eight restart-only keys out of 144; three unattended Workshop applies.
+
+Inferred, or measured once long ago and never since — treat each as a claim, not a fact:
+
+- **SecretZ's "20 map folders (16 with cells, 4 cell-less)"** — cannot be reconciled with
+  the 16 entries in `Map=`. The command to settle it is beside the claim.
+- **`~9 mod updates/week`** — one week's observation, 2026-09-14, across what was then a
+  75-mod list. It is the whole argument for polling rather than a nightly restart, so it
+  is worth re-counting from `appliedAt` history if that argument is ever reopened.
+- **`/root/seed-mods.sh`** — unverified since 2026-09-14; nothing in git references it.
+- **Everything in `PZ-MOD-BACKLOG.md`** — bytecode- and log-derived, never tested
+  empirically. That file says so; this one should not launder it by citing it plainly.
+- **The `.ini` line-format limits** — what PZ tolerates in `Mods=` is not established
+  beyond "87 entries on one line works".
 
 ## Corrections
 
@@ -671,10 +1028,26 @@ is precisely when a long grace period earns its keep.
 world stopped. Correct on its own, and combined with an unbounded retry it was a
 restart flap: `seedMods` throws for **permanent** reasons as readily as transient ones —
 a Workshop item that was hidden or deleted can never download — so one dead mod would
-produce graceful stop → seed → fail → boot 89 mods → repeat, every poll interval,
-forever, on the world people play daily.
+produce graceful stop → seed → fail → boot the whole mod list → repeat, every poll
+interval, forever, on the world people play daily.
 
-Fixed with `applyFailedAt` and a one-hour cooldown. A `ControlBusyError` does **not**
-start the cooldown, because nothing was attempted; a success clears it. The mod list is
-unchanged after a failure, so nothing about an immediate retry would differ — which is
-why it is a flat cooldown rather than a backoff.
+Fixed with `applyFailedAt` and a one-hour cooldown. A refusal (`ControlBusyError`, now an
+`OperationConflictError`) does **not** start the cooldown, because nothing was attempted;
+a success clears it. The mod list is unchanged after a failure, so nothing about an
+immediate retry would differ — which is why it is a flat cooldown rather than a backoff.
+
+### …and the cooldown that fixed it did not engage (fixed later, same bug class)
+
+A correction of a correction, which is why it is worth its own entry. `applyFailedAt` was
+written by the inner `catch`, but `pollModUpdates` reads the whole state **before** the
+poll and its outer `catch` persisted `{ ...state, … }` — so every failure stamp was
+reverted a moment later by the handler one frame up. The one-hour cooldown never fired on
+a real failure; the restart flap was still live and the fix for it looked done. The lesson
+is narrower than "test it": **a function that returns its state changes to a caller that
+also persists a pre-call snapshot has two writers, and the outer one always wins.** Fields
+that must survive a throw now go through an explicit `stamp` object merged into both exit
+paths, with `next` applied last so a success clearing the stamp still wins.
+
+The sibling defect is the same shape: the **stopped-server** branch — the normal one —
+had no cooldown and no `try/catch` at all, so it neither recorded a failure nor consulted
+one. It now has `SEED_RETRY_COOLDOWN_MS`, 15 min rather than the apply path's hour.

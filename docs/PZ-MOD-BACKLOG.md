@@ -5,8 +5,27 @@ anything) to do about it. Split out of `docs/PROJECT-ZOMBOID.md` so it can be
 worked through as a backlog rather than read as reference material — that file
 describes how the server *works*, this one tracks what's *broken*.
 
-**Nothing here has been acted on.** No mod has been removed, no patch written, no
-upstream issue filed. That is the state as of 2026-09-15.
+**Nothing here has been acted on**, as of 2026-09-15 — and every item that touches the
+server is confirmed still open against `tests/fixtures/pz-server.ini`, the verbatim
+production `.ini` of 2026-09-29:
+
+- Still in `WorkshopItems=`: `3715137752` (Better Push), `3120702374` (Extra Gun Slot),
+  `2896041179` (errorMagnifier), `3543229299` (RV Interior).
+- Still in `Mods=`: `\errorMagnifier`, `\BetterPush`, `\truemusic_mixtape_megapack`,
+  `\SwapIt`, `\Secretz42_tilepack_com`.
+- Still absent: `truemusic` and `EasyConfigChucked`, so both unmet-dependency items
+  (#4) hold.
+
+`Mods=` was still 87 entries when re-counted on the live box on 2026-10-06, the same as
+in that fixture, so no removal has happened since either.
+
+**Item 1 — the upstream reports — cannot be checked from the repo, and nothing records
+whether it was done.** That is the one gap worth closing by hand, because it is also the
+item this document calls the highest leverage available anywhere in it, so the cost of
+not knowing is somebody spending the hour twice. **Record a filing in the table below,
+with its date and URL** — there is nowhere else it would show up: the `lgd_antibodies`
+tracker is on GitHub and the SecretZ report is a Workshop thread, and neither leaves a
+trace in this codebase.
 
 Where it came from: three parallel read-only investigations of the whole log
 history on 2026-09-14 (5 boots, ~106k lines), plus a follow-up research pass on
@@ -31,17 +50,19 @@ open, bug present at HEAD, a one-word fix in five files, and it permanently fixe
 of the 6 real `complete()` bugs for everyone with zero local maintenance. Highest
 leverage available anywhere in this document, ~an hour of work.
 
-| # | Action | Why | Cost |
-|---|--------|-----|------|
-| 1 | File upstream: `lgd_antibodies` (5 files), SecretZ bugs thread (author already acknowledged), Extra Gun Slot one-liner | Permanent, no maintenance, helps everyone | ~1 h, no restart |
-| 2 | Remove **Better Push** (`3715137752`) | 100% dead in MP, zero player reports, freely removable | one restart |
-| 3 | Decide **Extra Gun Slot** (`3120702374`): remove, or ship the one-line fix as our own Workshop item | Upstream abandoned since 2024-12-20; slot doesn't sync | one restart |
-| 4 | Decide the two missing dependencies: install **True Music** + **EasyConfigChucked**, or drop their dependents | Unmet `require=`; 60 cassettes have no model | one restart |
-| 5 | Verify then probably remove `Secretz42_tilepack_com` | Tiledef 6264 collision — **verify first**, a wrong move degrades the map | one restart |
-| 6 | Remove `errorMagnifier` (`2896041179`) | Client-only debug mod; just gives players error popups | one restart |
+| # | Action | Why | Cost | Filed |
+|---|--------|-----|------|-------|
+| 1 | File upstream: `lgd_antibodies` (5 files), SecretZ bugs thread (author already acknowledged), Extra Gun Slot one-liner | Permanent, no maintenance, helps everyone | ~1 h, no restart | **not recorded** — put the date + URL here |
+| 2 | Remove **Better Push** (`3715137752`) | 100% dead in MP, zero player reports, freely removable | one restart | n/a — still in `Mods=` 2026-09-29 |
+| 3 | Decide **Extra Gun Slot** (`3120702374`): remove, or ship the one-line fix as our own Workshop item | Upstream abandoned since 2024-12-20; slot doesn't sync | one restart | n/a — still installed 2026-09-29 |
+| 4 | Decide the two missing dependencies: install **True Music** + **EasyConfigChucked**, or drop their dependents | Unmet `require=`; 60 cassettes have no model | one restart | n/a — both still absent 2026-09-29 |
+| 5 | Verify then probably remove `Secretz42_tilepack_com` | Tiledef 6264 collision — **verify first**, a wrong move degrades the map | one restart | n/a — still in `Mods=` 2026-09-29 |
+| 6 | Remove `errorMagnifier` (`2896041179`) | Client-only debug mod; just gives players error popups | one restart | n/a — still installed 2026-09-29 |
 
 Items 2-6 want the **same** restart, so batching them is one interruption. Nothing
-here is urgent: across every finding, **not one item is a player complaint.**
+here is urgent: across every finding, **not one item is a player complaint.** The last
+column is the one thing this list could not previously answer about itself: a removal
+leaves a trace in `Mods=` and can be re-checked, an upstream filing leaves none.
 
 The working rule this list was judged against — *"fix what you can't remove, remove
 what you can't fix"* — needs a third clause here: **and fix nothing nobody has
