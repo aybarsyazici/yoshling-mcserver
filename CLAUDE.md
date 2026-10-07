@@ -145,11 +145,11 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 ## Current remediation status
 
-Audit repairs and the first UI enhancement batch are local. Scope, quality results and
-verification limits are in `CLOSED.md`. Push/deploy is requested, but this session blocks
-Git metadata writes and GitHub/production SSH access. No commit, push or rollout occurred.
+Audit repairs, the first UI batch and deployment guards pass normal local checks. Scope
+and evidence are in `CLOSED.md`. Git/production access is available; web rollout is pending
+owner review of the prepared six-account invitation ID mapping. These changes remain undeployed.
 
-- Deployment preparation: review legacy invitations as exact Discord IDs before web rollout. The deploy guard refuses unreadable/name-based policy; see `AUTHENTICATION.md`.
+- Deployment preparation: a private backup/candidate preserves all six registered accounts; review the ID mapping before web rollout. The deploy guard refuses legacy/unreadable policy; see `AUTHENTICATION.md`.
 - Remaining dependency advisories need applicability/exposure review. Existing feature limits include idempotent re-imports, confirmed pack-driven Minecraft version changes and draft review for Minecraft's custom settings cards.
 - Verification gaps: controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
 - Infrastructure/manual work: reproduce the host firewall unit, assess retained secret-bearing images/cache, verify old-host decommissioning, and owner-managed credential rotation.

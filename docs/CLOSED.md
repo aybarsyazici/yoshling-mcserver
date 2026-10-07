@@ -429,3 +429,22 @@ cached-real-font webpack compilation and standalone verification passed. Initial
 caught a test-only environment annotation missing Next's required `NODE_ENV` type;
 `NodeJS.ProcessEnv` fixed it without changing fixture behavior. Current release paths total
 243. Git staging/network permissions still prevent committing, pushing or live checks.
+
+## Release validation after access enabled, 7 October 2026
+
+The owner supplied the verbatim handoff commit `e1ac21c` on `codex/handoff-work`, directly
+above the original `6a4d288` base. Its 243 changed paths match the reviewed source. After
+permissions changed, GitHub/production SSH succeeded and normal local checks passed:
+**146 files / 2,564 tests**, TypeScript, the normal Turbopack build with artifact verification,
+and lint **0 errors / 7 existing warnings**. The previous sandbox failures are historical.
+
+Production was observed at `6a4d288`, with web/PZ running, about 10 GiB available host memory,
+and no seed container, backup staging or dirty checkout found by the read-only preflight.
+These observations are not a maintained deployment lock. The release introduces no DB
+migration and targets web only.
+
+The live invitation file contains six legacy labels, each resolving uniquely to an existing
+registered account with an exact Discord ID. A complete candidate, original-byte backup
+and review metadata were created privately under the web data volume and read back. The
+live policy remains unchanged pending the planner's required owner identity review. Roles
+and world grants are preserved; individual IDs/policy contents are not committed here.
