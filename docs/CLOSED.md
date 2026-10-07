@@ -448,3 +448,13 @@ registered account with an exact Discord ID. A complete candidate, original-byte
 and review metadata were created privately under the web data volume and read back. The
 live policy remains unchanged pending the planner's required owner identity review. Roles
 and world grants are preserved; individual IDs/policy contents are not committed here.
+
+The validated release and preparation notes were pushed to GitHub `main` at
+`1ba66ede650a8aeb5ab50c43d7abdb858a20704f`; a fresh remote ref read matched the local SHA.
+The release bundle verified. The prior live image was tagged as
+`yoshling-web:rollback-6a4d288-20261007T094727Z` and its immutable image ID read back as
+`sha256:c32232078c025677139220cf02ea7de3208f1cae5511f31da1f803470fbded4b`.
+Private policy review material is under `/app/data/deploy-policy-review-JCgPdK` in web's
+data volume. The candidate digest is `0efbee2a441ea31b9b92ddce8e2158791a02ebbc8a924f92b5e63aa8576f677b`.
+Owner review was requested with all six name→ID mappings. No live policy publication or
+web replacement has occurred while that approval remains pending.

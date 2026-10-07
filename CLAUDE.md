@@ -145,9 +145,9 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 ## Current remediation status
 
-Audit repairs, the first UI batch and deployment guards pass normal local checks. Scope
-and evidence are in `CLOSED.md`. Git/production access is available; web rollout is pending
-owner review of the prepared six-account invitation ID mapping. These changes remain undeployed.
+Audit repairs, the first UI batch and deployment guards are pushed to `main` and pass normal
+local checks; evidence is in `CLOSED.md`. Web rollout is pending owner review of the prepared
+six-account invitation ID mapping. Production still serves the original code.
 
 - Deployment preparation: a private backup/candidate preserves all six registered accounts; review the ID mapping before web rollout. The deploy guard refuses legacy/unreadable policy; see `AUTHENTICATION.md`.
 - Remaining dependency advisories need applicability/exposure review. Existing feature limits include idempotent re-imports, confirmed pack-driven Minecraft version changes and draft review for Minecraft's custom settings cards.
