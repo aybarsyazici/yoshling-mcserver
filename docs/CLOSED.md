@@ -482,3 +482,37 @@ The owner-approved candidate and account records remain available for the guarde
 
 Combined checks after the correction passed: 146 files / **2,565 tests**, TypeScript,
 normal build/artifact verification and lint with 0 errors / 7 existing warnings.
+
+## Verified production web rollout, 7 October 2026
+
+The corrected deployment script shipped `411f77cb5b4d3ab53f18283fca5330c4f2f7755e` after
+republishing the owner-approved six-ID candidate. Original-policy and account snapshots
+were checked before publication; byte/mode and role/grant readbacks passed. The script then
+performed checkout, build, final next-image policy/background checks, web-only replacement
+and an actual compiled `Review settings changes` check. No guard override was used.
+
+The running web image and built tag both read back as
+`sha256:707a06c74b6a40e3aa63ff42647aaee8c3efbf758e2b843b4d5b8e01d380ce53`, service `web`.
+Node 22.23.3, UID 0 and Compose 5.1.4 were retained. Expected game/data/deploy/socket mounts
+were present; Workshop remained read-only. Search/review/revision compiled markers passed.
+The exact image passed the artifact guard in an isolated read-only container with no
+network, mounts or Docker socket; the live mounted `/app` was not used for that image-only check.
+
+The deployed ID validator parsed six unique approved strings. Candidate digest/bytes and
+private mode matched; all six registered accounts remained covered, with six allowed
+admins and unchanged selected role/world-grant records. No database migration was applied.
+
+PZ remained running on image `sha256:ce9bc0f6611d0ddd129bab4e86fc84eb9b75e4810838d17ef506f17349a5393c`,
+with the same `2026-10-06T18:23:46.534790239Z` start time and restart count 0. Minecraft and
+7DTD remained stopped on their existing images/start times. No game power action was issued.
+
+Both origin HTTP and public HTTPS from production returned: login 200 HTML, anonymous
+session 200/null, Discord-only providers 200, and status/join/whitelist 401 objects.
+Independent external curl checks agreed. External Python requests hit Cloudflare's 1010
+browser-signature rule; no DNS/WAF/challenge changes were made. These checks verify
+availability and anonymous fences, not genuine OAuth login/denial/revocation, authenticated
+UI behavior, game joins or gameplay restores. Those remain current manual checks.
+
+Rollback image and private original/candidate policy material are retained as recorded above.
+The final documentation synchronization uses the same guarded script and records any image
+change separately after readback; documentation is excluded from Docker build inputs.

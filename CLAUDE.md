@@ -145,13 +145,12 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 ## Current remediation status
 
-Audit repairs, the first UI batch and deployment guards are pushed to `main` and pass normal
-local checks; evidence is in `CLOSED.md`. The owner approved the six-account invitation ID
-mapping. Web rollout is authorized and awaiting policy publication/deployment verification.
+Audit repairs, the first UI batch and deployment guards are deployed to web (7 October 2026)
+and pass normal local checks; evidence is in `CLOSED.md`. The approved six-account ID policy
+is active, with existing roles/world grants preserved. PZ retained its image/start time.
 
-- Deployment preparation: apply the approved private six-account candidate with readback, then verify the web rollout. The deploy guard refuses legacy/unreadable policy; see `AUTHENTICATION.md`.
 - Remaining dependency advisories need applicability/exposure review. Existing feature limits include idempotent re-imports, confirmed pack-driven Minecraft version changes and draft review for Minecraft's custom settings cards.
-- Verification gaps: controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
+- Verification gaps: genuine Discord login/denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
 - Infrastructure/manual work: reproduce the host firewall unit, assess retained secret-bearing images/cache, verify old-host decommissioning, and owner-managed credential rotation.
 
 Update these groups after each verified change; do not append closed stories here.
