@@ -462,3 +462,23 @@ web replacement has occurred while that approval remains pending.
 The owner subsequently approved retaining these six accounts and continuing deployment.
 The candidate will be published only if the original policy digest and selected account
 records still match the reviewed snapshot; the same registered roles/world grants are kept.
+
+### SSH-stream deployment guard correction
+
+The first authorized live attempt exited zero after the invitation check, without checkout,
+build or web replacement. Direct readback still showed production at `6a4d288` and the old
+image. Compose run keeps stdin attached by default even with `-T`; its Node policy check
+consumed the rest of the `ssh ... bash -s` input. Exit status/`done` had not proved rollout.
+
+The check now reads from `/dev/null`. An actual streamed-Bash fixture models Compose's
+stdin consumption and requires the complete ordered checkout/build/rechecks/up/final-state
+sequence. Removing the redirect reproduced zero exit with missing steps and failed that
+assertion; the protection was restored. All 32 focused deployment cases, Bash syntax,
+scoped lint and diff checks passed.
+
+The original invitation bytes were temporarily restored and verified against their private
+backup while the old image remained live, preserving its sign-in behavior during the fix.
+The owner-approved candidate and account records remain available for the guarded retry.
+
+Combined checks after the correction passed: 146 files / **2,565 tests**, TypeScript,
+normal build/artifact verification and lint with 0 errors / 7 existing warnings.

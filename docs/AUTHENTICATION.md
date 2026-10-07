@@ -47,6 +47,8 @@ lists before replacing the dashboard. It prints no policy or environment content
 preparation changes policy data, not the DB schema; no automatic production migration runs.
 The check runs before checkout/build and repeats afterward against the next Compose/image,
 so a policy change during the build cannot bypass the final format check.
+Its stdin is `/dev/null` so the temporary Compose container cannot consume the remaining
+SSH deployment script.
 
 1. Back up the current whitelist JSON separately. Keep the backup private.
 2. Obtain exact IDs for the intended accounts. Preserve at least one admin who can manage

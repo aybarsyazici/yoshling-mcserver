@@ -125,7 +125,7 @@ assert_app_invites_ready() {
       console.error("deploy: app invitation policy is unreadable or still contains legacy names. Review docs/AUTHENTICATION.md and prepare Discord IDs before deploying.");
       process.exit(1);
     }
-  '
+  ' < /dev/null
 }
 
 case "$SERVICE" in

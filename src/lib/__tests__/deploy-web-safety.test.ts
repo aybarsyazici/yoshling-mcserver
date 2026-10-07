@@ -17,7 +17,7 @@ type Scenario = "normal" | "initial-seed" | "initial-ps-error" | "late-seed" |
   "static-work" | "late-static-work";
 
 /** Execute the real remote Bash and invitation validator, with no Docker or remote access. */
-async function deploy(scenario: Scenario = "normal") {
+async function deploy(scenario: Scenario = "normal", stream = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), "yoshling-web-deploy-test-"));
   scratch.push(root);
   // These paths are substituted into shell words and quoted paths in the real body.
@@ -81,6 +81,8 @@ elif [ "$1" = compose ] && [ "$2" = -p ]; then
     *) exit 93 ;;
   esac
   record "docker compose policy web image=$image"
+  # Compose run attaches stdin by default, even with -T. Model that consumption.
+  if [ "$FIXTURE_STREAM" = 1 ]; then cat > /dev/null; fi
   # Run the actual embedded Node validator against the selected fixture Compose/image policy.
   WHITELIST_FILE="$policy" ALLOWED_DISCORD_IDS='' ALLOWED_DISCORD_USERS='' \\
     "$TEST_NODE" "\${args[\${#args[@]}-2]}" "\${args[\${#args[@]}-1]}"
@@ -155,6 +157,7 @@ fi
     FIXTURE_ROOT: root,
     FIXTURE_CALLS: callsFile,
     FIXTURE_SCENARIO: scenario,
+    FIXTURE_STREAM: stream ? "1" : "0",
     FIXTURE_BUILT: path.join(root, "built"),
     FIXTURE_MEASURED: path.join(root, "measured"),
     FIXTURE_STAGING: staging,
@@ -166,7 +169,13 @@ fi
   let failed = false;
   let output: string;
   try {
-    const result = await run("bash", [path.join(root, "remote.sh"), "web", "", "audited-sha"], { env });
+    const pending = run("bash", stream ? ["-s", "--", "web", "", "audited-sha"] : [path.join(root, "remote.sh"), "web", "", "audited-sha"], { env });
+    if (stream) {
+      const input = pending.child.stdin;
+      if (!input) throw new Error("streamed deploy fixture requires piped stdin");
+      input.end(remote);
+    }
+    const result = await pending;
     output = result.stdout + result.stderr;
   } catch (e) {
     failed = true;
@@ -178,8 +187,8 @@ fi
 }
 
 describe("web deploy rechecks background work and the next invitation policy before recreation", () => {
-  it("checks twice in order and deploys only web with no dependency starts", async () => {
-    const r = await deploy();
+  it.each([false, true])("checks twice in order and deploys only web with no dependency starts (streamed stdin: %s)", async stream => {
+    const r = await deploy("normal", stream);
     expect(r.failed, r.output).toBe(false);
     const ordered = [
       "docker compose policy web image=current", "docker ps seeds:before",
@@ -194,6 +203,7 @@ describe("web deploy rechecks background work and the next invitation policy bef
     expect(r.calls.filter(call => call.startsWith("docker compose up"))).toEqual(["docker compose up -d --no-deps web"]);
     expect(r.calls.some(call => /create|unexpected|zomboid|minecraft|sevendtd/.test(call))).toBe(false);
     expect(r.output.match(/invitation policy format verified/g)).toHaveLength(2);
+    expect(r.calls).toContain("docker ps final");
   });
 
   it.each(["initial-seed", "initial-ps-error"] as const)("refuses %s before checkout or build", async scenario => {
