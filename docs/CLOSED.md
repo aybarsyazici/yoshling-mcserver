@@ -458,3 +458,7 @@ Private policy review material is under `/app/data/deploy-policy-review-JCgPdK` 
 data volume. The candidate digest is `0efbee2a441ea31b9b92ddce8e2158791a02ebbc8a924f92b5e63aa8576f677b`.
 Owner review was requested with all six name→ID mappings. No live policy publication or
 web replacement has occurred while that approval remains pending.
+
+The owner subsequently approved retaining these six accounts and continuing deployment.
+The candidate will be published only if the original policy digest and selected account
+records still match the reviewed snapshot; the same registered roles/world grants are kept.
