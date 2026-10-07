@@ -61,9 +61,12 @@ vi.mock("@/lib/backup-create", () => ({ MC_DIR: DIRS.mc, createBackup }));
  */
 vi.mock("@/lib/db", () => ({
   db: {
+    $transaction: async (fn: (tx: unknown) => Promise<unknown>) => { const { db } = await import("@/lib/db"); return fn(db); },
+    serverConfig: { findUnique: async () => ({ mcVersion: "26.1.2", modLoader: "fabric" }) },
     installedMod: {
-      deleteMany: vi.fn(async () => { modRowsCleared += 1; }),
+      deleteMany: vi.fn(async () => { modRowsCleared += 1; modRowsWritten = []; }),
       createMany: vi.fn(async ({ data }: { data: unknown[] }) => { modRowsWritten.push(...data as never[]); }),
+      findMany: async () => modRowsWritten,
     },
   },
 }));
@@ -89,6 +92,7 @@ let opFacts: { label: string; value: string }[] = [];
 let restarted = false;
 
 vi.mock("@/lib/game-manager", () => ({
+  getMinecraftTarget: async () => ({ mcVersion: "26.1.2", loader: "fabric" }),
   RUNTIME: {
     minecraft: { dir: DIRS.mc },
     "7dtd": { dir: `${DIRS.root}/sevendtd` },
@@ -325,7 +329,7 @@ describe("POST restore", () => {
     expect(modRowsWritten).toHaveLength(1);
     expect(modRowsWritten[0]).toMatchObject({ slug: "fabric-api", fileName: "fabric-api.jar" });
     // Attributed to whoever ran the restore, so the row is not orphaned.
-    expect(modRowsWritten[0].installedBy).toBeTruthy();
+    expect(modRowsWritten[0].installedBy).toBe("");
     expect(body.restoredMods).toBe(1);
   });
 
@@ -339,7 +343,8 @@ describe("POST restore", () => {
     expect(status).toBe(200);
     expect(modRowsCleared).toBe(0);
     expect(modRowsWritten).toEqual([]);
-    expect(body.restoredMods).toBe(0);
+    expect(body.restoredMods).toBeNull();
+    expect(body.inventoryKnown).toBe(false);
   });
 
   it("puts mods/ back from a two-member archive and says so", async () => {

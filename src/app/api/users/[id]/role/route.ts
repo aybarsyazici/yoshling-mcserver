@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { hasPermission } from "@/lib/permissions";
+import { gameAccess, hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 
 export async function PUT(
@@ -32,5 +32,7 @@ export async function PUT(
     data: { role },
   });
 
-  return NextResponse.json({ success: true });
+  const saved = await db.user.findUnique({ where: { id }, select: { id: true, role: true, games: true } });
+  if (!saved || saved.role !== role) return NextResponse.json({ error: "The saved role could not be verified" }, { status: 500 });
+  return NextResponse.json({ success: true, user: { id: saved.id, role: saved.role, games: gameAccess("MEMBER", saved.games) } });
 }

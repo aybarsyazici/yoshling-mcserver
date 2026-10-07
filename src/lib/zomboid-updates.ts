@@ -318,6 +318,7 @@ async function publishedVersions(
 
   const json = await res.json();
   for (const d of json?.response?.publishedfiledetails ?? []) {
+    if (Number(d?.result) !== 1) continue;
     const updated = Number(d?.time_updated);
     if (d?.publishedfileid && Number.isFinite(updated) && updated > 0) {
       out.set(String(d.publishedfileid), { updated, title: String(d.title ?? "") });
@@ -343,8 +344,16 @@ export async function findStaleMods(): Promise<StaleMod[]> {
   if (installed.size === 0 && existsSync(MANIFEST)) {
     throw new Error(`Parsed 0 installed items from ${MANIFEST} — manifest format changed?`);
   }
+  const missingInstalled = ids.filter(id => !installed.has(id));
+  if (missingInstalled.length) throw new Error(`Installed Workshop versions are unavailable for ${missingInstalled.join(", ")}`);
 
   const stale: StaleMod[] = [];
+  // A partial successful HTTP response is still an incomplete check. A stale local
+  // manifest cannot establish that an omitted upstream item is currently unchanged.
+  const missingPublished = ids.filter(id => installed.has(id) && !published.has(id));
+  if (missingPublished.length) {
+    throw new Error(`Steam did not report published versions for ${missingPublished.join(", ")}`);
+  }
   for (const id of ids) {
     const inst = installed.get(id);
     // No manifest entry means it was never downloaded. That's the seeding path's

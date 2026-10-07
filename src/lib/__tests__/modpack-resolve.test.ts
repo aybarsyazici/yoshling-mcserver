@@ -135,6 +135,18 @@ describe("modDepsOf", () => {
 });
 
 describe("packNeeds", () => {
+  it("chooses a build supporting both the requested Minecraft version and loader", () => {
+    const chosen = chooseModpackVersion([
+      version({ id: "quilt-only", game_versions: ["26.1.2"], loaders: ["quilt"] }),
+      version({ id: "fabric", game_versions: ["26.1.2"], loaders: ["fabric"] }),
+    ], "26.1.2", "FABRIC");
+    expect(chosen.version?.id).toBe("fabric");
+  });
+  it("retains matching supported values even when neither is first in its declaration", () => {
+    expect(packNeeds(version({ game_versions: ["26.1", "26.1.2"], loaders: ["quilt", "fabric"] }), {
+      mcVersion: "26.1.2", loader: "FABRIC",
+    })).toEqual({ mcVersion: "26.1.2", loader: "fabric" });
+  });
   it("reads the first Minecraft version and loader", () => {
     expect(packNeeds(version({ game_versions: ["26.1.2"], loaders: ["fabric"] }))).toEqual({
       mcVersion: "26.1.2",

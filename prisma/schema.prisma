@@ -57,12 +57,11 @@ model ServerConfig {
   maxMemory    String @default("4G")
 }
 
-// Tracks which world currently holds the host's single "power slot".
-// The box (8GB) can only run one game at a time; this records the intent
-// so a host reboot only revives the world that was meant to be running.
+// Last dashboard-selected world. Actual run state comes from Docker; this row
+// does not start containers after a host reboot (game services use restart: no).
 model GameState {
   id         String   @id @default("main")
-  activeGame String? // "minecraft" | "7dtd" | null (both idle)
+  activeGame String? // "minecraft" | "7dtd" | "zomboid" | null
   updatedAt  DateTime @updatedAt
 }
 
@@ -138,4 +137,3 @@ model ModpackMod {
   versionId   String?
   downloadUrl String?
 }
-

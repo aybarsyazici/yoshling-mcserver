@@ -16,8 +16,8 @@
 // happen is worse than no log"). A dormant duplicate of a power path is a standing
 // invitation to re-diverge, so the whole shim went with it.
 //
-// `getModsDir` is the one live export (3 importers, one of them a dynamic
-// `import()` in `install-modpack`), so the module stays.
+// `getModsDir` is the shared lexical path helper. Physical admission lives in
+// `mod-path` for readers/writers; the synchronous export stays for existing callers.
 
 import path from "path";
 import { RUNTIME } from "@/lib/game-manager";

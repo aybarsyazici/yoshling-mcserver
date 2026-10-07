@@ -22,6 +22,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
+import { useOperations } from "@/components/operations-provider";
 import { ApplyReportDialog } from "@/components/apply-report-dialog";
 import { applyModpackToServer, type ApplyOutcome } from "@/lib/modpack-apply";
 import { pluralise } from "@/lib/format";
@@ -57,7 +58,9 @@ interface ExportMod {
 // Typed rather than `any` so the dialog below can't read through a field the
 // export endpoint didn't send. See handleExport for why that mattered.
 interface ExportPayload {
-  modpack: { name: string; description: string; mcVersion: string; loader: string };
+  modpack: { name: string; description: string; mcVersion: string | null; loader: string | null };
+  complete?: boolean;
+  unresolved?: { name: string; reason: string }[];
   mods: ExportMod[];
 }
 
@@ -77,6 +80,7 @@ interface ExportPayload {
  * set with no target version says so, because both change what Apply would do.
  */
 export function Modpacks() {
+  const { refresh: refreshOperations } = useOperations();
   // `can.modsInstall` / `can.modsRemove` only; see `CAPABILITY_POLL_MS` for the interval.
   const { can } = useGames(CAPABILITY_POLL_MS);
   const [modpacks, setModpacks] = useState<Modpack[]>([]);
@@ -109,13 +113,6 @@ export function Modpacks() {
     null
   );
 
-  useEffect(() => {
-    fetchModpacks();
-    fetch("/api/minecraft-versions")
-      .then((r) => r.json())
-      .then((data) => { if (data.versions) setMcVersions(data.versions); })
-      .catch(() => {});
-  }, []);
 
   async function fetchModpacks() {
     try {
@@ -126,6 +123,14 @@ export function Modpacks() {
       setLoading(false);
     }
   }
+  useEffect(() => {
+    fetchModpacks();
+    fetch("/api/minecraft-versions")
+      .then((r) => r.json())
+      .then((data) => { if (data.versions) setMcVersions(data.versions); })
+      .catch(() => {});
+  }, []);
+
 
   async function handleCreate() {
     if (!newName.trim()) return;
@@ -208,8 +213,8 @@ export function Modpacks() {
         try {
           const res = await fetch(`/api/mods/dependencies?modrinthId=${other.modrinthId}`);
           const data = await res.json();
-          const deps = data.dependencies || [];
-          if (deps.some((d: any) => d.modrinthId === mod.modrinthId)) {
+          const deps: unknown = data.dependencies;
+          if (Array.isArray(deps) && deps.some((d: unknown) => d !== null && typeof d === "object" && "modrinthId" in d && d.modrinthId === mod.modrinthId)) {
             dependents.push(other.name);
           }
         } catch {}
@@ -272,6 +277,7 @@ export function Modpacks() {
     const packName = modpacks.find((p) => p.id === modpackId)?.name ?? "Modpack";
     try {
       const result = await applyModpackToServer({ modpackId, packName });
+      if (result.kind === "unconfirmed-import") { toast.info(result.message); return; }
       if (result.kind === "error") {
         toast.error(result.message);
         return;
@@ -279,6 +285,7 @@ export function Modpacks() {
       // `quiet` sets `null`, which closes nothing because nothing was open.
       setOutcome(result.kind === "quiet" ? null : result);
     } finally {
+      void refreshOperations();
       setInstalling(null);
     }
   }
@@ -589,17 +596,21 @@ export function Modpacks() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
+            {exportData?.complete !== true && <div role="alert" className="rounded-lg border border-chart-5/30 p-4 text-sm">
+              <p>This export is incomplete. Bulk download is unavailable.</p>
+              {exportData?.unresolved?.map((issue, i) => <p key={i}>{issue.name}: {issue.reason}</p>)}
+            </div>}
             <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-2">
               <p className="text-sm font-medium">Before you start</p>
               <p className="text-xs text-muted-foreground">
-                You need <strong>{exportData?.modpack.loader === "fabric" ? "Fabric Loader" : "Forge"}</strong> installed
+                {!exportData?.modpack.mcVersion || !exportData.modpack.loader ? <>The saved Minecraft version and loader are unknown. No target was assumed.</> : <>You need <strong>{exportData.modpack.loader === "fabric" ? "Fabric Loader" : exportData.modpack.loader}</strong> installed
                 for Minecraft <strong>{exportData?.modpack.mcVersion}</strong>.
                 {exportData?.modpack.loader === "fabric" ? (
                   <> We recommend using <a href="https://prismlauncher.org" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Prism Launcher</a> (free, open-source) or the official <a href="https://fabricmc.net/use/installer/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Fabric Installer</a>.</>
                 ) : (
-                  <> Download the installer from <a href="https://files.minecraftforge.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Forge</a>, or use <a href="https://prismlauncher.org" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Prism Launcher</a> (recommended).</>
+                  <> Install the saved loader and Minecraft version in your launcher before adding these mods.</>
                 )}
-              </p>
+              </>} </p>
             </div>
 
             <div className="flex items-center justify-between">
@@ -608,7 +619,9 @@ export function Modpacks() {
               </p>
               <Button
                 size="sm"
+                disabled={exportData?.complete !== true || !exportData?.modpack.mcVersion || !exportData.modpack.loader}
                 onClick={() => {
+                  if (exportData?.complete !== true || !exportData.modpack.mcVersion || !exportData.modpack.loader) return;
                   const urls = exportData?.mods
                     .filter((m) => m.downloadUrl)
                     .map((m) => m.downloadUrl!) || [];

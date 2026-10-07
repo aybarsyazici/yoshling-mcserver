@@ -1,12 +1,14 @@
+import { recordFileRevision, assertFileRevision, withFileRevision } from "@/lib/file-revision";
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { db } from "@/lib/db";
-import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
+import { lstat, readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
-import { isPathInside, looksBinary, readTextFile } from "@/lib/file-guard";
+import { resolveSafeFilePath, looksBinary, readTextFile } from "@/lib/file-guard";
 
 // 7DTD exposes two useful trees, both mounted into the web container:
 //   config → serverfiles (sdtdserver.xml, serverconfig.xml, Mods, Data)
@@ -16,24 +18,10 @@ const ROOTS: Record<string, string> = {
   saves: process.env.SDTD_SERVER_DIR || "/sevendtd",
 };
 
-const BLOCKED_PATTERNS = ["..", "~", "node_modules"];
-
-function resolveRoot(root: string | null): string | null {
-  if (!root) return ROOTS.config;
-  return ROOTS[root] ?? null;
-}
-
-function isPathSafe(baseDir: string, requestedPath: string): boolean {
-  // `isPathInside`, not `resolved.startsWith(baseDir)`. The two roots here are siblings
-  // that share a prefix, which is what made the old form *live* rather than latent:
-  // measured on the box, `?root=saves&path=/sevendtd-config` returned a 200 listing of
-  // the whole config tree, because `path.resolve("/sevendtd", "/sevendtd-config")` is
-  // `/sevendtd-config` -- prefixed by `/sevendtd`, and with no `..` for BLOCKED_PATTERNS
-  // to catch. The same predicate gates PUT and DELETE, so `sdtdserver.xml` was writable
-  // "through" the saves root.
-  if (!isPathInside(baseDir, path.resolve(baseDir, requestedPath))) return false;
-  if (BLOCKED_PATTERNS.some((p) => requestedPath.includes(p))) return false;
-  return true;
+function resolveRoot(root: unknown): string | null {
+  if (root == null || root === "") return ROOTS.config;
+  if (typeof root !== "string" || !Object.hasOwn(ROOTS, root)) return null;
+  return ROOTS[root];
 }
 
 export async function GET(request: NextRequest) {
@@ -61,13 +49,10 @@ export async function GET(request: NextRequest) {
   const relativePath = searchParams.get("path") || "";
   const action = searchParams.get("action") || "list";
 
-  if (!isPathSafe(baseDir, relativePath)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
-
-  const fullPath = path.resolve(baseDir, relativePath);
-
   try {
+    const fullPath = await resolveSafeFilePath(baseDir, relativePath);
+    if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+
     if (action === "read") {
       const stats = await stat(fullPath);
       // A directory read used to reach `readFile` and come back as a 500 carrying a raw
@@ -83,19 +68,21 @@ export async function GET(request: NextRequest) {
       // writes it over the original and reports success. See `looksBinary`. The saves tree
       // here is nearly all binary -- `Saves/Reveo Valley/Fresh2` holds `main.ttw`,
       // `decoration.7dt`, `drones.dat`, `Region/`, all listed and all one click away.
-      const text = await readTextFile(fullPath);
-      if (!text.ok) {
-        return NextResponse.json(
-          {
-            error:
-              "This file isn't text, so it can't be shown or edited here — editing it would corrupt it.",
-            binary: true,
-          },
-          { status: 415 }
-        );
-      }
-      return NextResponse.json({ content: text.content, path: relativePath });
-    }
+return revisionRead(async () => fullPath, async () => {
+        const text = await readTextFile(fullPath);
+        if (!text.ok) {
+          return NextResponse.json(
+            {
+              error:
+                "This file isn't text, so it can't be shown or edited here — editing it would corrupt it.",
+              binary: true,
+            },
+            { status: 415 }
+          );
+        }
+        return NextResponse.json({ content: text.content, path: relativePath });
+      });
+}
 
     const entries = await readdir(fullPath, { withFileTypes: true });
     const items = await Promise.all(
@@ -105,7 +92,7 @@ export async function GET(request: NextRequest) {
           const entryPath = path.join(fullPath, entry.name);
           let size = 0;
           try {
-            size = (await stat(entryPath)).size;
+            size = (await lstat(entryPath)).size;
           } catch {}
           return {
             name: entry.name,
@@ -149,50 +136,60 @@ export async function PUT(request: NextRequest) {
   // they guard one curated file each, this can write any file in the same tree,
   // including `sdtdserver.xml` itself. Never on GET: browsing during a backup is
   // harmless, and refusing it would be worse than allowing it.
-  const laneBusy = fileLaneBusy("7dtd");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("7dtd", async () => {
 
-  const { path: relativePath, content, root } = await request.json();
-  const baseDir = resolveRoot(root);
-  if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });
+    const { path: relativePath, content, root } = await request.json();
+    const baseDir = resolveRoot(root);
+    if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });
 
-  if (!relativePath || typeof content !== "string") {
-    return NextResponse.json({ error: "path and content required" }, { status: 400 });
-  }
-  if (!isPathSafe(baseDir, relativePath)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
+    if (typeof relativePath !== "string" || !relativePath || typeof content !== "string") {
+      return NextResponse.json({ error: "path and content required" }, { status: 400 });
+    }
+    try {
+      const fullPath = await resolveSafeFilePath(baseDir, relativePath, {
+        allowMissing: true,
+        allowRoot: false,
+      });
+      if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
 
-  const fullPath = path.resolve(baseDir, relativePath);
+      // Never let the text editor write over a file that isn't text. The read side now
+      // refuses to hand one out, but this is the half that does the damage and the two have
+      // to fail independently -- a tab opened before this shipped still holds the mojibake
+      // and its Save button still works. A missing file is a legitimate create, so only an
+      // *existing* binary is refused.
+return withFileRevision(request, async () => fullPath, async () => {
+        const existing = await readFile(fullPath).catch(() => null);
+        if (existing && looksBinary(existing)) {
+          return NextResponse.json(
+            {
+              error: `${path.basename(relativePath)} isn't a text file. Saving it through the editor would corrupt it, so nothing was written.`,
+            },
+            { status: 415 }
+          );
+        }
 
-  try {
-    // Never let the text editor write over a file that isn't text. The read side now
-    // refuses to hand one out, but this is the half that does the damage and the two have
-    // to fail independently -- a tab opened before this shipped still holds the mojibake
-    // and its Save button still works. A missing file is a legitimate create, so only an
-    // *existing* binary is refused.
-    const existing = await readFile(fullPath).catch(() => null);
-    if (existing && looksBinary(existing)) {
-      return NextResponse.json(
-        {
-          error: `${path.basename(relativePath)} isn't a text file. Saving it through the editor would corrupt it, so nothing was written.`,
-        },
-        { status: 415 }
-      );
+        await assertFileRevision(fullPath);
+
+        assertFileWriteActive();
+
+        await writeFile(fullPath, content, "utf-8");
+
+        recordFileRevision(fullPath, content);
+        if (await readFile(fullPath, "utf-8") !== content) throw new Error("The saved file contents could not be verified");
+        await db.activity.create({
+          data: {
+            userId: session.user.id,
+            action: "edit_file",
+            details: JSON.stringify({ game: "7dtd", path: relativePath }),
+          },
+        });
+        return NextResponse.json({ success: true });
+      });
+} catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
     }
 
-    await writeFile(fullPath, content, "utf-8");
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "edit_file",
-        details: JSON.stringify({ game: "7dtd", path: relativePath }),
-      },
-    });
-    return NextResponse.json({ success: true });
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
-  }
+  });
 }
 
 export async function DELETE(request: NextRequest) {
@@ -209,29 +206,42 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const laneBusy = fileLaneBusy("7dtd");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("7dtd", async () => {
 
-  const { searchParams } = new URL(request.url);
-  const baseDir = resolveRoot(searchParams.get("root"));
-  if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });
+    const { searchParams } = new URL(request.url);
+    const baseDir = resolveRoot(searchParams.get("root"));
+    if (!baseDir) return NextResponse.json({ error: "Invalid root" }, { status: 400 });
 
-  const relativePath = searchParams.get("path") || "";
-  if (!relativePath || !isPathSafe(baseDir, relativePath)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
+    const relativePath = searchParams.get("path") || "";
+    if (!relativePath) {
+      return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+    }
 
-  try {
-    await rm(path.resolve(baseDir, relativePath), { recursive: true });
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "delete_file",
-        details: JSON.stringify({ game: "7dtd", path: relativePath }),
-      },
-    });
-    return NextResponse.json({ success: true });
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
-  }
+    try {
+      const fullPath = await resolveSafeFilePath(baseDir, relativePath, {
+        allowRoot: false,
+        followFinalSymlink: false,
+      });
+      if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+
+return withFileRevision(request, async () => fullPath, async () => {
+        assertFileWriteActive();
+
+        await rm(fullPath, { recursive: true });
+
+        recordFileRevision(fullPath, null);
+        await db.activity.create({
+          data: {
+            userId: session.user.id,
+            action: "delete_file",
+            details: JSON.stringify({ game: "7dtd", path: relativePath }),
+          },
+        });
+        return NextResponse.json({ success: true });
+      });
+} catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+
+  });
 }

@@ -152,6 +152,10 @@ export async function GET(request: Request) {
       // capability a read-only viewer has rather than one they are refused.
       modsInstall: hasPermission(session.user.role, "mods.install"),
       modsRemove: hasPermission(session.user.role, "mods.remove"),
+      settingsEdit: hasPermission(session.user.role, "settings.edit"),
+      consoleExecute: hasPermission(session.user.role, "console.execute"),
+      filesDelete: hasPermission(session.user.role, "files.delete"),
+      usersManage: hasPermission(session.user.role, "users.manage"),
     },
     memoryGb,
     hostGb: Math.round(hostGb * 10) / 10,

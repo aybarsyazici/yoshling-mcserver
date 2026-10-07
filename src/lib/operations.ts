@@ -36,6 +36,7 @@
 // split is invisible to the UI and still honest about which half knows what.
 
 import { GAME_LIST, GAMES, type GameId } from "@/lib/games";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pluralNoun } from "@/lib/format";
 import {
   OPERATION_STALE_MS,
@@ -127,6 +128,7 @@ const DEFAULT_RESOURCES: Record<OperationKind, (g: GameId | null) => OperationRe
   "backup.create": (g) => (g ? [`files:${g}`] : []),
   "backup.delete": (g) => (g ? [`files:${g}`] : []),
   "mods.apply": (g) => (g ? [`files:${g}`] : []),
+  "mods.install": (g) => (g ? [`files:${g}`] : []),
   "world.upload": (g) => (g ? [`files:${g}`] : []),
   // Derived from the boot probe. Never admitted, so it can never block anything.
   boot: () => [],
@@ -193,6 +195,8 @@ interface Entry {
   resources: OperationResource[];
   startedBy: { name: string } | null;
   preempted?: boolean;
+  /** Short reservations share admission but do not produce ledger/toast records. */
+  quiet?: boolean;
   /** The thrown message, for the failure summary. Never shown raw as a fact. */
   error?: string;
 }
@@ -222,6 +226,7 @@ interface Registry {
   live: Map<string, Entry>;
   finished: Entry[];
   seq: number;
+  writeContext?: AsyncLocalStorage<Entry>;
 }
 const g = globalThis as unknown as { __yoshlingOperations?: Registry };
 const REGISTRY: Registry = (g.__yoshlingOperations ??= {
@@ -231,6 +236,7 @@ const REGISTRY: Registry = (g.__yoshlingOperations ??= {
 });
 
 const LIVE = REGISTRY.live;
+const WRITE_CONTEXT = (REGISTRY.writeContext ??= new AsyncLocalStorage<Entry>());
 
 /** Terminal records, newest last. Bounded so it cannot grow. */
 const FINISHED = REGISTRY.finished;
@@ -417,6 +423,58 @@ export async function runOperation<T>(
   }
 }
 
+export class FileWriteInterruptedError extends Error {
+  constructor() {
+    super("This file write was interrupted by a power operation. Changes may already have occurred; read the current files before retrying.");
+    this.name = "FileWriteInterruptedError";
+  }
+}
+
+/** Check immediately before publishing a short write, and after awaited preparation. */
+export function assertFileWriteActive(): void {
+  const entry = WRITE_CONTEXT.getStore();
+  if (entry && (entry.preempted || LIVE.get(entry.id) !== entry || !notStale(entry))) {
+    throw new FileWriteInterruptedError();
+  }
+}
+
+/**
+ * Reserve the entire read/modify/write/readback interval without a completion toast.
+ * Admission is synchronous and shares the long-operation registry. Urgent power can
+ * preempt this reservation; publication checkpoints and the terminal check then refuse
+ * further work or an invented successful response. Existing tracked callers need no
+ * nested reservation when they call the same file helpers.
+ */
+export async function runFileWrite<T>(game: GameId, fn: () => Promise<T>): Promise<T> {
+  return runQuietWrite(`files:${game}`, game, "Saving game files", fn);
+}
+
+/** The application sign-in file is independent of game power/file resources. */
+export async function runWhitelistWrite<T>(fn: () => Promise<T>): Promise<T> {
+  return runQuietWrite("auth:whitelist", null, "Saving the sign-in whitelist", fn);
+}
+
+async function runQuietWrite<T>(resource: OperationResource, game: GameId | null, title: string, fn: () => Promise<T>): Promise<T> {
+  const parent = WRITE_CONTEXT.getStore();
+  if (parent?.resources.includes(resource)) {
+    assertFileWriteActive();
+    return fn();
+  }
+  const entry = admit({ kind: "settings", game, title, resources: [resource] });
+  entry.quiet = true;
+  const heart = setInterval(() => { entry.heartbeatAt = Date.now(); }, HEARTBEAT_MS);
+  try {
+    return await WRITE_CONTEXT.run(entry, async () => {
+      const value = await fn();
+      assertFileWriteActive();
+      return value;
+    });
+  } finally {
+    clearInterval(heart);
+    if (LIVE.get(entry.id) === entry) LIVE.delete(entry.id);
+  }
+}
+
 function makeHandle(entry: Entry): OpHandle {
   return {
     id: entry.id,
@@ -532,7 +590,7 @@ function admit(spec: OperationSpec): Entry {
   if (spec.kind === "boot") {
     throw new Error("boot operations are derived, not entered");
   }
-  const resources = spec.resources ?? DEFAULT_RESOURCES[spec.kind](spec.game);
+  const resources = [...(spec.resources ?? DEFAULT_RESOURCES[spec.kind](spec.game))];
   const now = Date.now();
   const held = [...LIVE.values()].filter(
     (o) => notStale(o, now) && o.resources.some((r) => resources.includes(r))
@@ -588,20 +646,7 @@ function admit(spec: OperationSpec): Entry {
   return entry;
 }
 
-/**
- * Refuse a short write that would land on files an operation is already holding.
- *
- * For the config/settings writers, which are sub-second and legitimately have no
- * record of their own — entering one would toast twice for a 17 ms write. What they do
- * need is the *lane*: measured on production, `PUT /api/7dtd/config` returned 200 in
- * 17 ms and rewrote `sdtdserver.xml` while a backup held `files:7dtd` and was
- * mid-"Compressing the archive", and `PUT /api/zomboid/config` did the same through a
- * "Copying the world". A second *backup* fired in the same window was correctly
- * refused with a 409, so the lane works — only these callers never asked it.
- *
- * The dangerous direction is the one this covers: a restore holds the lane for minutes
- * and would overwrite the config saved through it, while the page toasted "Saved".
- */
+/** Read-only resource admission check; short mutations reserve with runFileWrite. */
 export function assertResourceFree(resource: OperationResource): void {
   const now = Date.now();
   const holder = [...LIVE.values()].find(
@@ -613,6 +658,28 @@ export function assertResourceFree(resource: OperationResource): void {
   throw holder.action
     ? new ControlBusyError(conflict, resource, message)
     : new OperationConflictError(conflict, resource, message);
+}
+
+/**
+ * Take power after a tracked file-only preflight. Checking and claiming happen
+ * synchronously in the shared registry. A refused plan never reserves power or
+ * interrupts another world's backup; normal power recovery can still preempt
+ * the planning phase. Callers already hold the target world's file resource.
+ */
+export function claimOperationPower(op: OpHandle, action: ControlAction = "restart"): void {
+  const entry = LIVE.get(op.id);
+  const now = Date.now();
+  if (!entry || !notStale(entry, now) || entry.preempted) {
+    throw new Error("This operation was interrupted or has ended; it cannot take power.");
+  }
+  if (!entry.game || !entry.resources.includes(`files:${entry.game}`)) {
+    throw new Error("The operation must hold its world's files before taking power.");
+  }
+  if (entry.resources.includes("power")) return;
+  assertResourceFree("power");
+  entry.resources.push("power");
+  entry.action = action;
+  entry.heartbeatAt = now;
 }
 
 function conflictMessage(other: Entry, now: number): string {
@@ -684,7 +751,9 @@ function bestCount(entry: Entry): { done: number; total?: number; noun: string }
 }
 
 function factValue(entry: Entry, label: string): string | undefined {
-  return entry.facts.find((f) => f.label === label)?.value;
+  // Facts retain the observations made along the way. When a value changes,
+  // the latest observation describes the terminal state, not the first one.
+  return [...entry.facts].reverse().find((f) => f.label === label)?.value;
 }
 
 function warnFacts(entry: Entry): OperationFact[] {
@@ -806,9 +875,8 @@ function summarize(entry: Entry, outcome: Outcome): string {
       rejected?.label ||
       (badFact && `${badFact.label.toLowerCase()} — ${badFact.value}`) ||
       "the operation failed";
-    // Only an operation that could have changed the power state says where it left it.
-    // A modpack install does not touch power, and telling someone to check it is noise
-    // pointing at the wrong page. And a reason that ALREADY names the power state does
+    // Only an operation that reserved power says where it left it. File-only
+    // failures point to their own target. A reason that ALREADY names the power state does
     // not get it appended a second time: "…is already running — it just isn't responding
     // yet. Use Restart if it stays that way. Project Zomboid is still running." says the
     // same thing twice and reads as a contradiction.
@@ -970,8 +1038,18 @@ function summarize(entry: Entry, outcome: Outcome): string {
     }
     case "backup.delete":
       return `Deleted ${factValue(entry, "Archive") ?? "the backup"}.`;
+    case "mods.install": {
+      const mod = factValue(entry, "Mod") ?? factValue(entry, "Installed") ?? "the mod";
+      return `Installed ${mod}. Start or restart ${name} to load it.${sideNote(entry, [])}`;
+    }
     case "mods.apply": {
-      if (!count) return `Modpack applied in ${took}.`;
+      const server = factValue(entry, "Server");
+      const state = server === "starting again"
+        ? ` ${name} is starting again.`
+        : server === "left powered off"
+        ? ` ${name} is powered off.`
+        : "";
+      if (!count) return `Modpack applied in ${took}.${state}`;
       const missing = (count.total ?? 0) - count.done;
       if (outcome === "partial") {
         // Every mod landed, so the `partial` came from somewhere else in the run — the
@@ -980,24 +1058,22 @@ function summarize(entry: Entry, outcome: Outcome): string {
         if (missing <= 0) {
           return `Installed ${count.done} of ${count.total} ${count.noun}, but ${
             warnText || "something else in the run did not go cleanly"
-          }.`;
+          }.${state}`;
         }
         // "Open the report for which ones" pointed at nothing for the runs that need it:
         // the report is built in the browser from `install-modpack`'s response body, and
         // a 166-mod apply routinely outlives the ~100s origin timeout, after which
         // `modpacks.tsx`'s catch substitutes `{installed: 0, total: 0}`. The names are a
         // recorded `Failed` fact now, so the record itself is the report.
-        return `Installed ${count.done} of ${count.total} ${count.noun}; ${missing} failed. Expand this record to see which ones.`;
+        return `Installed ${count.done} of ${count.total} ${count.noun}; ${missing} failed. Expand this record to see which ones.${state}`;
       }
-      return `Installed ${count.done} of ${count.total} ${count.noun}. Restart ${name} to load them.`;
+      return `Installed ${count.done} of ${count.total} ${count.noun}.${state || ` Restart ${name} to load them.`}`;
     }
     case "mods.update": {
       // Selected on the DOWNLOAD's own count — Steam's number, recorded by the route —
-      // not on the operation-wide outcome. A Project Zomboid apply always stops PZ and
-      // a PZ stop always ends in SIGKILL, so `outcome === "partial"` was unavoidable and
-      // the `ok` sentence (with the count in it) was unreachable for the one world this
-      // feature was built for. Every successful 89-mod apply reported "killed after
-      // 300s." and nothing else.
+      // not on the operation-wide outcome: a shutdown warning says nothing
+      // about whether every download succeeded. Clean PZ stops use RCON quit;
+      // any forced-shutdown warning still belongs in the final side note.
       const short = count && count.total != null && count.done < count.total;
       if (short) {
         const missing = (count.total ?? 0) - count.done;
@@ -1060,6 +1136,8 @@ function verbFor(entry: Entry): string {
       return "Deleting the backup";
     case "mods.apply":
       return "Installing the modpack";
+    case "mods.install":
+      return "Installing the mod";
     case "mods.update":
       return "Applying mod updates";
     case "world.upload":
@@ -1080,6 +1158,7 @@ function describeTarget(entry: Entry): string {
     case "backup.delete":
       return "the backups list";
     case "mods.apply":
+    case "mods.install":
       return "the installed mods list";
     case "mods.update":
       return "the Workshop mods page";
@@ -1092,7 +1171,7 @@ function describeTarget(entry: Entry): string {
 }
 
 function pastNoun(entry: Entry): string {
-  return entry.kind === "mods.apply" ? "installed" : "changed";
+  return entry.kind === "mods.apply" || entry.kind === "mods.install" ? "installed" : "changed";
 }
 
 /** Where the world was left. Always said out loud after a power operation. */
@@ -1198,7 +1277,7 @@ function view(e: Entry, redacted: boolean): OperationView {
     facts: e.facts,
     steps: e.steps.map((s) => ({ ...s }) as OpStepView),
     progress: e.progress,
-    resources: e.resources,
+    resources: [...e.resources],
     holdsPower: e.resources.includes("power"),
     startedBy: e.startedBy,
     preempted: e.preempted,
@@ -1245,7 +1324,7 @@ function visible(e: Entry, access: GameId[]): boolean {
 export function listOperations(access: GameId[] = GAME_LIST.map((g) => g.id)): OperationView[] {
   const now = Date.now();
   return [...LIVE.values()]
-    .filter((e) => !e.endedAt)
+    .filter((e) => !e.endedAt && !e.quiet)
     .map((e) => ({ ...view(e, !visible(e, access)), heartbeatAt: e.heartbeatAt }))
     .sort((a, b) => orderKey(a, now) - orderKey(b, now));
 }

@@ -22,7 +22,15 @@ export async function GET() {
       { status: 403 }
     );
   }
-  const token = createUploadToken(session.user.id);
+  let token: string;
+  try {
+    token = createUploadToken(session.user.id);
+  } catch {
+    return NextResponse.json(
+      { error: "World uploads are unavailable: configure AUTH_SECRET." },
+      { status: 503 }
+    );
+  }
   // The host to POST the big upload to (bypasses Cloudflare's 100MB cap).
   const directHost = process.env.NEXT_PUBLIC_DIRECT_UPLOAD_HOST || "";
   return NextResponse.json({ token, directHost });

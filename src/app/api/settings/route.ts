@@ -4,6 +4,7 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { applyServiceEnv } from "@/lib/game-manager";
+import { readCompose, readEnvMap, readServiceEnv } from "@/lib/compose";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { readWorldVersion } from "@/lib/mc-world-version";
 import {
@@ -11,6 +12,20 @@ import {
   versionChangeRefusal,
   type InstalledModFact,
 } from "@/lib/mc-version-guard";
+
+async function configuredMinecraft() {
+  const compose = await readCompose();
+  const env = await readEnvMap();
+  const mcVersion = readServiceEnv(compose, "minecraft", "VERSION", env);
+  const type = readServiceEnv(compose, "minecraft", "TYPE", env);
+  const maxMemory = readServiceEnv(compose, "minecraft", "MEMORY", env);
+  if (!mcVersion || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(mcVersion) ||
+      !type || !/^[A-Za-z]+$/.test(type) || !maxMemory || !/^[1-9]\d*\s*[gGmM]$/.test(maxMemory) ||
+      !Number.isFinite(Number.parseInt(maxMemory, 10))) {
+    throw new Error("The configured Minecraft version, loader or memory could not be verified");
+  }
+  return { id: "main", mcVersion, modLoader: type.toLowerCase(), maxMemory };
+}
 
 // Memory is NOT set here — /api/games/memory owns it, because applying a heap
 // change means recreating the container, not just rewriting this file.
@@ -23,7 +38,14 @@ export async function GET() {
   if (denied) return denied;
 
   const config = await db.serverConfig.findUnique({ where: { id: "main" } });
-  if (!config) return NextResponse.json(null);
+  if (!config) {
+    try {
+      const initial = await configuredMinecraft();
+      return NextResponse.json({ ...initial, initialized: false, worldVersion: await readWorldVersion() });
+    } catch (e) {
+      return NextResponse.json({ error: `Couldn't read the initial Minecraft configuration: ${(e as Error).message}` }, { status: 503 });
+    }
+  }
 
   // An explicit projection, never the whole row.
   //
@@ -53,6 +75,7 @@ export async function GET() {
     mcVersion: config.mcVersion,
     modLoader: config.modLoader,
     maxMemory: config.maxMemory,
+    initialized: true,
     worldVersion: await readWorldVersion(),
   });
 }
@@ -71,11 +94,25 @@ export async function PUT(request: NextRequest) {
 
   const body = await request.json();
   const { mcVersion, modLoader, confirm } = body;
+  if ((mcVersion !== undefined && (typeof mcVersion !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(mcVersion))) ||
+      (modLoader !== undefined && (typeof modLoader !== "string" || !/^[A-Za-z]+$/.test(modLoader))) ||
+      (mcVersion === undefined && modLoader === undefined)) {
+    return NextResponse.json({ error: "A valid Minecraft version or loader is required" }, { status: 400 });
+  }
 
   const oldConfig = await db.serverConfig.findUnique({ where: { id: "main" } });
-
-  const wantsVersion = mcVersion && mcVersion !== oldConfig?.mcVersion;
-  const wantsLoader = modLoader && modLoader !== oldConfig?.modLoader;
+  let initialConfig: { mcVersion: string; modLoader: string; maxMemory: string };
+  if (oldConfig) {
+    initialConfig = oldConfig;
+  } else {
+    try {
+      initialConfig = await configuredMinecraft();
+    } catch (e) {
+      return NextResponse.json({ error: `Couldn't verify the initial Minecraft configuration: ${(e as Error).message}` }, { status: 503 });
+    }
+  }
+  const finalVersion = mcVersion ?? initialConfig.mcVersion;
+  const finalLoader = (modLoader ?? initialConfig.modLoader).toLowerCase();
 
   // Set only when there really was something to confirm, so the operation title cannot
   // claim an override just because a caller sends `confirm` on every request.
@@ -92,10 +129,10 @@ export async function PUT(request: NextRequest) {
    * the configured and running versions came to disagree in the first place, and that
    * divergence is the expensive part — the container boot-looping is merely the symptom.
    */
-  if (wantsVersion || wantsLoader) {
+  {
     const target = {
-      version: mcVersion || oldConfig?.mcVersion || "1.21.4",
-      loader: (modLoader || oldConfig?.modLoader || "fabric").toLowerCase(),
+      version: finalVersion,
+      loader: finalLoader,
     };
     const mods: InstalledModFact[] = await db.installedMod
       .findMany({ select: { name: true, mcVersion: true, loader: true } })
@@ -120,63 +157,55 @@ export async function PUT(request: NextRequest) {
     overrodeMismatch = mismatches.length > 0;
   }
 
-  await db.serverConfig.upsert({
-    where: { id: "main" },
-    update: {
-      ...(mcVersion && { mcVersion }),
-      ...(modLoader && { modLoader }),
-    },
-    create: {
-      id: "main",
-      mcVersion: mcVersion || "1.21.4",
-      modLoader: modLoader || "fabric",
-      maxMemory: "4G",
-      rconPassword: process.env.RCON_PASSWORD || "changeme",
-    },
-  });
-
-  // The same two booleans the guard above decided on — computed once, so the guard and
-  // the apply can never disagree about whether anything changed.
-  if (wantsVersion || wantsLoader) {
-    // Declared outside the try so the failure message can name them — the caller
-    // needs to know *which* version the DB now claims but the container doesn't run.
-    const finalVersion = mcVersion || oldConfig?.mcVersion || "1.21.4";
-    const finalLoader = modLoader || oldConfig?.modLoader || "fabric";
-    try {
-      // `applyServiceEnv` owns the compose patch, the graceful stop, `create`
-      // (never `up`, so a stopped world stays stopped) and the control lock. This
-      // route used to open-code that and got every part of it wrong.
-      await applyServiceEnv(
-        "minecraft",
-        { TYPE: finalLoader.toUpperCase(), VERSION: finalVersion },
-        {
-          // Name the version in the operation title, and say when it was applied over a
-          // refusal: the ledger is the only durable record that someone was told the
-          // world and the mods disagree and chose to go ahead, and that is exactly the
-          // fact anyone debugging a world that no longer boots will want.
-          stage:
-            `Changing Minecraft to ${finalLoader} ${finalVersion}` +
-            (overrodeMismatch ? " (mismatch confirmed)" : ""),
-          setting: "The Minecraft version",
-          startedBy: session.user.name,
-        }
-      );
-    } catch (e) {
-      if (isConflict(e)) return conflictResponse(e);
-      // Not `{success: true, warning}` with HTTP 200: the settings page checks only
-      // `res.ok` and never reads `warning`, so a failed apply rendered as "Saved."
-      // The DB row has already been written, which is why the message has to say
-      // that the two now disagree rather than just "failed".
-      return NextResponse.json(
-        {
-          error:
-            `Saved ${finalLoader} ${finalVersion} to settings, but applying it to the container failed: ` +
-            `${(e as Error).message}. The configured and running versions now disagree — retry, or check the Minecraft container.`,
+  // Always let the admitted operation compare compose and the real container. A
+  // matching DB row can be left behind by a previous failed apply and proves nothing.
+  try {
+    // `applyServiceEnv` owns the compose patch, the graceful stop, `create`
+    // (never `up`, so a stopped world stays stopped) and the control lock. This
+    // route used to open-code that and got every part of it wrong.
+    await applyServiceEnv(
+      "minecraft",
+      { TYPE: finalLoader.toUpperCase(), VERSION: finalVersion },
+      {
+        // Name the version in the operation title, and say when it was applied over a
+        // refusal: the ledger is the only durable record that someone was told the
+        // world and the mods disagree and chose to go ahead, and that is exactly the
+        // fact anyone debugging a world that no longer boots will want.
+        stage:
+          `Changing Minecraft to ${finalLoader} ${finalVersion}` +
+          (overrodeMismatch ? " (mismatch confirmed)" : ""),
+        setting: "The Minecraft version",
+        startedBy: session.user.name,
+        onApplied: async () => {
+          await db.serverConfig.upsert({
+            where: { id: "main" },
+            update: { mcVersion: finalVersion, modLoader: finalLoader },
+            create: {
+              id: "main",
+              mcVersion: finalVersion,
+              modLoader: finalLoader,
+              maxMemory: initialConfig.maxMemory,
+              rconPassword: process.env.RCON_PASSWORD || "changeme",
+            },
+          });
+          const saved = await db.serverConfig.findUnique({ where: { id: "main" } });
+            if (saved?.mcVersion !== finalVersion || saved?.modLoader !== finalLoader ||
+                (!oldConfig && saved?.maxMemory !== initialConfig.maxMemory)) {
+            throw new Error("The applied settings could not be read back from the database");
+          }
         },
-        { status: 500 }
-      );
-    }
+      }
+    );
+  } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
+    return NextResponse.json(
+      {
+        error:
+          `Couldn't finish applying ${finalLoader} ${finalVersion}: ${(e as Error).message}. ` +
+          `Retry the change; the next attempt checks the configured and container settings again.`,
+      },
+      { status: 500 }
+    );
   }
-
   return NextResponse.json({ success: true });
 }

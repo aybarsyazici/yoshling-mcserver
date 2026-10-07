@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
 import { toast } from "sonner";
 import { CAPABILITY_POLL_MS, useGames } from "@/lib/use-games";
 
@@ -141,15 +142,17 @@ export function ModpackBrowserModrinth({
         body: JSON.stringify({ modrinthId: pack.project_id, name: pack.title }),
       });
       if (res.ok) {
-        const data = await res.json();
+        const data = await readOperationResponse(res);
+        if (typeof data.id !== "string" || !Array.isArray(data.mods)) throw new Error("The saved import receipt is incomplete");
         toast.success(`Imported "${pack.title}" with ${data.mods.length} mods`);
         onImported?.();
       } else {
-        const data = await res.json().catch(() => ({}));
-        toast.error(data.error || "Failed to import");
+        const data = await readOperationResponse(res);
+        toast.error(data.error || "The import was not confirmed");
       }
-    } catch {
-      toast.error(`Couldn't reach the server to import "${pack.title}". Nothing was saved.`);
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage(`import of "${pack.title}"`, error) + " Check Saved sets before importing again.");
+      onImported?.();
     } finally {
       setImporting(null);
     }

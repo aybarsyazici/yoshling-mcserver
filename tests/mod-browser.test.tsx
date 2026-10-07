@@ -14,9 +14,9 @@
  * 3. an empty result under that filter **names** the filter, because "No mods found" under a
  *    version facet nobody asked for is the most confusing state this page can reach.
  *
- * `ModCard` is stubbed: its own behaviour is covered by `tests/mod-card.test.tsx`, and the
- * real one transitively imports `html-react-parser`, which `require()`s an ESM-only dep and
- * dies with `ERR_REQUIRE_ESM` on this project's default Node 20.12.
+ * `ModCard` is stubbed to isolate searches from card controls and description requests.
+ * Its behavior has separate coverage. The former html-react-parser import also required
+ * this isolation on Node 20.12; the description renderer no longer imports it.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";

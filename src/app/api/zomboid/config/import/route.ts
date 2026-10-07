@@ -1,12 +1,16 @@
+import { recordFileRevision, assertFileRevision } from "@/lib/file-revision";
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
+import { resolveSafeFilePath } from "@/lib/file-guard";
 import {
   INFRA_KEYS,
+  PZ_DIR,
   iniPath,
   parseIni,
   serverName,
@@ -49,174 +53,192 @@ export async function POST(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  const laneBusy = fileLaneBusy("zomboid");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("zomboid", async () => {
 
-  const body = await request.json().catch(() => ({}));
-  const content = typeof body?.content === "string" ? body.content : "";
-  const apply = body?.apply === true;
+    const body = await request.json().catch(() => ({}));
+    const content = typeof body?.content === "string" ? body.content : "";
+    const apply = body?.apply === true;
 
-  if (!content.trim()) {
-    return NextResponse.json({ error: "Pick a .ini file to import" }, { status: 400 });
-  }
-  if (content.length > MAX_BYTES) {
-    return NextResponse.json(
-      { error: "That file is too big to be a server .ini (max 512KB)" },
-      { status: 400 }
-    );
-  }
-
-  const incoming = parseIni(content);
-  const incomingByName = new Map(incoming.map((p) => [p.name, p.value]));
-  if (incoming.length < MIN_KEYS || !MARKER_KEYS.some((k) => incomingByName.has(k))) {
-    return NextResponse.json(
-      {
-        error:
-          "That doesn't look like a Project Zomboid server .ini — it should have lines like PVP=true and MaxPlayers=16.",
-      },
-      { status: 400 }
-    );
-  }
-
-  const file = await iniPath();
-  const name = await serverName();
-
-  let currentText = "";
-  try {
-    currentText = await readFile(file, "utf-8");
-  } catch {
-    // No config yet (server never started). Importing is then how it gets one.
-  }
-  const current = parseIni(currentText);
-  const currentByName = new Map(current.map((p) => [p.name, p.value]));
-
-  // Infra keys keep this box's values. Where we have none yet (fresh install),
-  // whatever the upload says is as good a starting point as any.
-  //
-  // The values stay INTERNAL — see the `preview` response below. `INFRA_KEYS[0]` is
-  // `RCONPassword`.
-  const preserved: { name: string; value: string }[] = [];
-  for (const key of INFRA_KEYS) {
-    const mine = currentByName.get(key);
-    if (mine !== undefined) preserved.push({ name: key, value: mine });
-  }
-  const preservedByName = new Map(preserved.map((p) => [p.name, p.value]));
-
-  /** What the file will actually say once the infra keys are put back. */
-  const effective = (key: string): string | undefined =>
-    preservedByName.get(key) ?? incomingByName.get(key);
-
-  /**
-   * Keys whose *value* must never leave the box, even to an audience allowed to change
-   * them. `preserved` was stripped of its `value` field for this reason (see below);
-   * `changed` is the same payload one key over — the join `Password` and `DiscordToken`
-   * would otherwise ship their live value as `from`, in cleartext, into whatever proxy
-   * or request log sits on the way. `RCONPassword` cannot appear here (it is preserved,
-   * so `from === to` and the entry is never pushed), which is exactly why the other two
-   * were easy to miss. The consumer renders `changed.length` and nothing else, so the
-   * masking costs the UI nothing, and the field stays a string rather than being dropped
-   * — a previous round noted that removing it would have the component render
-   * "undefined" while still typechecking.
-   */
-  const SECRET_KEYS = new Set(["Password", "DiscordToken"]);
-  const show = (key: string, value: string): string =>
-    SECRET_KEYS.has(key) && value !== "" ? "(hidden)" : value;
-
-  const changed: { name: string; from: string; to: string }[] = [];
-  const added: string[] = [];
-  // Keys, not entries: the uploaded value is deliberately not what we compare
-  // against. `effective(key)` is, because an infra key's incoming value is about to
-  // be overwritten by the preserved one — reading `incomingValue` here would report a
-  // change the file is never going to contain.
-  for (const key of incomingByName.keys()) {
-    const to = effective(key)!;
-    if (!currentByName.has(key)) {
-      added.push(key);
-      continue;
+    if (!content.trim()) {
+      return NextResponse.json({ error: "Pick a .ini file to import" }, { status: 400 });
     }
-    const from = currentByName.get(key)!;
-    if (from !== to) changed.push({ name: key, from: show(key, from), to: show(key, to) });
-  }
-  // Keys we have that the upload doesn't: replacing the file drops them, and the
-  // game fills them back in with its defaults on the next boot.
-  const dropped = current.map((p) => p.name).filter((n) => !incomingByName.has(n));
+    if (content.length > MAX_BYTES) {
+      return NextResponse.json(
+        { error: "That file is too big to be a server .ini (max 512KB)" },
+        { status: 400 }
+      );
+    }
 
-  const mods = {
-    workshopIds: splitList(incomingByName.get("WorkshopItems") ?? ""),
-    modIds: splitList(incomingByName.get("Mods") ?? "").map(bareModId),
-  };
+    const incoming = parseIni(content);
+    const incomingByName = new Map(incoming.map((p) => [p.name, p.value]));
+    if (incoming.length < MIN_KEYS || !MARKER_KEYS.some((k) => incomingByName.has(k))) {
+      return NextResponse.json(
+        {
+          error:
+            "That doesn't look like a Project Zomboid server .ini — it should have lines like PVP=true and MaxPlayers=16.",
+        },
+        { status: 400 }
+      );
+    }
 
-  if (!apply) {
+    let file = "";
+    let name = "";
+    let currentText = "";
+    try {
+      file = await iniPath();
+      name = await serverName();
+      currentText = await readFile(file, "utf-8");
+    } catch (e) {
+      // Only absence means first install; a refused alias or read failure cannot be
+      // interpreted as an empty deployment config.
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT" || !file || !name) {
+        return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+      }
+    }
+    const current = parseIni(currentText);
+    const currentByName = new Map(current.map((p) => [p.name, p.value]));
+
+    // Infra keys keep this box's values. Where we have none yet (fresh install),
+    // whatever the upload says is as good a starting point as any.
+    //
+    // The values stay INTERNAL — see the `preview` response below. `INFRA_KEYS[0]` is
+    // `RCONPassword`.
+    const preserved: { name: string; value: string }[] = [];
+    for (const key of INFRA_KEYS) {
+      const mine = currentByName.get(key);
+      if (mine !== undefined) preserved.push({ name: key, value: mine });
+    }
+    const preservedByName = new Map(preserved.map((p) => [p.name, p.value]));
+
+    /** What the file will actually say once the infra keys are put back. */
+    const effective = (key: string): string | undefined =>
+      preservedByName.get(key) ?? incomingByName.get(key);
+
+    /**
+     * Keys whose *value* must never leave the box, even to an audience allowed to change
+     * them. `preserved` was stripped of its `value` field for this reason (see below);
+     * `changed` is the same payload one key over — the join `Password` and `DiscordToken`
+     * would otherwise ship their live value as `from`, in cleartext, into whatever proxy
+     * or request log sits on the way. `RCONPassword` cannot appear here (it is preserved,
+     * so `from === to` and the entry is never pushed), which is exactly why the other two
+     * were easy to miss. The consumer renders `changed.length` and nothing else, so the
+     * masking costs the UI nothing, and the field stays a string rather than being dropped
+     * — a previous round noted that removing it would have the component render
+     * "undefined" while still typechecking.
+     */
+    const SECRET_KEYS = new Set(["Password", "DiscordToken"]);
+    const show = (key: string, value: string): string =>
+      SECRET_KEYS.has(key) && value !== "" ? "(hidden)" : value;
+
+    const changed: { name: string; from: string; to: string }[] = [];
+    const added: string[] = [];
+    // Keys, not entries: the uploaded value is deliberately not what we compare
+    // against. `effective(key)` is, because an infra key's incoming value is about to
+    // be overwritten by the preserved one — reading `incomingValue` here would report a
+    // change the file is never going to contain.
+    for (const key of incomingByName.keys()) {
+      const to = effective(key)!;
+      if (!currentByName.has(key)) {
+        added.push(key);
+        continue;
+      }
+      const from = currentByName.get(key)!;
+      if (from !== to) changed.push({ name: key, from: show(key, from), to: show(key, to) });
+    }
+    // Keys we have that the upload doesn't: replacing the file drops them, and the
+    // game fills them back in with its defaults on the next boot.
+    const dropped = current.map((p) => p.name).filter((n) => !incomingByName.has(n));
+
+    const mods = {
+      workshopIds: splitList(incomingByName.get("WorkshopItems") ?? ""),
+      modIds: splitList(incomingByName.get("Mods") ?? "").map(bareModId),
+    };
+
+    if (!apply) {
+      return NextResponse.json({
+        preview: true,
+        serverName: name,
+        hadConfig: currentText !== "",
+        totalKeys: incoming.length,
+        changed,
+        added,
+        dropped,
+        // Names only. This used to send `{name, value}`, so a preview handed the caller
+        // the live `RCONPassword` — verified on production 2026-09-29, the response
+        // contained the game's actual RCON password in cleartext, and it lands in any
+        // proxy or request log on the way. `settings.edit` is a MOD capability, not just
+        // ADMIN, so this was not even limited to owners. The one consumer
+        // (`zomboid-config-import.tsx`) renders `p.name` and never `p.value`, so the
+        // field was pure leak with no reader.
+        //
+        // Kept as objects rather than a bare `string[]` **on purpose**: that consumer does
+        // `preview.preserved.map((p) => p.name)`, and on strings that renders
+        // "undefined, undefined, undefined". Same defect class one layer over — and the
+        // component is not this stream's to change.
+        preserved: preserved.map((p) => ({ name: p.name })),
+        mods,
+      });
+    }
+
+    // Put this box's infra values back into the uploaded text, so the file keeps
+    // the uploader's comments and layout but our control channel and ports.
+    const { text } = setIniValues(
+      content,
+      Object.fromEntries(preserved.map((p) => [p.name, p.value]))
+    );
+
+    try {
+      await mkdir(path.dirname(file), { recursive: true });
+      if (currentText) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const backup = await resolveSafeFilePath(path.dirname(file), `${path.basename(file)}.bak-${stamp}`, {
+          boundaryRoot: PZ_DIR, allowMissing: true,
+        });
+        if (!backup) throw new Error("Refusing a config backup outside the configured game volume");
+        await assertFileRevision(backup);
+        assertFileWriteActive();
+        await writeFile(backup, currentText, "utf-8");
+        recordFileRevision(backup, currentText);
+        if (await readFile(backup, "utf-8") !== currentText) throw new Error("Config backup readback failed");
+      }
+      await assertFileRevision(file);
+      assertFileWriteActive();
+      await writeFile(file, text, "utf-8");
+      recordFileRevision(file, text);
+      if (await readFile(file, "utf-8") !== text) throw new Error("Config import readback failed");
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+
+    // Drop cached Workshop titles for items no longer listed; the mods page
+    // re-fetches whatever it doesn't recognise.
+    try {
+      const keep = mods.workshopIds;
+      await db.zomboidMod.deleteMany({ where: { id: { notIn: keep.length > 0 ? keep : [""] } } });
+    } catch {}
+
+    try {
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: "import_config",
+          details: JSON.stringify({
+            game: "zomboid",
+            file: `${name}.ini`,
+            changed: changed.length,
+            mods: mods.workshopIds.length,
+          }),
+        },
+      });
+    } catch {}
+
     return NextResponse.json({
-      preview: true,
-      serverName: name,
-      hadConfig: currentText !== "",
-      totalKeys: incoming.length,
-      changed,
-      added,
-      dropped,
-      // Names only. This used to send `{name, value}`, so a preview handed the caller
-      // the live `RCONPassword` — verified on production 2026-09-29, the response
-      // contained the game's actual RCON password in cleartext, and it lands in any
-      // proxy or request log on the way. `settings.edit` is a MOD capability, not just
-      // ADMIN, so this was not even limited to owners. The one consumer
-      // (`zomboid-config-import.tsx`) renders `p.name` and never `p.value`, so the
-      // field was pure leak with no reader.
-      //
-      // Kept as objects rather than a bare `string[]` **on purpose**: that consumer does
-      // `preview.preserved.map((p) => p.name)`, and on strings that renders
-      // "undefined, undefined, undefined". Same defect class one layer over — and the
-      // component is not this stream's to change.
-      preserved: preserved.map((p) => ({ name: p.name })),
-      mods,
+      success: true,
+      changed: changed.length,
+      added: added.length,
+      dropped: dropped.length,
+      mods: mods.workshopIds.length,
     });
-  }
 
-  // Put this box's infra values back into the uploaded text, so the file keeps
-  // the uploader's comments and layout but our control channel and ports.
-  const { text } = setIniValues(
-    content,
-    Object.fromEntries(preserved.map((p) => [p.name, p.value]))
-  );
-
-  try {
-    await mkdir(path.dirname(file), { recursive: true });
-    if (currentText) {
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      await writeFile(`${file}.bak-${stamp}`, currentText, "utf-8");
-    }
-    await writeFile(file, text, "utf-8");
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
-  }
-
-  // Drop cached Workshop titles for items no longer listed; the mods page
-  // re-fetches whatever it doesn't recognise.
-  try {
-    const keep = mods.workshopIds;
-    await db.zomboidMod.deleteMany({ where: { id: { notIn: keep.length > 0 ? keep : [""] } } });
-  } catch {}
-
-  try {
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "import_config",
-        details: JSON.stringify({
-          game: "zomboid",
-          file: `${name}.ini`,
-          changed: changed.length,
-          mods: mods.workshopIds.length,
-        }),
-      },
-    });
-  } catch {}
-
-  return NextResponse.json({
-    success: true,
-    changed: changed.length,
-    added: added.length,
-    dropped: dropped.length,
-    mods: mods.workshopIds.length,
   });
 }

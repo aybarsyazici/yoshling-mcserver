@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 
 FROM base AS deps
 WORKDIR /app
@@ -35,6 +35,12 @@ COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --from=builder /app/src/generated ./src/generated
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/node_modules/@libsql ./node_modules/@libsql
+COPY --from=builder /app/scripts/verify-build-artifact.mjs ./scripts/verify-build-artifact.mjs
+COPY --from=builder /app/scripts/plan-discord-whitelist.mjs ./scripts/plan-discord-whitelist.mjs
+COPY --from=builder /app/src/lib/discord-identity.ts ./src/lib/discord-identity.ts
+# Inspect the assembled runner too: extra COPYs must obey the same boundary as
+# Next's standalone output. The guard prints names only, never file contents.
+RUN node scripts/verify-build-artifact.mjs /app
 
 EXPOSE 3000
 ENV PORT=3000

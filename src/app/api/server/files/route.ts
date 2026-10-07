@@ -1,29 +1,16 @@
+import { recordFileRevision, assertFileRevision, withFileRevision } from "@/lib/file-revision";
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { db } from "@/lib/db";
-import { readdir, readFile, writeFile, stat, rm } from "fs/promises";
+import { lstat, readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
-import { isPathInside, looksBinary, readTextFile } from "@/lib/file-guard";
+import { resolveSafeFilePath, looksBinary, readTextFile } from "@/lib/file-guard";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-
-const BLOCKED_PATTERNS = ["..", "~", "node_modules"];
-
-function isPathSafe(requestedPath: string): boolean {
-  // `isPathInside`, not `resolved.startsWith(MC_DIR)`: the old form matched any sibling
-  // sharing the prefix (`/minecraft-old/…` passes `startsWith("/minecraft")` and has no
-  // `..` for BLOCKED_PATTERNS to catch). Of the three file routes this is the only one
-  // where that is currently unreachable -- the web container's mounts are `/minecraft`,
-  // `/sevendtd`, `/sevendtd-config`, `/zomboid`, `/zomboid-workshop` (verified
-  // 2026-09-29), and the other two routes each have a prefix-sibling among them. Fixed by
-  // shape in all three rather than by argument about which mounts exist.
-  if (!isPathInside(MC_DIR, path.resolve(MC_DIR, requestedPath))) return false;
-  if (BLOCKED_PATTERNS.some((p) => requestedPath.includes(p))) return false;
-  return true;
-}
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -50,13 +37,10 @@ export async function GET(request: NextRequest) {
   const relativePath = searchParams.get("path") || "";
   const action = searchParams.get("action") || "list";
 
-  if (!isPathSafe(relativePath)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
-
-  const fullPath = path.resolve(MC_DIR, relativePath);
-
   try {
+    const fullPath = await resolveSafeFilePath(MC_DIR, relativePath);
+    if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+
     if (action === "read") {
       const stats = await stat(fullPath);
       // A directory read used to reach `readFile` and come back as a 500 with a raw
@@ -74,19 +58,21 @@ export async function GET(request: NextRequest) {
       // which maps every non-UTF-8 byte to U+FFFD; the editor then submitted that
       // string back and the PUT below wrote it, destroying the file while reporting
       // success. `world/level.dat` (411-byte gzip NBT) became 752 bytes that way.
-      const text = await readTextFile(fullPath);
-      if (!text.ok) {
-        return NextResponse.json(
-          {
-            error:
-              "This file isn't text, so it can't be shown or edited here — editing it would corrupt it.",
-            binary: true,
-          },
-          { status: 415 }
-        );
-      }
-      return NextResponse.json({ content: text.content, path: relativePath });
-    }
+return revisionRead(async () => fullPath, async () => {
+        const text = await readTextFile(fullPath);
+        if (!text.ok) {
+          return NextResponse.json(
+            {
+              error:
+                "This file isn't text, so it can't be shown or edited here — editing it would corrupt it.",
+              binary: true,
+            },
+            { status: 415 }
+          );
+        }
+        return NextResponse.json({ content: text.content, path: relativePath });
+      });
+}
 
     const entries = await readdir(fullPath, { withFileTypes: true });
     const items = await Promise.all(
@@ -96,7 +82,7 @@ export async function GET(request: NextRequest) {
           const entryPath = path.join(fullPath, entry.name);
           let size = 0;
           try {
-            const s = await stat(entryPath);
+            const s = await lstat(entryPath);
             size = s.size;
           } catch {}
           return {
@@ -115,11 +101,12 @@ export async function GET(request: NextRequest) {
     });
 
     return NextResponse.json({ items, path: relativePath });
-  } catch (e: any) {
-    if (e.code === "ENOENT") {
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
 
@@ -142,55 +129,65 @@ export async function PUT(request: NextRequest) {
   // write *any* file in the same tree, including the very files they guard.
   // Deliberately NOT on GET: browsing during a backup is harmless, and blocking it is
   // worse than allowing it.
-  const laneBusy = fileLaneBusy("minecraft");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("minecraft", async () => {
 
-  const { path: relativePath, content } = await request.json();
+    const { path: relativePath, content } = await request.json();
 
-  if (!relativePath || typeof content !== "string") {
-    return NextResponse.json({ error: "path and content required" }, { status: 400 });
-  }
-
-  if (!isPathSafe(relativePath)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
-
-  const fullPath = path.resolve(MC_DIR, relativePath);
-
-  try {
-    // Never let the text editor write over a file that isn't text. The read side now
-    // refuses to hand one out, but this is the half that does the damage, and the two
-    // have to be able to fail independently -- a stale tab opened before this shipped
-    // still holds the mojibake and its Save button still works. A missing file is a
-    // legitimate create, so only an *existing* binary is refused.
-    const existing = await readFile(fullPath).catch(() => null);
-    if (existing && looksBinary(existing)) {
-      return NextResponse.json(
-        {
-          error: `${path.basename(relativePath)} isn't a text file. Saving it through the editor would corrupt it, so nothing was written.`,
-        },
-        { status: 415 }
-      );
+    if (typeof relativePath !== "string" || !relativePath || typeof content !== "string") {
+      return NextResponse.json({ error: "path and content required" }, { status: 400 });
     }
 
-    await writeFile(fullPath, content, "utf-8");
+    try {
+      const fullPath = await resolveSafeFilePath(MC_DIR, relativePath, {
+        allowMissing: true,
+        allowRoot: false,
+      });
+      if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
 
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "edit_file",
-        // `game` matches the wording 7DTD's and PZ's file routes use. Without it
-        // `/api/activity` (which keeps untagged rows visible on purpose) leaked this row
-        // to anyone, and `/minecraft`'s own panel — which selects on `contains
-        // "minecraft"` — could never show it.
-        details: JSON.stringify({ game: "minecraft", path: relativePath }),
-      },
-    });
+      // Never let the text editor write over a file that isn't text. The read side now
+      // refuses to hand one out, but this is the half that does the damage, and the two
+      // have to be able to fail independently -- a stale tab opened before this shipped
+      // still holds the mojibake and its Save button still works. A missing file is a
+      // legitimate create, so only an *existing* binary is refused.
+return withFileRevision(request, async () => fullPath, async () => {
+        const existing = await readFile(fullPath).catch(() => null);
+        if (existing && looksBinary(existing)) {
+          return NextResponse.json(
+            {
+              error: `${path.basename(relativePath)} isn't a text file. Saving it through the editor would corrupt it, so nothing was written.`,
+            },
+            { status: 415 }
+          );
+        }
 
-    return NextResponse.json({ success: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+        await assertFileRevision(fullPath);
+
+        assertFileWriteActive();
+
+        await writeFile(fullPath, content, "utf-8");
+
+        recordFileRevision(fullPath, content);
+        if (await readFile(fullPath, "utf-8") !== content) throw new Error("The saved file contents could not be verified");
+
+        await db.activity.create({
+          data: {
+            userId: session.user.id,
+            action: "edit_file",
+            // `game` matches the wording 7DTD's and PZ's file routes use. Without it
+            // `/api/activity` (which keeps untagged rows visible on purpose) leaked this row
+            // to anyone, and `/minecraft`'s own panel — which selects on `contains
+            // "minecraft"` — could never show it.
+            details: JSON.stringify({ game: "minecraft", path: relativePath }),
+          },
+        });
+
+        return NextResponse.json({ success: true });
+      });
+} catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+
+  });
 }
 
 export async function DELETE(request: NextRequest) {
@@ -208,31 +205,42 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const laneBusy = fileLaneBusy("minecraft");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("minecraft", async () => {
 
-  const { searchParams } = new URL(request.url);
-  const relativePath = searchParams.get("path") || "";
+    const { searchParams } = new URL(request.url);
+    const relativePath = searchParams.get("path") || "";
 
-  if (!relativePath || !isPathSafe(relativePath)) {
-    return NextResponse.json({ error: "Invalid path" }, { status: 400 });
-  }
+    if (!relativePath) {
+      return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+    }
 
-  const fullPath = path.resolve(MC_DIR, relativePath);
+    try {
+      const fullPath = await resolveSafeFilePath(MC_DIR, relativePath, {
+        allowRoot: false,
+        followFinalSymlink: false,
+      });
+      if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
 
-  try {
-    await rm(fullPath, { recursive: true });
+return withFileRevision(request, async () => fullPath, async () => {
+        assertFileWriteActive();
 
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "delete_file",
-        details: JSON.stringify({ game: "minecraft", path: relativePath }),
-      },
-    });
+        await rm(fullPath, { recursive: true });
 
-    return NextResponse.json({ success: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+        recordFileRevision(fullPath, null);
+
+        await db.activity.create({
+          data: {
+            userId: session.user.id,
+            action: "delete_file",
+            details: JSON.stringify({ game: "minecraft", path: relativePath }),
+          },
+        });
+
+        return NextResponse.json({ success: true });
+      });
+} catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
+
+  });
 }

@@ -1,9 +1,8 @@
 import { readFile } from "fs/promises";
 import { gunzipSync } from "zlib";
-import path from "path";
+import { gameDataPath } from "./game-data-path";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-const LEVEL_DAT = path.join(MC_DIR, "world", "level.dat");
 
 /**
  * Which Minecraft version last opened the world on disk.
@@ -74,7 +73,7 @@ export function parseLevelDatVersion(nbt: Buffer): string | null {
 export async function readWorldVersion(): Promise<string | null> {
   let raw: Buffer;
   try {
-    raw = await readFile(LEVEL_DAT);
+    raw = await readFile(await gameDataPath(MC_DIR, "world/level.dat"));
   } catch {
     return null;
   }

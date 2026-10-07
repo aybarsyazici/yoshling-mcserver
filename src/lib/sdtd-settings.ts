@@ -161,6 +161,9 @@ export const PINNED_BY_DEPLOYMENT: Readonly<Record<string, string>> = {
     "WebDashboardPort is fixed by the container's published port map (8080) and cannot be changed here.",
 };
 
+/** Hidden from the generic editor and preserved from current XML during restores. */
+export const LOCKED_SDTD_PROPERTIES = ["TelnetPassword", "TelnetPort", "TelnetEnabled", "AdminFileName", "UserDataFolder"] as const;
+
 /**
  * Settings that this deployment makes inert, with the reason. They are **not** hidden:
  * hiding a setting that exists invites the next person to go looking for it in the file.

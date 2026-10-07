@@ -30,6 +30,7 @@ type FakeContainer = {
   startedAt: string;
   env: Record<string, string>;
   service: string;
+  memoryLimitGb?: number;
   /** What `docker ps -a` reports for the compose labels, so the guard can be tested. */
   rows?: string[];
 };
@@ -96,6 +97,13 @@ const fakeRunner = async (cmd: string): Promise<{ stdout: string; stderr: string
   if ((m = /^docker inspect (\S+) --format '\{\{range \.Config\.Env\}\}/.exec(cmd))) {
     const c = container(m[1]);
     return ok(Object.entries(c.env).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
+  }
+  if ((m = /^docker inspect (\S+) --format '\{\{\.State\.Status\}\}\|\{\{\.HostConfig\.Memory\}\}'/.exec(cmd))) {
+    const name = m[1];
+    inspects[name] = (inspects[name] ?? 0) + 1;
+    onInspect?.(name, inspects[name]);
+    const c = container(name);
+    return ok(`${c.state}|${(c.memoryLimitGb ?? 0) * 1024 ** 3}\n`);
   }
   if ((m = /^docker inspect (\S+) --format '\{\{\.Config\.Image\}\}'/.exec(cmd))) {
     return ok(`image-for-${m[1]}\n`);
@@ -223,6 +231,7 @@ function makeBox(states: {
       startedAt: "2026-09-30T00:00:00Z",
       env: { TYPE: "FABRIC", VERSION: "26.1.2", MEMORY: "4G" },
       service: "minecraft",
+      memoryLimitGb: 6,
     },
     "yoshling-7dtd": {
       state: states["7dtd"] ?? "exited",
@@ -230,6 +239,7 @@ function makeBox(states: {
       startedAt: "2026-09-30T00:00:00Z",
       env: { START_MODE: "1", VERSION: "latest_experimental" },
       service: "sevendtd",
+      memoryLimitGb: 10,
     },
     "yoshling-pz": {
       state: states.zomboid ?? "exited",
@@ -237,6 +247,7 @@ function makeBox(states: {
       startedAt: "2026-09-30T00:00:00Z",
       env: { MIN_MEMORY: "2048m", MAX_MEMORY: "12288m" },
       service: "zomboid",
+      memoryLimitGb: 14,
     },
   };
 }
@@ -408,10 +419,27 @@ describe("powerOn is the only path that evicts, and it evicts every other world"
     await expect(settle(powerOn("minecraft"))).rejects.toThrow(
       /started while this operation was being admitted/
     );
-    // The whole claim of that error message: nothing was started and nothing stopped.
+    // This peer appeared before any save or stop happened.
     expect(mutations()).toEqual([]);
     expect(box["yoshling-mc"].state).toBe("exited");
     expect(box["yoshling-7dtd"].state).toBe("running");
+  });
+
+  it("does not deny an earlier peer stop when a later peer appears during handoff", async () => {
+    makeBox({ "7dtd": "running" });
+    onInspect = (name, nth) => {
+      if (name === "yoshling-pz" && nth === 2) box["yoshling-pz"].state = "running";
+    };
+
+    const error = await settle(powerOn("minecraft")).then(() => null, error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toMatch(/Project Zomboid started while this operation was being admitted/);
+    expect(error.message).toContain("Minecraft was not started");
+    expect(error.message).not.toMatch(/nothing was stopped|nothing was changed|nothing was done/i);
+    expect(mutations()).toEqual(["docker stop yoshling-7dtd"]);
+    expect(box["yoshling-7dtd"].state).toBe("exited");
+    expect(box["yoshling-pz"].state).toBe("running");
+    expect(box["yoshling-mc"].state).toBe("exited");
   });
 
   it("a start of an already-running, answering world runs no docker command at all", async () => {
@@ -437,7 +465,200 @@ describe("powerOn is the only path that evicts, and it evicts every other world"
 
 // ── the wasRunning gate ──────────────────────────────────────────────────────
 
+describe("ordinary power decisions never invent a stopped state", () => {
+  it("refuses restart success if the last observation sees an immediate exit", async () => {
+    makeBox({ zomboid: "running" });
+    let started = false;
+    let reads = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd === "docker start yoshling-pz") started = true;
+      if (started && cmd.includes("HostConfig.Memory") && cmd.includes("yoshling-pz") && ++reads === 2) {
+        box["yoshling-pz"].state = "exited";
+      }
+      return fakeRunner(cmd);
+    });
+    await expect(settle(restartGame("zomboid"))).rejects.toThrow(/powered off.*after the change/);
+    expect(box["yoshling-pz"].state).toBe("exited");
+  });
+
+  it("does not start an already stopped world through Restart while another world is running", async () => {
+    makeBox({ zomboid: "running" });
+    await expect(settle(restartGame("minecraft"))).rejects.toThrow(/Project Zomboid is already running/);
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-mc"].state).toBe("exited");
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
+  it("refuses a start when a live peer's state cannot be inspected", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (cmd.startsWith("docker inspect") && cmd.includes("yoshling-pz")) throw new Error("Peer state unavailable");
+      return fakeRunner(cmd);
+    });
+    await expect(settle(powerOn("minecraft"))).rejects.toThrow(/Peer state unavailable/);
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+    expect(box["yoshling-mc"].state).toBe("exited");
+  });
+
+  it("does not report already powered off when every initial state probe fails", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (cmd.startsWith("docker inspect")) throw new Error("State unavailable");
+      return fakeRunner(cmd);
+    });
+    await expect(settle(powerOff("zomboid"))).rejects.toThrow(/State unavailable/);
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
+  it("does not turn a requested restart into docker start when initial state is unknown", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (cmd.startsWith("docker inspect")) throw new Error("State unavailable");
+      return fakeRunner(cmd);
+    });
+    await expect(settle(restartGame("zomboid"))).rejects.toThrow(/State unavailable/);
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
+  it("uses strict state to save and stop even when the soft status format fails", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (/^docker inspect --format='\{\{\.State\.Status\}\}'/.test(cmd)) throw new Error("Soft status unavailable");
+      return fakeRunner(cmd);
+    });
+    expect(await settle(powerOff("zomboid"))).toBe(true);
+    const { pzSave } = await import("@/lib/zomboid");
+    expect(pzSave).toHaveBeenCalled();
+    expect(box["yoshling-pz"].state).toBe("exited");
+  });
+
+  it("performs a real restart while the soft status format is unavailable", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (/^docker inspect --format='\{\{\.State\.Status\}\}'/.test(cmd)) throw new Error("Soft status unavailable");
+      return fakeRunner(cmd);
+    });
+    await settle(restartGame("zomboid"));
+    const { pzSave } = await import("@/lib/zomboid");
+    expect(pzSave).toHaveBeenCalled();
+    expect(indexOfCommand(/^docker stop .*yoshling-pz/)).toBeLessThan(indexOfCommand(/^docker start yoshling-pz/));
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+});
+
 describe("withGameStopped gates both halves on wasRunning", () => {
+  it("rejects a late exit before claiming the restored world is starting again", async () => {
+    makeBox({ zomboid: "running" });
+    let started = false;
+    let reads = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd === "docker start yoshling-pz") started = true;
+      if (started && cmd.includes("HostConfig.Memory") && cmd.includes("yoshling-pz") && ++reads === 2) {
+        box["yoshling-pz"].state = "exited";
+      }
+      return fakeRunner(cmd);
+    });
+    const work = vi.fn(async () => {});
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/powered off.*after the change/);
+    expect(work).toHaveBeenCalledOnce();
+    const { listFinished } = await import("@/lib/operations");
+    expect(listFinished()[0].facts.some((fact) => fact.label === "Server" && fact.value === "starting again")).toBe(false);
+  });
+
+  it("does not claim a stopped-world restore stayed off if an external actor started it", async () => {
+    makeBox({});
+    const work = vi.fn(async () => { box["yoshling-pz"].state = "running"; });
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/expected to remain powered off/);
+    const { listFinished } = await import("@/lib/operations");
+    expect(listFinished()[0].facts.some((fact) => fact.label === "Server" && fact.value === "left powered off")).toBe(false);
+  });
+
+  it("does not resume a restored world alongside a peer that came up during the callback", async () => {
+    makeBox({ zomboid: "running" });
+    const work = vi.fn(async () => { box["yoshling-mc"].state = "running"; });
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/Minecraft is already running/);
+    expect(work).toHaveBeenCalledOnce();
+    expect(box["yoshling-pz"].state).toBe("exited");
+    expect(indexOfCommand(/^docker start yoshling-pz/)).toBe(-1);
+  });
+
+  it("allows a restore on a genuinely absent container without starting one", async () => {
+    makeBox({});
+    delete box["yoshling-pz"];
+    const work = vi.fn(async () => {});
+    const result = await settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false }));
+    expect(result.restarted).toBe(false);
+    expect(work).toHaveBeenCalledOnce();
+    expect(mutations()).toEqual([]);
+  });
+
+  it("refuses unknown initial state before invoking a restore callback", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory")) throw new Error("Docker socket unavailable");
+      return fakeRunner(cmd);
+    });
+    const work = vi.fn(async () => {});
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/Docker socket unavailable/);
+    expect(work).not.toHaveBeenCalled();
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+    const { listFinished } = await import("@/lib/operations");
+    expect(listFinished()[0].facts.find((fact) => fact.label === "Power")?.value).toBe("in an unknown state");
+  });
+
+  it("does not invoke a restore callback when the strict stop probe fails after initial admission", async () => {
+    makeBox({ zomboid: "running" });
+    let reads = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory") && ++reads === 2) throw new Error("Stop state unavailable");
+      return fakeRunner(cmd);
+    });
+    const work = vi.fn(async () => {});
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/Stop state unavailable/);
+    expect(work).not.toHaveBeenCalled();
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
+  it("does not report restarted when docker start leaves the restored world stopped", async () => {
+    makeBox({ zomboid: "running" });
+    setCommandRunner(async (cmd) => {
+      if (cmd === "docker start yoshling-pz") return { stdout: "", stderr: "" };
+      return fakeRunner(cmd);
+    });
+    const work = vi.fn(async () => {});
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/did not start/);
+    expect(work).toHaveBeenCalledOnce();
+    expect(box["yoshling-pz"].state).toBe("exited");
+    const { listFinished } = await import("@/lib/operations");
+    expect(listFinished()[0].facts.some((fact) => fact.label === "Server" && fact.value === "starting again")).toBe(false);
+  });
+
+  it("reports an unknown restart when Docker cannot read back the started container", async () => {
+    makeBox({ zomboid: "running" });
+    let started = false;
+    setCommandRunner(async (cmd) => {
+      if (cmd === "docker start yoshling-pz") started = true;
+      if (started && cmd.includes("HostConfig.Memory")) throw new Error("Read-back unavailable");
+      return fakeRunner(cmd);
+    });
+    const work = vi.fn(async () => {});
+    await expect(settle(withGameStopped("zomboid", "restart", work, { restartOnFailure: false })))
+      .rejects.toThrow(/Couldn't verify.*started/);
+    expect(work).toHaveBeenCalledOnce();
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
   it("never starts a world that was already stopped", async () => {
     // **Regression lock, honestly labelled**: this has always been correct. Multiple
     // audit findings claimed `withGameStopped` could start a stopped world, and every
@@ -635,6 +856,45 @@ describe("the control lock expires on the heartbeat, never on total duration", (
 // ── the recreate path ────────────────────────────────────────────────────────
 
 describe("setMemory recreates without starting, and writes .env rather than compose", () => {
+  it("fails when the memory read-back is correct but the final power observation is stopped", async () => {
+    makeBox({ zomboid: "running" });
+    let started = false;
+    let readsAfterStart = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd === "docker start yoshling-pz") started = true;
+      if (started && cmd.includes("HostConfig.Memory") && ++readsAfterStart === 3) box["yoshling-pz"].state = "exited";
+      return fakeRunner(cmd);
+    });
+    await expect(settle(setMemory("zomboid", 8))).rejects.toThrow(/powered off.*after the change/);
+    expect(box["yoshling-pz"].env.MAX_MEMORY).toBe("8192m");
+    expect(box["yoshling-pz"].state).toBe("exited");
+  });
+
+  it("checks state again inside admission before writing the requested heap", async () => {
+    makeBox({ zomboid: "running" });
+    let budgetReads = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory") && ++budgetReads === 2) throw new Error("In-operation state unavailable");
+      return fakeRunner(cmd);
+    });
+    await expect(settle(setMemory("zomboid", 8))).rejects.toThrow(/In-operation state unavailable/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
+  it("never recreates a running PZ when its strict stop inspection fails", async () => {
+    makeBox({ zomboid: "running" });
+    let reads = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory") && ++reads === 3) throw new Error("Stop state unavailable");
+      return fakeRunner(cmd);
+    });
+    await expect(settle(setMemory("zomboid", 8))).rejects.toThrow(/Stop state unavailable/);
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-pz"].state).toBe("running");
+  });
+
   it("leaves a stopped world stopped, and uses `create` not `up`", async () => {
     // `up` starts the container. Applying a setting to a stopped world would therefore
     // boot it — and since only one world fits on this box, that quietly produces two
@@ -710,10 +970,120 @@ describe("setMemory recreates without starting, and writes .env rather than comp
   it("refuses above the host cap, and changes nothing", async () => {
     // 16 GB host − 2.5 GB reserve → 13.
     makeBox({});
+    composeText = REAL_COMPOSE.replace("mem_limit: 6g", "mem_limit: 30g");
+    box["yoshling-mc"].memoryLimitGb = 30;
     await expect(settle(setMemory("minecraft", 14))).rejects.toSatisfy(isMemoryRangeError);
     await expect(settle(setMemory("minecraft", 14))).rejects.toThrow(/between 1 and 13 GB/);
     expect(mutations()).toEqual([]);
     expect(envText).toBe("");
+  });
+
+  it("caps Minecraft at its 6 GiB container limit minus native overhead", async () => {
+    makeBox({});
+    expect((await settle(getMemoryState("minecraft"))).maxGb).toBe(4);
+    await expect(settle(setMemory("minecraft", 5))).rejects.toSatisfy(isMemoryRangeError);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("uses a smaller actual container ceiling even when compose is larger", async () => {
+    makeBox({});
+    box["yoshling-pz"].memoryLimitGb = 10;
+    expect((await settle(getMemoryState("zomboid"))).maxGb).toBe(8);
+    await expect(settle(setMemory("zomboid", 9))).rejects.toSatisfy(isMemoryRangeError);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("uses a smaller configured ceiling before a recreate would apply it", async () => {
+    makeBox({});
+    composeText = REAL_COMPOSE.replace("mem_limit: 14g", "mem_limit: 10g");
+    expect((await settle(getMemoryState("zomboid"))).maxGb).toBe(8);
+    await expect(settle(setMemory("zomboid", 9))).rejects.toSatisfy(isMemoryRangeError);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("keeps the measured 12 GiB PZ heap available below its 14 GiB limit", async () => {
+    makeBox({});
+    expect((await settle(getMemoryState("zomboid"))).maxGb).toBe(12);
+    expect((await settle(setMemory("zomboid", 12))).applied).toBe(true);
+  });
+
+  it("refuses a fractional heap that Minecraft's memory parser cannot verify", async () => {
+    makeBox({});
+    await expect(settle(setMemory("minecraft", 2.5))).rejects.toSatisfy(isMemoryRangeError);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("reports unknown limits and refuses writes when Docker cannot be inspected", async () => {
+    makeBox({});
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory")) throw new Error("Docker socket unavailable");
+      return fakeRunner(cmd);
+    });
+    const state = await settle(getMemoryState("minecraft"));
+    expect(state.supported).toBe(false);
+    expect(state.applied).toBe(false);
+    expect(state.reason).toMatch(/Docker socket unavailable/);
+    await expect(settle(setMemory("minecraft", 4))).rejects.toThrow(/Docker socket unavailable/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("distinguishes no existing container from failed inspection", async () => {
+    makeBox({});
+    delete box["yoshling-mc"];
+    const state = await settle(getMemoryState("minecraft"));
+    expect(state.supported).toBe(true);
+    expect(state.maxGb).toBe(4);
+    expect(state.liveGb).toBeNull();
+    expect(state.applied).toBe(false);
+  });
+
+  it("does not mistake an empty Docker memory limit for an unlimited container", async () => {
+    makeBox({});
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory")) return { stdout: "exited|", stderr: "" };
+      return fakeRunner(cmd);
+    });
+    expect((await settle(getMemoryState("minecraft"))).supported).toBe(false);
+    await expect(settle(setMemory("minecraft", 4))).rejects.toThrow(/unreadable container memory limit/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("refuses an unreadable host capacity instead of using the informational fallback", async () => {
+    makeBox({});
+    const fs = await import("fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValueOnce(new Error("host capacity unavailable"));
+    const state = await settle(getMemoryState("minecraft"));
+    expect(state.supported).toBe(false);
+    expect(state.hostGb).toBeNull();
+    expect(state.applied).toBe(false);
+    vi.mocked(fs.readFile).mockRejectedValueOnce(new Error("host capacity unavailable"));
+    await expect(settle(setMemory("minecraft", 4))).rejects.toThrow(/host memory capacity/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("refuses a malformed configured limit rather than dropping that bound", async () => {
+    makeBox({});
+    composeText = REAL_COMPOSE.replace("mem_limit: 6g", "mem_limit: unknown");
+    expect((await settle(getMemoryState("minecraft"))).supported).toBe(false);
+    await expect(settle(setMemory("minecraft", 4))).rejects.toThrow(/mem_limit is unreadable/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("refuses an unreadable heap floor rather than assuming one GiB", async () => {
+    makeBox({});
+    composeText = REAL_COMPOSE.replace('MIN_MEMORY: "2048m"', 'MIN_MEMORY: "unknown"');
+    expect((await settle(getMemoryState("zomboid"))).supported).toBe(false);
+    await expect(settle(setMemory("zomboid", 4))).rejects.toThrow(/MIN_MEMORY is unreadable/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
   });
 
   it("refuses, and recreates nothing, when compose does not read the key it wrote", async () => {
@@ -819,6 +1189,102 @@ describe("the memory card's configured-vs-live report survives the move to .env"
 });
 
 describe("applyServiceEnv routes Minecraft's version and loader through .env", () => {
+  it("does not persist dependent settings if the final power observation sees an immediate exit", async () => {
+    makeBox({ minecraft: "running" });
+    let started = false;
+    let readsAfterStart = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd === "docker start yoshling-mc") started = true;
+      if (started && cmd.includes("HostConfig.Memory") && ++readsAfterStart === 2) box["yoshling-mc"].state = "exited";
+      return fakeRunner(cmd);
+    });
+    const saved = vi.fn(async () => {});
+    await expect(settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, {
+      stage: "Changing settings", onApplied: saved,
+    }))).rejects.toThrow(/powered off.*after the change/);
+    expect(saved).not.toHaveBeenCalled();
+    expect(box["yoshling-mc"].state).toBe("exited");
+  });
+
+  it("never recreates a running world after a failed strict stop probe", async () => {
+    makeBox({ minecraft: "running" });
+    let reads = 0;
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("HostConfig.Memory") && ++reads === 2) throw new Error("Stop state unavailable");
+      return fakeRunner(cmd);
+    });
+    const saved = vi.fn(async () => {});
+    await expect(settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, {
+      stage: "Changing settings", onApplied: saved,
+    }))).rejects.toThrow(/Stop state unavailable/);
+    expect(saved).not.toHaveBeenCalled();
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-mc"].state).toBe("running");
+  });
+
+  it("checks both configured and container values before skipping recreation", async () => {
+    makeBox({});
+    const saved = vi.fn(async () => {});
+    await settle(applyServiceEnv("minecraft", { VERSION: "26.1.2", TYPE: "FABRIC" }, {
+      stage: "Checking settings", onApplied: saved,
+    }));
+    expect(mutations()).toEqual([]);
+    expect(envText).toBe("");
+    expect(saved).toHaveBeenCalledOnce();
+  });
+
+  it("repairs a stale container even when compose already carries the requested values", async () => {
+    makeBox({});
+    box["yoshling-mc"].env.VERSION = "1.21.4";
+    await settle(applyServiceEnv("minecraft", { VERSION: "26.1.2" }, { stage: "Retrying settings" }));
+    expect(commands.some((c) => c.includes("create --force-recreate minecraft"))).toBe(true);
+    expect(box["yoshling-mc"].env.VERSION).toBe("26.1.2");
+  });
+
+  it("persists dependent settings only after the new container is verified", async () => {
+    makeBox({});
+    const saved = vi.fn(async () => {
+      expect(box["yoshling-mc"].env.VERSION).toBe("1.21.4");
+    });
+    await settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, {
+      stage: "Changing settings", onApplied: saved,
+    }));
+    expect(saved).toHaveBeenCalledOnce();
+  });
+
+  it("rejects failed recreation and leaves dependent settings untouched for retry", async () => {
+    makeBox({});
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("create --force-recreate minecraft")) throw new Error("recreate failed");
+      return fakeRunner(cmd);
+    });
+    const saved = vi.fn(async () => {});
+    await expect(settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, {
+      stage: "Changing settings", onApplied: saved,
+    }))).rejects.toThrow(/recreate failed/);
+    expect(saved).not.toHaveBeenCalled();
+    expect(parseEnvFile(envText).MC_VERSION).toBe("1.21.4");
+    expect(box["yoshling-mc"].env.VERSION).toBe("26.1.2");
+    setCommandRunner(fakeRunner);
+    await settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, {
+      stage: "Retrying settings", onApplied: saved,
+    }));
+    expect(saved).toHaveBeenCalledOnce();
+    expect(box["yoshling-mc"].env.VERSION).toBe("1.21.4");
+  });
+
+  it("rejects a recreate that reports success while retaining the old env", async () => {
+    makeBox({});
+    setCommandRunner(async (cmd) => {
+      if (cmd.includes("create --force-recreate minecraft")) return { stdout: "", stderr: "" };
+      return fakeRunner(cmd);
+    });
+    const saved = vi.fn(async () => {});
+    await expect(settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, {
+      stage: "Changing settings", onApplied: saved,
+    }))).rejects.toThrow(/could not be verified/);
+    expect(saved).not.toHaveBeenCalled();
+  });
   it("writes MC_TYPE and MC_VERSION, recreates, and leaves a stopped world stopped", async () => {
     makeBox({});
 

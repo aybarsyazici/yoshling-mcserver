@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion } from "motion/react";
 import {
   AreaChart,
@@ -41,39 +41,36 @@ export function ServerMonitor({ game = "minecraft" }: { game?: GameId }) {
   const meta = GAMES[game];
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [statsGame, setStatsGame] = useState<GameId | null>(null);
+  const [now, setNow] = useState(Date.now);
+  const generation = useRef(0);
   const [history, setHistory] = useState<DataPoint[]>([]);
 
-  async function fetchStats() {
-    try {
-      const res = await fetch(`/api/games/stats?game=${game}`);
-      if (res.ok) {
-        const data = await res.json();
-        setStats(data);
-        if (data.history) {
-          setHistory(
-            data.history.map((p: { time: number; cpu: number; memory: number }) => {
-              const d = new Date(p.time);
-              return {
-                time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
-                cpu: p.cpu,
-                memory: p.memory,
-              };
-            })
-          );
-        }
-      }
-    } catch {
-      /* keep last */
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    fetchStats();
-    const id = setInterval(fetchStats, 5000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let alive = true;
+    async function fetchStats() {
+      const request = ++generation.current;
+      try {
+        const res = await fetch(`/api/games/stats?game=${game}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`Monitor refresh failed (HTTP ${res.status})`);
+        const data: unknown = await res.json();
+        if (!isStats(data)) throw new Error("The monitor response is incomplete");
+        if (!alive || request !== generation.current) return;
+        setStats(data); setStatsGame(game); setPollError(null); setLastSuccessAt(Date.now());
+        setHistory(data.history.map((p) => ({
+          time: new Date(p.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
+          cpu: p.cpu, memory: p.memory,
+        })));
+      } catch (error) {
+        if (alive && request === generation.current) setPollError(error instanceof Error ? error.message : "Couldn't refresh the monitor");
+      } finally { if (alive) { setLoading(false); setNow(Date.now()); } }
+    }
+    void fetchStats();
+    const poll = setInterval(fetchStats, 5000);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => { alive = false; clearInterval(poll); clearInterval(clock); };
   }, [game]);
 
   if (loading) {
@@ -86,19 +83,23 @@ export function ServerMonitor({ game = "minecraft" }: { game?: GameId }) {
     );
   }
 
-  if (!stats) return null;
+  if (!stats || statsGame !== game) return <div role="alert" className="rounded-2xl bg-card/70 p-5">
+    {pollError ?? "Reading monitor data…"} Polling retries every 5 seconds.
+  </div>;
 
   const cpuNum = parseFloat(stats.container.cpu) || 0;
   const memNum = parseFloat(stats.container.memoryPercent) || 0;
   const diskNum = parseFloat(stats.host.disk.percent) || 0;
   const offline = stats.offline;
+  const ageSeconds = lastSuccessAt === null ? null : Math.max(0, Math.floor((now - lastSuccessAt) / 1000));
+  const fresh = !pollError && ageSeconds !== null && ageSeconds <= 15;
 
   return (
     <div className="space-y-5" style={{ ["--tint" as string]: meta.tint }}>
       <div className="flex items-center justify-between">
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <span className="relative flex h-2 w-2">
-            {!offline && (
+            {fresh && !offline && (
               <motion.span
                 className="absolute inline-flex h-full w-full rounded-full"
                 style={{ background: meta.tint }}
@@ -106,16 +107,19 @@ export function ServerMonitor({ game = "minecraft" }: { game?: GameId }) {
                 transition={{ duration: 1.6, repeat: Infinity }}
               />
             )}
-            <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: offline ? "var(--muted-foreground)" : meta.tint }} />
+            <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: !fresh || offline ? "var(--muted-foreground)" : meta.tint }} />
           </span>
-          {offline
+          {!fresh
+            ? `Last known reading · ${ageSeconds ?? "?"}s old${pollError ? ` · ${pollError}` : " · waiting for a fresh poll"}`
+            : offline
             ? history.length > 0
               ? `${meta.name} is stopped — the graph is its last recorded session, not a live reading`
               : `${meta.name} is stopped, and nothing was recorded while it last ran`
-            : "Live · refreshes every 5s"}
+            : `Live · refreshes every 5s · last read ${ageSeconds}s ago`}
         </p>
       </div>
 
+      {!fresh && <p role="status" className="text-xs text-chart-5">These values are historical. The current server state has not been confirmed.</p>}
       {/* The x-axis is wall-clock times with no gap marker, so a historic curve is
           indistinguishable from a live one by looking at it. Say which it is, next to
           the numbers, rather than only in the line above the charts. */}
@@ -252,4 +256,13 @@ function InfoCard({ netIO, pids, tint }: { netIO: string; pids: string; tint: st
       </div>
     </div>
   );
+}
+
+function isStats(value: unknown): value is Stats {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Stats;
+  return !!v.container && [v.container.cpu, v.container.memory, v.container.memoryPercent, v.container.network, v.container.processes].every((s) => typeof s === "string") &&
+    !!v.host?.disk && [v.host.disk.used, v.host.disk.total, v.host.disk.percent].every((s) => typeof s === "string") &&
+    (v.offline === undefined || typeof v.offline === "boolean") && Array.isArray(v.history) &&
+    v.history.every((p) => p && [p.time, p.cpu, p.memory].every(Number.isFinite));
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
@@ -10,10 +10,20 @@ import {
   describeMembers,
   manifestIncludesMods,
   MC_ARCHIVE_MEMBERS,
+  prepareMinecraftArchive,
   restoreMinecraftArchive,
 } from "../mc-archive";
 
 const execFileAsync = promisify(execFile);
+const failure = vi.hoisted(() => ({ stat: null as NodeJS.ErrnoException | null }));
+vi.mock("fs/promises", async importOriginal => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  return { ...actual, stat: async (...args: Parameters<typeof actual.stat>) => {
+    if (failure.stat) throw failure.stat;
+    return actual.stat(...args);
+  } };
+});
+afterEach(() => { failure.stat = null; });
 
 /**
  * **Real `tar`, real directories, real renames.**
@@ -107,6 +117,66 @@ describe("restoreMinecraftArchive", () => {
       "fabric-api.jar",
       "xaeros-minimap.jar",
     ]);
+  });
+
+  it("refuses escaping staged members before replacing either live member", async () => {
+    await put("world/level.dat", "live world fixture");
+    await put("mods/live.jar", "live jar fixture");
+    const external = path.join(box, "outside-world");
+    await mkdir(external);
+    await writeFile(path.join(external, "level.dat"), "outside fixture");
+    const staged = path.join(box, "archive-source");
+    await mkdir(staged);
+    await symlink(external, path.join(staged, "world"));
+    await mkdir(path.join(staged, "mods"));
+    await writeFile(path.join(staged, "mods", "archived.jar"), "archived fixture");
+    const archive = path.join(backups, "escaped.tar.gz");
+    await execFileAsync("tar", ["-czf", archive, "-C", staged, "world", "mods"]);
+    await expect(restore(archive)).rejects.toThrow("outside the configured game volume");
+    expect(await read("world/level.dat")).toBe("live world fixture");
+    expect(await read("mods/live.jar")).toBe("live jar fixture");
+    expect(await readFile(path.join(external, "level.dat"), "utf-8")).toBe("outside fixture");
+  });
+
+  it("refuses an escaping live destination before replacing the other live member", async () => {
+    await put("world/level.dat", "archived world fixture");
+    await put("mods/archive.jar", "archived jar fixture");
+    const archive = await tarUp("both.tar.gz", ["world", "mods"]);
+    await put("world/level.dat", "live world fixture");
+    await rm(path.join(mc, "mods"), { recursive: true });
+    const external = path.join(box, "outside-mods");
+    await mkdir(external);
+    await writeFile(path.join(external, "outside.jar"), "outside fixture");
+    await symlink(external, path.join(mc, "mods"));
+    await expect(restore(archive)).rejects.toThrow("outside the configured game volume");
+    expect(await read("world/level.dat")).toBe("live world fixture");
+    expect(await readFile(path.join(external, "outside.jar"), "utf-8")).toBe("outside fixture");
+  });
+
+  it("replaces a contained final destination alias itself and leaves its target alone", async () => {
+    await put("world/level.dat", "archived world fixture");
+    const archive = await tarUp("world.tar.gz", ["world"]);
+    await rm(path.join(mc, "world"), { recursive: true });
+    await put("contained-world/level.dat", "unrelated contained fixture");
+    await symlink("contained-world", path.join(mc, "world"));
+    expect((await restore(archive)).replaced).toEqual(["world"]);
+    expect(await read("world/level.dat")).toBe("archived world fixture");
+    expect(await read("contained-world/level.dat")).toBe("unrelated contained fixture");
+  });
+
+  it("removes a contained staging alias itself without deleting its target on archive refusal", async () => {
+    await put("world/level.dat", "live world fixture");
+    const stamp = 123456789;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(stamp);
+    try {
+      await symlink("world", path.join(mc, `.restore-${stamp}`));
+      const invalid = path.join(backups, "invalid.tar.gz");
+      await writeFile(invalid, "not a gzip archive");
+      await expect(restore(invalid)).rejects.toThrow();
+      expect(await read("world/level.dat")).toBe("live world fixture");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   // ── the legacy archive ────────────────────────────────────────────────────
@@ -281,10 +351,61 @@ describe("archiveMembersPresent", () => {
     expect(await archiveMembersPresent(dir)).toEqual([]);
   });
 
-  /** A dangling symlink is not a directory, so it must not reach `tar` either. */
-  it("ignores a symlink pointing at nothing", async () => {
+  /** An existing dangling alias must not be mistaken for a first-install missing member. */
+  it("refuses a symlink pointing at nothing", async () => {
     await symlink(path.join(dir, "gone"), path.join(dir, "mods"));
-    expect(await archiveMembersPresent(dir)).toEqual([]);
+    await expect(archiveMembersPresent(dir)).rejects.toThrow("outside the configured game volume");
+  });
+
+  it("refuses a member aliased outside its source root", async () => {
+    const external = await mkdtemp(path.join(tmpdir(), "yoshling-outside-member-"));
+    try {
+      await writeFile(path.join(external, "fixture.txt"), "outside fixture");
+      await symlink(external, path.join(dir, "world"));
+      await expect(archiveMembersPresent(dir)).rejects.toThrow("outside the configured game volume");
+      expect(await readFile(path.join(external, "fixture.txt"), "utf-8")).toBe("outside fixture");
+    } finally {
+      await rm(external, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses non-ENOENT inspection failures instead of declaring the source absent", async () => {
+    await mkdir(path.join(dir, "world"));
+    failure.stat = Object.assign(new Error("fixture read failure"), { code: "EIO" });
+    await expect(archiveMembersPresent(dir)).rejects.toMatchObject({ code: "EIO" });
+  });
+
+  it("stages contained top-level aliases as actual world/mods data under the original names", async () => {
+    await mkdir(path.join(dir, "contained-world"));
+    await mkdir(path.join(dir, "contained-mods"));
+    await writeFile(path.join(dir, "contained-world", "level.dat"), "saved world fixture");
+    await writeFile(path.join(dir, "contained-mods", "fixture.jar"), "saved jar fixture");
+    await symlink("contained-world", path.join(dir, "world"));
+    await symlink("contained-mods", path.join(dir, "mods"));
+    const work = path.join(dir, "staging");
+    const prepared = await prepareMinecraftArchive(dir, work);
+    expect(prepared.staged).toBe(true);
+    expect(prepared.members).toEqual(["world", "mods"]);
+    const archive = path.join(dir, "snapshot.tar.gz");
+    await execFileAsync("tar", ["-czf", archive, "-C", prepared.root, ...prepared.members]);
+    const live = path.join(dir, "live");
+    await mkdir(live);
+    expect((await restoreMinecraftArchive({ archivePath: archive, mcDir: live })).replaced).toEqual(["world", "mods"]);
+    expect(await readFile(path.join(live, "world", "level.dat"), "utf-8")).toBe("saved world fixture");
+    expect(await readFile(path.join(live, "mods", "fixture.jar"), "utf-8")).toBe("saved jar fixture");
+  });
+
+  it("refuses an escaping nested source link before staging or tar", async () => {
+    await mkdir(path.join(dir, "world"));
+    const external = await mkdtemp(path.join(tmpdir(), "yoshling-outside-link-"));
+    try {
+      await writeFile(path.join(external, "fixture.txt"), "outside fixture");
+      await symlink(external, path.join(dir, "world", "linked"));
+      await expect(prepareMinecraftArchive(dir, path.join(dir, "staging"))).rejects.toThrow("outside the configured game volume");
+      expect(await readFile(path.join(external, "fixture.txt"), "utf-8")).toBe("outside fixture");
+    } finally {
+      await rm(external, { recursive: true, force: true });
+    }
   });
 });
 

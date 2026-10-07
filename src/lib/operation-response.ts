@@ -1,40 +1,24 @@
 import { NextResponse } from "next/server";
-import { assertResourceFree, ControlBusyError, OperationConflictError } from "@/lib/operations";
+import { assertResourceFree, ControlBusyError, FileWriteInterruptedError, OperationConflictError, runFileWrite } from "@/lib/operations";
 import type { GameId } from "@/lib/games";
+import { FileRevisionConflictError, withFileRevision, withRevisionRead } from "@/lib/file-revision";
 
-/**
- * The one 409 body, replacing four hand-written variants that all worded it
- * differently.
- *
- * `busy` stays present for *power* conflicts so the existing `data.busy` readers keep
- * working; `conflict` is what a file-lane conflict carries, since there is no
- * truthful `ControlLock` verb for "creating a backup".
- */
+/** The shared409shape for power and file-resource conflicts. */
 export function conflictResponse(e: OperationConflictError): NextResponse {
-  return NextResponse.json(
-    {
-      error: e.message,
-      conflict: e.conflict,
-      resource: e.resource,
-      busy: e instanceof ControlBusyError ? e.lock : null,
-    },
-    { status: 409 }
-  );
+  return NextResponse.json({
+    error: e.message,
+    conflict: e.conflict,
+    resource: e.resource,
+    busy: e instanceof ControlBusyError ? e.lock : null,
+  }, { status: 409 });
 }
 
-/** True for anything the registry refused to admit. Catch this, not `ControlBusyError`. */
+/** True for anything the registry refused to admit. */
 export function isConflict(e: unknown): e is OperationConflictError {
   return e instanceof OperationConflictError;
 }
 
-/**
- * The 409 for a short write that would land on files an operation already holds, or
- * `null` to go ahead. For the config/settings writers, which have no record of their own.
- *
- * Returns rather than throws because these routes have no `catch` to land in: they are
- * straight-line handlers, and a thrown conflict would surface as a 500 with a message
- * about a lane nobody asked about.
- */
+/** Read-only compatibility check. Short mutations use withGameFileWrite. */
 export function fileLaneBusy(game: GameId): NextResponse | null {
   try {
     assertResourceFree(`files:${game}`);
@@ -42,5 +26,27 @@ export function fileLaneBusy(game: GameId): NextResponse | null {
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
     throw e;
+  }
+}
+
+/** Reserve a short handler's complete read/write interval and preserve its response. */
+export async function withGameFileWrite(game: GameId, fn: () => Promise<NextResponse>, revision?: { request: Pick<Request, "headers">; file: () => Promise<string> }): Promise<NextResponse> {
+  try {
+    return await runFileWrite(game, () => revision ? withFileRevision(revision.request, revision.file, fn) : fn());
+  } catch (e) {
+    if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof FileWriteInterruptedError) {
+      return NextResponse.json({ error: e.message, interrupted: true }, { status: 409 });
+    }
+    if (e instanceof FileRevisionConflictError) return NextResponse.json({ error: e.message, stale: true }, { status: 409 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : "File write failed" }, { status: 500 });
+  }
+}
+
+export async function revisionRead(file: () => Promise<string>, work: () => Promise<NextResponse>): Promise<NextResponse> {
+  try { return await withRevisionRead(file, work); }
+  catch (e) {
+    if (e instanceof FileRevisionConflictError) return NextResponse.json({ error: e.message, stale: true }, { status: 409 });
+    return NextResponse.json({ error: e instanceof Error ? e.message : "File read failed" }, { status: 500 });
   }
 }

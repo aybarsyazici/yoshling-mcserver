@@ -23,6 +23,8 @@ export async function GET() {
   return NextResponse.json({
     // null means this request's own check failed (Steam unreachable, no manifest)
     stale,
+    lookupStatus: stale === null ? "unknown" : "checked",
+    checkError: stale === null ? "Workshop versions could not be checked" : null,
     /** When the watcher last completed a check — null if it has never run. */
     checkedAt: state.checkedAt || null,
     /** Why that check failed, or "" if it was fine. */

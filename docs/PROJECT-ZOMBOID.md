@@ -8,6 +8,17 @@ CLAUDE.md so that an agent working on Minecraft or 7 Days to Die doesn't carry
 230 lines of Workshop-manifest archaeology it will never need. CLAUDE.md holds the
 shared architecture; this file holds the depth.
 
+Current editor/error/permission behavior is in [`FRONTEND.md`](FRONTEND.md). Unchanged
+mod-editor saves preserve the actual INI's disabled variants and unrelated loaded tokens;
+opaque revisions reject stale edits. Quick/maps/mods/updates expose validated load/error/retry
+states and warn when retained data is stale. Workshop lookup failures remain unknown.
+
+The Workshop list has name/ID search and download/enabled/disabled-variant/no-ID filters.
+Unpaired IDs use text search separately. Filtering preserves order and full-list counts;
+background polling pauses during ID edits and cannot replace a draft with an older reply.
+Shared join guidance copies current metadata addresses and leaves the exact game build
+unknown; it does not verify a client join. Details are in `FRONTEND.md`.
+
 **And keep it current.** Same rule as CLAUDE.md — see "Documentation rules" there.
 When you learn something about PZ, or find something below that turned out to be
 wrong, update this file before you finish. A stale deep doc is worse than none,
@@ -201,6 +212,10 @@ Three things not to re-break:
   **never interrupts play** — if anyone is connected it announces the update over
   RCON `servermsg` and waits; it applies one only when the server is empty. If PZ
   is already stopped it just seeds the files so the next start is clean.
+  - Compose interpolates the watcher and both cadence settings from `.env`.
+    `PZ_UPDATE_WATCH=false` requires web recreation; restart cannot change env.
+    Defaults are 15 seconds pending / 5 minutes full check. An isolated recreated
+    fixture verified overrides; production effective-value verification is separate.
   - **Two cadences, one timer.** A fixed `setInterval` at 15 s
     (`PZ_UPDATE_PENDING_POLL_MS`) always fires; a `running` guard declines to
     overlap, and a due-time check skips the expensive Steam call unless an update

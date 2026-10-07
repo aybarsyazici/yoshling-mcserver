@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
+import { StatusFreshness } from "@/components/status-freshness";
+import { JoinPanel } from "@/components/join-panel";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
@@ -49,7 +52,7 @@ export function GameOverview({
 }) {
   const meta = GAMES[game];
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, running, busy: serverBusy, can, clockSkewMs, refresh } = useGames(
+  const { games, running, busy: serverBusy, can, clockSkewMs, lastSuccessAt, pollError, refresh } = useGames(
     localBusy ? 1500 : 5000
   );
   /**
@@ -77,7 +80,7 @@ export function GameOverview({
    * silently from the more obvious of the two pages, and a power-holding operation with
    * no `action` (the 7 Days to Die update) left every button live and returning 409.
    */
-  const { operations, elapsedMs } = useOperations();
+  const { operations, elapsedMs, refresh: refreshOperations } = useOperations();
   const blocker = powerBlocker(operations, game);
   const powerHeld = blocker?.holdsPower ? blocker : undefined;
   const preemptable = blocker && !blocker.holdsPower ? blocker : undefined;
@@ -183,30 +186,24 @@ export function GameOverview({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
-      if (!res.ok) return void toast.error(data.error || "Command failed");
+      const data = await readOperationResponse(res);
+      if (!data.operationId && res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
+      if (!data.operationId && !res.ok) return void toast.error(data.error || "Command failed");
       // No success toast: the completion toast carries the server's own summary, which
       // cannot claim more than was actually observed. "saved & stopped" fired here
-      // before a 300s Project Zomboid stop had even reached the kill.
+      // before the operation had verified its final state.
       setTimeout(refresh, reduced ? 0 : 1200);
-    } catch {
-      // The request died; the operation did not. `/api/games/control` awaits the whole
-      // thing, and a Project Zomboid stop is a fixed 300s ending in SIGKILL — past
-      // Cloudflare's ~100s origin read timeout. So the *successful* path routinely ends
-      // with a dead connection, and reporting that as a red "Network error" was the
-      // app's most-hit lie. The strip at the top of the page survives it.
-      toast.info(
-        `Still working on ${meta.name}. The connection timed out before it finished, which is ` +
-          `normal for a long stop — watch the strip at the top of the page.`
-      );
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage(`${meta.name} power operation`, error));
     } finally {
+      void refreshOperations();
       setLocalBusy(false);
     }
   }
 
   return (
     <div className="space-y-8" style={{ ["--tint" as string]: meta.tint }}>
+      <StatusFreshness lastSuccessAt={lastSuccessAt} pollError={pollError} />
       <SectionHeading
         eyebrow={`${meta.short} · Overview`}
         title={meta.name}
@@ -273,7 +270,6 @@ export function GameOverview({
                     looked like the one state that just needs patience. `power.heading`
                     is the same string `/{game}/server` shows for the same container. */}
                 <p className="font-display text-2xl font-bold">{power.heading}</p>
-                <p className="mt-0.5 font-mono text-xs text-muted-foreground">{meta.connect.join("  ·  ")}</p>
                 {/* A disabled control that does not say why is the same failure as a
                     silent operation, and this page had no such line at all — then had
                     one for two cases out of eight. `power.reason` is the whole set,
@@ -333,6 +329,8 @@ export function GameOverview({
           </div>
         </div>
       </Reveal>
+
+      <JoinPanel game={game} snapshot={snap} lastSuccessAt={lastSuccessAt} pollError={pollError} busy={ownBusy} />
 
       {/* Stat tiles */}
       <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

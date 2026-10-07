@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
+
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -61,6 +63,24 @@ interface WhitelistEntry {
   name: string;
 }
 
+function isNameList(value: unknown): value is WhitelistEntry[] {
+  return Array.isArray(value) && value.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    typeof entry.name === "string" && entry.name.length > 0 &&
+    (entry.uuid === undefined || typeof entry.uuid === "string")
+  );
+}
+
+async function readSettings(url: string, fallback: string): Promise<{ data: unknown; revision: string | null }> {
+  const response = await fetch(url);
+  const data: unknown = await response.json();
+  if (!response.ok) {
+    const error = data !== null && typeof data === "object" && "error" in data ? data.error : null;
+    throw new Error(typeof error === "string" ? error : fallback);
+  }
+  return { data, revision: fileRevision(response) };
+}
+
 /**
  * The dropdown lists, the "this key is inert" notes and the grouping all come from
  * `@/lib/mc-properties`, which the API route shares. They used to be a `KNOWN_SELECTS`
@@ -89,6 +109,8 @@ export default function SettingsPage() {
     modLoader: "fabric",
   });
   const [savedConfig, setSavedConfig] = useState<ServerConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [mcVersions, setMcVersions] = useState<string[]>([]);
   // What `world/level.dat` says, i.e. what the game itself last wrote. Shown next to the
@@ -108,48 +130,94 @@ export default function SettingsPage() {
    */
   const [dirtyProps, setDirtyProps] = useState<Set<string>>(new Set());
   const [propsSaving, setPropsSaving] = useState(false);
-  const [ops, setOps] = useState<OpEntry[]>([]);
+  const [opsRevision, setOpsRevision] = useState<string | null>(null);
+  const [wlRevision, setWlRevision] = useState<string | null>(null);
+  const [propsRevision, setPropsRevision] = useState<string | null>(null);
+  const [propsReady, setPropsReady] = useState(false);
+  const [propsError, setPropsError] = useState<string | null>(null);
+  const [ops, setOps] = useState<OpEntry[] | null>(null);
+  const [opsLoading, setOpsLoading] = useState(true);
+  const [opsError, setOpsError] = useState<string | null>(null);
   const [opsSaving, setOpsSaving] = useState(false);
   const [newOp, setNewOp] = useState("");
-  const [whitelist, setWhitelist] = useState<WhitelistEntry[]>([]);
+  const [whitelist, setWhitelist] = useState<WhitelistEntry[] | null>(null);
+  const [wlLoading, setWlLoading] = useState(true);
+  const [wlError, setWlError] = useState<string | null>(null);
   const [wlSaving, setWlSaving] = useState(false);
   const [newWl, setNewWl] = useState("");
 
+  const loadConfig = useCallback(() => {
+    return readSettings("/api/settings", "Could not load the server version.").then(({ data }) => {
+      if (!data || typeof data !== "object" || !("mcVersion" in data) ||
+          typeof data.mcVersion !== "string" || !data.mcVersion ||
+          !("modLoader" in data) || typeof data.modLoader !== "string" || !data.modLoader) {
+        throw new Error("The server version response is incomplete. Reload before saving.");
+      }
+      const current = { mcVersion: data.mcVersion, modLoader: data.modLoader };
+      setConfig(current);
+      setSavedConfig(current);
+      setConfigError(null);
+      if ("worldVersion" in data && typeof data.worldVersion === "string") setWorldVersion(data.worldVersion);
+    }).catch((error) => {
+      setSavedConfig(null);
+      setConfigError(error instanceof Error ? error.message : "Could not load the server version.");
+    }).finally(() => {
+      setConfigLoading(false);
+    });
+  }, []);
+
+  const loadOps = useCallback(() => {
+    return readSettings("/api/server/ops", "Could not load operators.").then(({ data, revision }) => {
+      if (!isNameList(data) || !data.every((entry) =>
+        "level" in entry && typeof entry.level === "number" && Number.isInteger(entry.level) &&
+        entry.level >= 1 && entry.level <= 4 && "bypassesPlayerLimit" in entry &&
+        typeof entry.bypassesPlayerLimit === "boolean"
+      )) {
+        throw new Error("The operators response is incomplete. Reload before editing.");
+      }
+      setOps(data as OpEntry[]); setOpsRevision(revision);
+      setOpsError(null);
+    }).catch((error) => {
+      setOps(null);
+      setOpsError(error instanceof Error ? error.message : "Could not load operators.");
+    }).finally(() => {
+      setOpsLoading(false);
+    });
+  }, []);
+
+  const loadWhitelist = useCallback(() => {
+    return readSettings("/api/server/mc-whitelist", "Could not load the Minecraft whitelist.").then(({ data, revision }) => {
+      if (!isNameList(data)) {
+        throw new Error("The Minecraft whitelist response is incomplete. Reload before editing.");
+      }
+      setWhitelist(data); setWlRevision(revision);
+      setWlError(null);
+    }).catch((error) => {
+      setWhitelist(null);
+      setWlError(error instanceof Error ? error.message : "Could not load the Minecraft whitelist.");
+    }).finally(() => {
+      setWlLoading(false);
+    });
+  }, []);
+
+  const loadProperties = useCallback(() => readSettings("/api/server/properties", "Could not read server.properties.").then(({ data, revision }) => {
+    if (!data || typeof data !== "object" || Array.isArray(data) || "error" in data || !Object.values(data).every((v) => typeof v === "string")) throw new Error("The properties response is incomplete.");
+    setProperties(data as Record<string, string>); setPropsRevision(revision); setPropsReady(true); setPropsError(null);
+  }).catch((error) => { setPropsReady(false); setPropsError(error instanceof Error ? error.message : "Could not read server.properties."); }), []);
+
   useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data && data.mcVersion) {
-          setConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader });
-          // Kept so Save can tell "applied a change" from "pressed Save on the values
-          // that were already there" — the two produce completely different server
-          // behaviour and used to produce the same green toast.
-          setSavedConfig({ mcVersion: data.mcVersion, modLoader: data.modLoader });
-          if (typeof data.worldVersion === "string") setWorldVersion(data.worldVersion);
-        }
-      })
-      .catch(() => {});
+    void loadConfig();
+    void loadOps();
+    void loadWhitelist();
 
     fetch("/api/minecraft-versions")
       .then((r) => r.json())
       .then((data) => { if (data.versions) setMcVersions(data.versions); })
       .catch(() => {});
 
-    fetch("/api/server/properties")
-      .then((r) => r.json())
-      .then((data) => { if (!data.error) setProperties(data); })
-      .catch(() => {});
+    void loadProperties();
 
-    fetch("/api/server/ops")
-      .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setOps(data); })
-      .catch(() => {});
-
-    fetch("/api/server/mc-whitelist")
-      .then((r) => r.json())
-      .then((data) => { if (Array.isArray(data)) setWhitelist(data); })
-      .catch(() => {});
-  }, []);
+  }, [loadConfig, loadOps, loadWhitelist, loadProperties]);
 
   /**
    * `confirm` is the explicit override of the version guard, and it is only ever sent
@@ -158,11 +226,8 @@ export default function SettingsPage() {
    * control it replaced.
    */
   async function handleSaveConfig(confirm = false) {
+    if (!savedConfig || configLoading || saving) return;
     setSaving(true);
-    const changed =
-      !savedConfig ||
-      savedConfig.mcVersion !== config.mcVersion ||
-      savedConfig.modLoader !== config.modLoader;
     try {
       const res = await fetch("/api/settings", {
         method: "PUT",
@@ -185,14 +250,11 @@ export default function SettingsPage() {
         toast.error(data.error || "Failed to save");
         return;
       }
-      // And the old success text — "Server will restart with new version" — was false
-      // twice over: nothing is recreated when nothing changed, and `applyServiceEnv`
-      // uses `create` never `up`, so a stopped world stays stopped. When something did
-      // change it is a tracked operation, and its completion toast carries the
-      // container's read-back version.
+      // The operation ledger reports the actual container read-back and outcome.
+      // An identical DB value can still repair container drift, so this page cannot
+      // infer "nothing changed" from its initially loaded configuration.
       setVersionBlock(null);
-      if (!changed) toast.info("Nothing changed — the version and loader are already set to that.");
-      else setSavedConfig({ ...config });
+      setSavedConfig({ ...config });
     } catch {
       // A version change stops and recreates the container, which outlasts
       // Cloudflare's ~100s origin read timeout for a world that takes a while to save.
@@ -206,6 +268,7 @@ export default function SettingsPage() {
   }
 
   async function handleSaveProperties() {
+    if (!propsReady || propsSaving) return;
     // Only what was touched. An untouched key resent is indistinguishable from an edit at
     // the route, and it is what made every save log "58 settings edited".
     const changedKeys = [...dirtyProps].filter((k) => k in properties);
@@ -217,11 +280,12 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/server/properties", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...revisionHeaders(propsRevision) },
         body: JSON.stringify(Object.fromEntries(changedKeys.map((k) => [k, properties[k]]))),
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.stale) { setPropsReady(false); setPropsError(data.error); }
         toast.error(data.error || "Failed to save");
         return;
       }
@@ -244,6 +308,7 @@ export default function SettingsPage() {
           `Restart server to apply.`
       );
       setDirtyProps(new Set());
+      await loadProperties();
     } catch {
       toast.error("Failed to save");
     } finally {
@@ -252,18 +317,19 @@ export default function SettingsPage() {
   }
 
   async function handleSaveOps() {
+    if (ops === null || opsLoading || opsSaving) return;
     setOpsSaving(true);
     try {
       const res = await fetch("/api/server/ops", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...revisionHeaders(opsRevision) },
         body: JSON.stringify(ops),
       });
       // The route validates every entry and names the one it rejected, so show
       // its message — "Failed to save" alone leaves no way to tell what was wrong.
       const data = await res.json();
-      if (res.ok) toast.success("ops.json saved. Restart server to apply.");
-      else toast.error(data.error || "Failed to save");
+      if (res.ok) { toast.success("ops.json saved. Restart server to apply."); await loadOps(); }
+      else { if (data.stale) { setOps(null); setOpsError(data.error); } toast.error(data.error || "Failed to save"); }
     } catch {
       toast.error("Failed to save");
     } finally {
@@ -272,16 +338,17 @@ export default function SettingsPage() {
   }
 
   async function handleSaveWhitelist() {
+    if (whitelist === null || wlLoading || wlSaving) return;
     setWlSaving(true);
     try {
       const res = await fetch("/api/server/mc-whitelist", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...revisionHeaders(wlRevision) },
         body: JSON.stringify(whitelist),
       });
       const data = await res.json();
-      if (res.ok) toast.success("whitelist.json saved. Restart server to apply.");
-      else toast.error(data.error || "Failed to save");
+      if (res.ok) { toast.success("whitelist.json saved. Restart server to apply."); await loadWhitelist(); }
+      else { if (data.stale) { setWhitelist(null); setWlError(data.error); } toast.error(data.error || "Failed to save"); }
     } catch {
       toast.error("Failed to save");
     } finally {
@@ -309,6 +376,17 @@ export default function SettingsPage() {
           <CardTitle>Server Version &amp; Resources</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {configLoading && <p className="text-sm text-muted-foreground">Loading server version…</p>}
+          {configError && (
+            <div role="alert" className="space-y-2">
+              <p className="op-warn text-sm">{configError}</p>
+              <Button variant="outline" disabled={configLoading} onClick={() => {
+                setConfigLoading(true);
+                setConfigError(null);
+                void loadConfig();
+              }}>Retry server version</Button>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-2">
               <Label>Minecraft Version</Label>
@@ -317,6 +395,7 @@ export default function SettingsPage() {
                   something the user was never warned about. */}
               <Select
                 value={config.mcVersion}
+                disabled={configLoading || savedConfig === null || saving}
                 onValueChange={(v) => {
                   setVersionBlock(null);
                   setConfig((p) => ({ ...p, mcVersion: v ?? p.mcVersion }));
@@ -343,6 +422,7 @@ export default function SettingsPage() {
               <Label>Mod Loader</Label>
               <Select
                 value={config.modLoader}
+                disabled={configLoading || savedConfig === null || saving}
                 onValueChange={(v) => {
                   setVersionBlock(null);
                   setConfig((p) => ({ ...p, modLoader: v ?? p.modLoader }));
@@ -402,7 +482,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <Button onClick={() => handleSaveConfig()} disabled={saving}>
+          <Button onClick={() => handleSaveConfig()} disabled={saving || configLoading || savedConfig === null}>
             {saving ? "Saving..." : "Save & Restart Server"}
           </Button>
         </CardContent>
@@ -416,7 +496,7 @@ export default function SettingsPage() {
           <CardTitle>Game Settings (server.properties)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {Object.keys(properties).length === 0 ? (
+          {propsError ? <div role="alert"><p>{propsError}</p><Button onClick={loadProperties}>Retry properties</Button></div> : !propsReady ? <div className="skeleton h-32" /> : Object.keys(properties).length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No server.properties file found. Start the server once to generate it.
             </p>
@@ -509,7 +589,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
               ))}
-              <Button onClick={handleSaveProperties} disabled={propsSaving || dirtyProps.size === 0}>
+              <Button onClick={handleSaveProperties} disabled={!propsReady || propsSaving || dirtyProps.size === 0}>
                 {propsSaving
                   ? "Saving..."
                   : dirtyProps.size === 0
@@ -550,44 +630,58 @@ export default function SettingsPage() {
             Add operators here rather than with <code>/op</code> in the console. Usernames
             are resolved to the UUID Minecraft matches on when you save.
           </p>
+          {opsLoading && <p className="text-sm text-muted-foreground">Loading operators…</p>}
+          {opsError && (
+            <div role="alert" className="space-y-2">
+              <p className="op-warn text-sm">{opsError}</p>
+              <Button variant="outline" disabled={opsLoading} onClick={() => {
+                setOpsLoading(true);
+                setOpsError(null);
+                void loadOps();
+              }}>Retry operators</Button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
-            {ops.map((op) => (
+            {ops?.map((op) => (
               <Badge key={op.uuid || op.name} variant="secondary" className="gap-1.5 py-1.5 px-3">
                 {op.name}
                 <span className="text-[10px] text-muted-foreground ml-1">lvl {op.level}</span>
                 <button
-                  onClick={() => setOps((prev) => prev.filter((o) => o.name !== op.name))}
+                  aria-label={`Remove operator ${op.name}`}
+                  disabled={opsLoading || opsSaving}
+                  onClick={() => { if (!opsLoading && !opsSaving) setOps((prev) => prev?.filter((o) => o.name !== op.name) ?? null); }}
                   className="text-muted-foreground hover:text-destructive ml-1"
                 >
                   x
                 </button>
               </Badge>
             ))}
-            {ops.length === 0 && <p className="text-sm text-muted-foreground">No operators</p>}
+            {ops?.length === 0 && <p className="text-sm text-muted-foreground">No operators</p>}
           </div>
           <div className="flex gap-2">
             <Input
               placeholder="Minecraft username"
+              disabled={ops === null || opsLoading || opsSaving}
               value={newOp}
               onChange={(e) => setNewOp(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && newOp.trim()) {
-                  setOps((prev) => [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
+                if (ops !== null && !opsLoading && !opsSaving && e.key === "Enter" && newOp.trim()) {
+                  setOps((prev) => prev && [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
                   setNewOp("");
                 }
               }}
               className="max-w-xs"
             />
-            <Button variant="outline" onClick={() => {
-              if (newOp.trim()) {
-                setOps((prev) => [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
+            <Button variant="outline" disabled={ops === null || opsLoading || opsSaving} onClick={() => {
+              if (ops !== null && !opsLoading && !opsSaving && newOp.trim()) {
+                setOps((prev) => prev && [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
                 setNewOp("");
               }
             }}>
               Add Op
             </Button>
           </div>
-          <Button onClick={handleSaveOps} disabled={opsSaving}>
+          <Button onClick={handleSaveOps} disabled={ops === null || opsLoading || opsSaving}>
             {opsSaving ? "Saving..." : "Save Ops"}
           </Button>
         </CardContent>
@@ -603,43 +697,57 @@ export default function SettingsPage() {
             Players who can join the server when whitelist is enabled in Game Settings above.
             Usernames are resolved to the UUID Minecraft matches on when you save.
           </p>
+          {wlLoading && <p className="text-sm text-muted-foreground">Loading Minecraft whitelist…</p>}
+          {wlError && (
+            <div role="alert" className="space-y-2">
+              <p className="op-warn text-sm">{wlError}</p>
+              <Button variant="outline" disabled={wlLoading} onClick={() => {
+                setWlLoading(true);
+                setWlError(null);
+                void loadWhitelist();
+              }}>Retry Minecraft whitelist</Button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
-            {whitelist.map((wl) => (
+            {whitelist?.map((wl) => (
               <Badge key={wl.uuid || wl.name} variant="secondary" className="gap-1.5 py-1.5 px-3">
                 {wl.name}
                 <button
-                  onClick={() => setWhitelist((prev) => prev.filter((w) => w.name !== wl.name))}
+                  aria-label={`Remove whitelisted player ${wl.name}`}
+                  disabled={wlLoading || wlSaving}
+                  onClick={() => { if (!wlLoading && !wlSaving) setWhitelist((prev) => prev?.filter((w) => w.name !== wl.name) ?? null); }}
                   className="text-muted-foreground hover:text-destructive ml-1"
                 >
                   x
                 </button>
               </Badge>
             ))}
-            {whitelist.length === 0 && <p className="text-sm text-muted-foreground">No players whitelisted</p>}
+            {whitelist?.length === 0 && <p className="text-sm text-muted-foreground">No players whitelisted</p>}
           </div>
           <div className="flex gap-2">
             <Input
               placeholder="Minecraft username"
+              disabled={whitelist === null || wlLoading || wlSaving}
               value={newWl}
               onChange={(e) => setNewWl(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && newWl.trim()) {
-                  setWhitelist((prev) => [...prev, { name: newWl.trim() }]);
+                if (whitelist !== null && !wlLoading && !wlSaving && e.key === "Enter" && newWl.trim()) {
+                  setWhitelist((prev) => prev && [...prev, { name: newWl.trim() }]);
                   setNewWl("");
                 }
               }}
               className="max-w-xs"
             />
-            <Button variant="outline" onClick={() => {
-              if (newWl.trim()) {
-                setWhitelist((prev) => [...prev, { name: newWl.trim() }]);
+            <Button variant="outline" disabled={whitelist === null || wlLoading || wlSaving} onClick={() => {
+              if (whitelist !== null && !wlLoading && !wlSaving && newWl.trim()) {
+                setWhitelist((prev) => prev && [...prev, { name: newWl.trim() }]);
                 setNewWl("");
               }
             }}>
               Add Player
             </Button>
           </div>
-          <Button onClick={handleSaveWhitelist} disabled={wlSaving}>
+          <Button onClick={handleSaveWhitelist} disabled={whitelist === null || wlLoading || wlSaving}>
             {wlSaving ? "Saving..." : "Save Whitelist"}
           </Button>
         </CardContent>

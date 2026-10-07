@@ -18,8 +18,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { readOperationResponse } from "@/lib/operation-client";
 import { toast } from "sonner";
 import { ModDetailDialog } from "@/components/mod-detail-dialog";
+import { useOperations } from "@/components/operations-provider";
 import type { ModrinthProject } from "@/lib/modrinth";
 
 interface ModCardProps {
@@ -53,6 +55,7 @@ interface Dependency {
 }
 
 export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
+  const { refresh: refreshOperations } = useOperations();
   const [showDetail, setShowDetail] = useState(false);
   const [installing, setInstalling] = useState(false);
   /**
@@ -96,6 +99,7 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
    */
   async function install(allowClientOnly = false) {
     setInstalling(true);
+    const unconfirmed = `The connection ended before ${mod.title}'s install result was confirmed. Check the operation strip before retrying.`;
     try {
       const res = await fetch("/api/mods/install", {
         method: "POST",
@@ -107,31 +111,32 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
           ...(allowClientOnly ? { allowClientOnly: true } : {}),
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await readOperationResponse(res);
 
       if (res.ok) {
         setClientOnlyRefusal(null);
-        // The route's own sentence, not a paraphrase: it carries the caveats — "no checksum
-        // was published, so it could not be verified", and the client-only warning on an
-        // overridden install — and a friendlier local copy would drop exactly those.
-        toast.success(`${mod.title} — ${data.message || "installed"}`);
+        // The registry derives completion and integrity caveats from readback.
         return;
       }
 
       if (res.status === 409 && data.error === "client-only") {
-        setClientOnlyRefusal(data.refusal || data.message || "");
+        setClientOnlyRefusal(typeof data.refusal === "string" ? data.refusal : data.message || "");
         return;
       }
 
       setClientOnlyRefusal(null);
       // `message` first: the incompatible-version 409 puts its explanation there and leaves
       // `error` as the bare code `"incompatible"`.
-      toast.error(data.message || data.error || `Couldn't install ${mod.title}`);
+      if (typeof data.operationId !== "string" || !data.operationId) {
+        if (res.status === 502 || res.status === 504) toast.info(unconfirmed);
+        else toast.error(data.message || data.error || `Couldn't install ${mod.title}`);
+      }
     } catch {
       setClientOnlyRefusal(null);
-      toast.error(`Couldn't reach the server to install ${mod.title}. Nothing was changed.`);
+      toast.info(unconfirmed);
     } finally {
       setInstalling(false);
+      void refreshOperations();
     }
   }
 
@@ -162,7 +167,7 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
       if (deps.length > 0) {
         const pack = modpacks.find((p) => p.id === selectedPack);
         const packModIds = new Set(
-          (pack?.mods || []).map((m: any) => m.modrinthId)
+          (pack?.mods || []).map((m) => m.modrinthId)
         );
         const missing = deps.filter((d) => !packModIds.has(d.modrinthId));
 

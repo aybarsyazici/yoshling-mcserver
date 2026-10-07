@@ -220,7 +220,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
 
           {!collapsed && <p className="eyebrow px-3 pb-1 pt-4 text-muted-foreground">Shared</p>}
           {collapsed && <div className="my-2 border-t border-sidebar-border" />}
-          {SHARED.map((item) => {
+          {SHARED.filter((item) => item.href !== "/whitelist" || can.usersManage).map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href);
             return (
               <NavLink key={item.href} item={item} active={isActive} collapsed={collapsed} tint={meta.tint} onNav={() => setMobileOpen(false)} />

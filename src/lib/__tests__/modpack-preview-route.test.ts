@@ -69,6 +69,11 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/modrinth", () => ({
+  getVersion: vi.fn(async (id: string) => {
+    const pack = versions.find(v => v.dependencies.some(d => d.version_id === id));
+    const dependency = pack?.dependencies.find(d => d.version_id === id);
+    return { id, project_id: dependency?.project_id, game_versions: pack?.game_versions || [], loaders: pack?.loaders || [] };
+  }),
   getProjectVersions: vi.fn(async () => {
     if (versionsThrows) throw new Error("Modrinth unreachable");
     return versions;
@@ -296,7 +301,7 @@ describe("the preview and the import resolve the same build", () => {
     versions = AWKWARD;
     expect((await preview("?modrinthId=abc")).body.versionNumber).toBe("6.6.0");
     expect((await importPack()).body.matchedServerVersion).toBe(true);
-    expect((await importPack()).body.targetMcVersion).toBe("26.1.1");
+    expect((await importPack()).body.targetMcVersion).toBe("26.1.2");
   });
 
   it("agrees that nothing matches when the pack has no build for this server", async () => {

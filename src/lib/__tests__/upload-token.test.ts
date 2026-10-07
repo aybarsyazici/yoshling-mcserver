@@ -29,6 +29,15 @@ afterEach(() => {
 });
 
 describe("upload token", () => {
+  it.each([undefined, "", "dev-secret-change-me"])("refuses token mint and verification without a deployment secret: %s", async (secret) => {
+    const crypto = await import("crypto");
+    const { createUploadToken, verifyUploadToken } = await freshModule(secret);
+    expect(() => createUploadToken("user-123")).toThrow(/configured AUTH_SECRET/);
+    const payload = Buffer.from(JSON.stringify({ u: "user-123", e: Date.now() + 60_000 })).toString("base64url");
+    const sig = crypto.createHmac("sha256", "dev-secret-change-me").update(payload).digest("base64url");
+    expect(verifyUploadToken(`${payload}.${sig}`)).toBeNull();
+  });
+
   it("round-trips the user id it was minted for", async () => {
     const { createUploadToken, verifyUploadToken } = await freshModule("secret-a");
     expect(verifyUploadToken(createUploadToken("user-123"))).toEqual({ userId: "user-123" });
@@ -94,6 +103,7 @@ describe("upload token", () => {
       "no-dot",
       ".",
       "payload.",
+      "payload.signature.extra",
       ".signature",
       "not-base64.not-a-signature",
       // A signature of the right *content* but the wrong length: `timingSafeEqual`

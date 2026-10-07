@@ -59,11 +59,15 @@ export interface ChosenVersion<V> {
  */
 export function chooseModpackVersion<V extends ResolvableVersion>(
   versions: readonly V[],
-  wantMcVersion: string | null
+  wantMcVersion: string | null,
+  wantLoader?: string | null
 ): ChosenVersion<V> {
-  const matching = wantMcVersion
-    ? versions.find((v) => v.game_versions?.includes(wantMcVersion))
-    : undefined;
+  const compatible = wantMcVersion
+    ? versions.filter((v) => v.game_versions?.includes(wantMcVersion))
+    : [];
+  const matching = wantLoader
+    ? compatible.find(v => v.loaders?.some(loader => loader.toLowerCase() === wantLoader.toLowerCase())) ?? compatible[0]
+    : compatible[0];
   const version = matching ?? versions[0] ?? null;
   return { version, matchedServerVersion: Boolean(matching) };
 }
@@ -71,13 +75,7 @@ export function chooseModpackVersion<V extends ResolvableVersion>(
 /** One mod a pack version says it ships. `versionId` is the pin, where there is one. */
 export interface PackDependency {
   projectId: string;
-  /**
-   * `dependencies[].version_id`, which both the import and the apply throw away today —
-   * which is why **566 of 569 production `ModpackMod` rows carry no `versionId`** and an
-   * apply installs the newest build of each mod rather than the pack's. Pinning is a
-   * separate increment; this module surfaces the count so the preview can *say* how much
-   * of the pack is unpinned instead of leaving it silent.
-   */
+  /** Exact build pin, validated/preserved by import and resolved directly on apply/export. */
   versionId: string | null;
 }
 
@@ -86,9 +84,9 @@ export interface PackDependency {
  *
  * A Modrinth modpack version lists its contents as `dependencies`, and only `required`
  * and `embedded` are contents — `optional` and `incompatible` are advice about other
- * mods. A dependency with no `project_id` is a version-only pin we cannot resolve to a
- * project, so it is dropped: the import has always dropped it, and counting it here would
- * make the preview promise a mod the apply will not install.
+ * mods. This list requires a project identity; entries without one are not
+ * returned here. Import explicitly refuses such content requirements instead
+ * of silently saving this shortened list as a complete pack.
  */
 export function modDepsOf(version: ResolvableVersion | null | undefined): PackDependency[] {
   const deps = version?.dependencies ?? [];
@@ -114,10 +112,15 @@ export interface PackNeeds {
  * `Modpack.targetMcVersion` / `targetLoader`, so a preview and the row the apply reads
  * cannot describe the same build differently.
  */
-export function packNeeds(version: ResolvableVersion | null | undefined): PackNeeds {
+export function packNeeds(
+  version: ResolvableVersion | null | undefined,
+  preferred: { mcVersion?: string | null; loader?: string | null } = {}
+): PackNeeds {
   return {
-    mcVersion: version?.game_versions?.[0] || "unknown",
-    loader: version?.loaders?.[0] || "fabric",
+    mcVersion: preferred.mcVersion && version?.game_versions?.includes(preferred.mcVersion)
+      ? preferred.mcVersion : version?.game_versions?.[0] || "unknown",
+    loader: (preferred.loader && version?.loaders?.find(loader => loader.toLowerCase() === preferred.loader!.toLowerCase()))
+      || version?.loaders?.[0] || "fabric",
   };
 }
 

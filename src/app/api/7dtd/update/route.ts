@@ -5,11 +5,13 @@ import { hasPermission } from "@/lib/permissions";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { db } from "@/lib/db";
-import { patchServiceEnv, readCompose, writeCompose } from "@/lib/compose";
-import { containerIsRunning, recreateService } from "@/lib/game-manager";
-import { CoResidencyError, refuseCoResidency } from "@/lib/coresidency";
-import { POWER_RESOURCES, runOperation } from "@/lib/operations";
+import { patchServiceEnv, readCompose, readServiceEnv, writeCompose } from "@/lib/compose";
+import { gameContainerState, recreateService, startGameForOperation, stopGameForOperation } from "@/lib/game-manager";
+import { CoResidencyError } from "@/lib/coresidency";
+import { otherGames, GAMES, type GameId } from "@/lib/games";
+import { claimOperationPower, runOperation } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { gameDataPath } from "@/lib/game-data-path";
 
 // A Vercel-only hint: this deployment runs `node server.js`, so it does nothing here.
 // The real cap is Cloudflare's ~100s origin read timeout. Left as documentation of
@@ -19,25 +21,45 @@ export const maxDuration = 300;
 const execAsync = promisify(exec);
 const CONTAINER = "yoshling-7dtd";
 const APPID = "294420";
-const APPMANIFEST = "/sevendtd-config/steamapps/appmanifest_294420.acf";
+const CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config";
+const stoppedStates = new Set(["exited", "created", "missing"]);
+
+async function refuseRunningPeers(): Promise<void> {
+  const running: GameId[] = [];
+  for (const game of otherGames("7dtd")) {
+    if (!stoppedStates.has(await gameContainerState(game))) running.push(game);
+  }
+  if (running.length) {
+    throw new CoResidencyError(
+      `${running.map((game) => GAMES[game].name).join(" and ")} ${running.length > 1 ? "are" : "is"} active, so the update cannot start 7 Days to Die. Use Power on to switch servers.`,
+      running
+    );
+  }
+}
 
 async function installedBuildId(): Promise<string | null> {
   try {
-    const txt = await import("fs/promises").then((m) => m.readFile(APPMANIFEST, "utf-8"));
+    const file = await gameDataPath(CONFIG_DIR, "steamapps/appmanifest_294420.acf");
+    const txt = await import("fs/promises").then((m) => m.readFile(file, "utf-8"));
     return txt.match(/"buildid"\s+"(\d+)"/)?.[1] ?? null;
   } catch {
     return null;
   }
 }
 
-async function branchInfo(branch: string): Promise<{ buildid: string | null }> {
+async function branchInfo(branch: string): Promise<{ buildid: string | null; error: string | null }> {
   try {
-    const res = await fetch(`https://api.steamcmd.net/v1/info/${APPID}`, { cache: "no-store" });
+    const resolved = branch === "stable" ? "public" : branch;
+    const res = await fetch(`https://api.steamcmd.net/v1/info/${APPID}`, { cache: "no-store", signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`Steam lookup returned ${res.status}`);
     const data = await res.json();
-    const b = data?.data?.[APPID]?.depots?.branches?.[branch];
-    return { buildid: b?.buildid ?? null };
+    const build = data?.data?.[APPID]?.depots?.branches?.[resolved]?.buildid;
+    if ((typeof build !== "string" && typeof build !== "number") || !/^\d+$/.test(String(build))) {
+      throw new Error("Steam did not report a valid build for the configured branch");
+    }
+    return { buildid: String(build), error: null };
   } catch {
-    return { buildid: null };
+    return { buildid: null, error: "The latest Steam build could not be checked" };
   }
 }
 
@@ -62,14 +84,21 @@ export async function GET() {
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
 
-  const env = await containerEnv(CONTAINER);
-  const branch = env.VERSION || "latest_experimental";
-  const [installed, latest] = await Promise.all([installedBuildId(), branchInfo(branch)]);
+  // The created container may still carry the previous branch after a Compose edit.
+  // The explicit update action targets the configured branch, so its lookup must too.
+  let branch: string | null = null;
+  try { branch = readServiceEnv(await readCompose(), "sevendtd", "VERSION"); } catch {}
+  const [installed, latest] = await Promise.all([installedBuildId(), branch
+    ? branchInfo(branch) : Promise.resolve({ buildid: null, error: "The configured Steam branch could not be read" })]);
+  const checked = Boolean(installed && latest.buildid);
   return NextResponse.json({
     branch,
+    resolvedBranch: branch === "stable" ? "public" : branch,
     installedBuildId: installed,
     latestBuildId: latest.buildid,
-    updateAvailable: !!(installed && latest.buildid && installed !== latest.buildid),
+    updateAvailable: checked ? installed !== latest.buildid : null,
+    lookupStatus: checked ? "checked" : "unknown",
+    checkError: latest.error || (!installed ? "The installed Steam build could not be read" : null),
   });
 }
 
@@ -113,38 +142,18 @@ export async function POST() {
         kind: "game.update",
         game: "7dtd",
         title: "Updating 7 Days to Die",
-        resources: POWER_RESOURCES,
+        resources: ["files:7dtd"],
         startedBy: session.user.name ? { name: session.user.name } : null,
       },
       async (op) => {
         const [installedBefore] = await Promise.all([installedBuildId()]);
 
-        /**
-         * Refuse before touching anything if another world holds the box.
-         *
-         * `recreateService("7dtd", { start: true })` below **starts the container** —
-         * that is how `START_MODE=3` gets to run SteamCMD. So this route was a start
-         * path that never evicted: run it while Project Zomboid was up and the box had
-         * two worlds on it, with a green "Update requested" and nothing anywhere saying
-         * so. `POWER_RESOURCES` serialised it; serialising is not evicting.
-         *
-         * It **refuses** rather than evicting, and that asymmetry with `powerOn` is
-         * deliberate. `powerOn` evicts because the user pressed Power on after a dialog
-         * that named the world going down. Nobody pressing "Update" consented to
-         * stopping someone else's game, and doing it anyway would be this codebase's
-         * signature defect — a destructive action reported as a success — wearing a
-         * fix's clothes. See `admitStart`'s `mayEvict` in `lib/coresidency.ts`.
-         *
-         * Inside the operation, not before it, so the refusal is recorded in the ledger
-         * with the blocker named instead of vanishing into a 4-second toast. It runs
-         * after admission, which is safe here precisely because admission holds
-         * `POWER_RESOURCES`: no app path can start a world between this check and the
-         * recreate. The remaining case is an out-of-band `docker start`, which is what
-         * caused the 2026-09-26 overlap and is what the reporting side is for.
-         */
+        // Updates never evict another world. Plan under the target file lane,
+        // then claim power and repeat strict state checks before saving/stopping.
+        // An unavailable state is not evidence that the host or target is stopped.
         op.step("Checking the box has room");
         try {
-          await refuseCoResidency("7dtd", containerIsRunning, "The update");
+          await refuseRunningPeers();
         } catch (e) {
           if (e instanceof CoResidencyError) {
             op.reject(
@@ -157,17 +166,20 @@ export async function POST() {
         }
         op.settle("Nothing else is running");
 
-        op.step("Saving the world");
-        // Best-effort: the server may not be up, and that is not a reason to refuse.
-        let saved = false;
-        try {
-          const { sdtdSaveWorld } = await import("@/lib/telnet");
-          await sdtdSaveWorld();
-          saved = true;
-        } catch {}
-        op.settle(saved ? "Saved the world" : "No running server to save", {
-          kind: saved ? "done" : "noop",
-        });
+        const preflightState = await gameContainerState("7dtd");
+        if (preflightState !== "running" && !stoppedStates.has(preflightState)) {
+          throw new Error(`Cannot update 7 Days to Die while its container is ${preflightState}.`);
+        }
+        claimOperationPower(op);
+        await refuseRunningPeers();
+        const initialState = await gameContainerState("7dtd");
+        if (initialState !== "running" && !stoppedStates.has(initialState)) {
+          throw new Error(`Cannot update 7 Days to Die while its container is ${initialState}.`);
+        }
+        if (initialState === "running") await stopGameForOperation(op, "7dtd");
+        if (!stoppedStates.has(await gameContainerState("7dtd"))) {
+          throw new Error("7 Days to Die was not verified stopped; its update configuration was not changed.");
+        }
 
         // START_MODE=3 is "update, then start". It's a one-shot: flip it in compose,
         // recreate through compose so the container keeps its labels, network alias
@@ -179,27 +191,43 @@ export async function POST() {
         // (that's how the `sevendtd` network alias went missing once before).
         op.step("Requesting the update");
         const before = await readCompose();
-        const version =
-          /VERSION:\s*"?([^"\n]+)"?/
-            .exec(before.slice(before.indexOf("  sevendtd:")))?.[1]
-            ?.trim() ?? "latest_experimental";
+        const version = readServiceEnv(before, "sevendtd", "VERSION");
+        if (!version) throw new Error("The configured 7 Days to Die Steam branch could not be read");
 
         const up = patchServiceEnv(before, "sevendtd", { START_MODE: "3" });
         if (up.applied.length === 0) {
           throw new Error("Couldn't find START_MODE in the sevendtd service");
         }
-        await writeCompose(up.text);
-
         try {
-          await recreateService("7dtd", { start: true });
+          await writeCompose(up.text);
+          if (readServiceEnv(await readCompose(), "sevendtd", "START_MODE") !== "3") {
+            throw new Error("The update mode could not be read back from compose; no container was recreated.");
+          }
+          if (!stoppedStates.has(await gameContainerState("7dtd"))) {
+            throw new Error("7 Days to Die came up before recreation; its container was not replaced.");
+          }
+          await recreateService("7dtd", { start: false });
+          if (!stoppedStates.has(await gameContainerState("7dtd"))) {
+            throw new Error("The recreated update container was not verified stopped.");
+          }
+          if ((await containerEnv(CONTAINER)).START_MODE !== "3") {
+            throw new Error("The recreated container does not report START_MODE=3; the update was not started.");
+          }
+          op.settle("Prepared the stopped container with update mode 3");
+          await refuseRunningPeers();
+          await startGameForOperation(op, "7dtd");
         } finally {
           // Always put it back, even if the recreate failed, so a later start isn't
           // stuck re-running the ~17GB update.
-          await writeCompose(
-            patchServiceEnv(await readCompose(), "sevendtd", { START_MODE: "1" }).text
-          );
+          const normal = patchServiceEnv(await readCompose(), "sevendtd", { START_MODE: "1" });
+          if (!normal.applied.length) throw new Error("Could not restore START_MODE=1 in compose");
+          await writeCompose(normal.text);
+          if (readServiceEnv(await readCompose(), "sevendtd", "START_MODE") !== "1") {
+            throw new Error("START_MODE=1 could not be verified after requesting the update");
+          }
         }
 
+        op.step("Reading the requested build");
         const latest = await branchInfo(version);
         const target = latest.buildid;
         op.settle(
@@ -219,6 +247,10 @@ export async function POST() {
           verdict: "warn",
         });
         op.fact({ label: "Branch", value: version });
+        if (await gameContainerState("7dtd") !== "running") {
+          op.fact({ label: "Power", value: "powered off", verdict: "bad" });
+          throw new Error("7 Days to Die was observed powered off after the update request; the download could not be confirmed running.");
+        }
         return { value: { version, from: installedBefore, to: target } };
       }
     );
@@ -234,9 +266,8 @@ export async function POST() {
     });
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
-    // 409, not 500: nothing broke. Another world holds the box, the request was refused
-    // before anything was touched, and the fix is an action the caller can take — which
-    // is the same shape as every other conflict this app answers with 409.
+    // Another world owns the host. A late refusal can follow stopped-container
+    // preparation, so the error promises only that the update was not started.
     if (e instanceof CoResidencyError) {
       return NextResponse.json(
         { error: e.message, conflict: "coresidency", running: e.running },

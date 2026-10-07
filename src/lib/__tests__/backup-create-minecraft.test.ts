@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "child_process";
-import { mkdir, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
 
@@ -106,6 +106,41 @@ async function manifest(name: string): Promise<Record<string, unknown>> {
 }
 
 describe("a routine Minecraft backup", () => {
+  it("archives actual world files when world is a contained alias", async () => {
+    await put("contained-world/level.dat", "saved world fixture");
+    await symlink("contained-world", path.join(DIRS.mc, "world"));
+    const { backup } = await createBackup("minecraft", { userId: "u1", name: "Tester" });
+    const extracted = path.join(DIRS.root, "readback");
+    await mkdir(extracted);
+    await execFileAsync("tar", ["-xzf", path.join(DIRS.backups, backup.name), "-C", extracted]);
+    expect(await readFile(path.join(extracted, "world", "level.dat"), "utf-8")).toBe("saved world fixture");
+    expect(await members(backup.name)).toEqual(["world"]);
+  });
+
+  it("refuses an out-of-volume world alias before publishing an archive", async () => {
+    const external = path.join(DIRS.root, "outside");
+    await mkdir(external);
+    await writeFile(path.join(external, "fixture.txt"), "outside fixture");
+    await symlink(external, path.join(DIRS.mc, "world"));
+    await expect(createBackup("minecraft", { userId: "u1", name: "Tester" })).rejects.toThrow(
+      "outside the configured game volume"
+    );
+    expect(await readFile(path.join(external, "fixture.txt"), "utf-8")).toBe("outside fixture");
+    expect(await readdir(DIRS.backups).catch(() => [])).toEqual([]);
+  });
+
+  it("refuses escaping links within a world before publishing an archive", async () => {
+    await put("world/level.dat", "saved world");
+    const external = path.join(DIRS.root, "outside.txt");
+    await writeFile(external, "outside fixture");
+    await symlink(external, path.join(DIRS.mc, "world", "escaping.txt"));
+    await expect(createBackup("minecraft", { userId: "u1", name: "Tester" })).rejects.toThrow(
+      "outside the configured game volume"
+    );
+    expect(await readFile(external, "utf-8")).toBe("outside fixture");
+    expect(await readdir(DIRS.backups).catch(() => [])).toEqual([]);
+  });
+
   it("archives world/ and nothing else, even with a full mods directory on disk", async () => {
     await put("world/level.dat", "saved world");
     await put("mods/fabric-api.jar", "a jar nothing is about to delete");

@@ -17,8 +17,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ConfigPanel } from "@/components/config-panel";
-import { installBrowserStubs } from "./helpers/dom";
+import { gamesState, installBrowserStubs } from "./helpers/dom";
 import type { LiveSettings } from "@/lib/live-settings";
+
+vi.mock("@/lib/use-games", async original => ({
+  ...(await original<typeof import("@/lib/use-games")>()),
+  useGames: () => gamesState(),
+}));
 
 beforeAll(() => {
   installBrowserStubs();

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
-import parse from "html-react-parser";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,12 +13,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+type GalleryEntry = string | { url: string; title?: string | null; description?: string | null };
+function galleryUrl(entry: GalleryEntry): string { return typeof entry === "string" ? entry : entry.url; }
+
 interface ModDetail {
   title: string;
   description: string;
   body: string;
   icon_url: string | null;
-  gallery: { url: string; title?: string; description?: string }[];
+  gallery: GalleryEntry[];
   downloads: number;
   followers: number;
   categories: string[];
@@ -50,32 +53,37 @@ function getYoutubeId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-export function ModDetailDialog({ projectId, open, onClose }: Props) {
+export function ModDetailDialog(props: Props) {
+  return <ModDetailSession key={`${props.open ? "open" : "closed"}:${props.projectId ?? ""}`} {...props} />;
+}
+function ModDetailSession({ projectId, open, onClose }: Props) {
   const [detail, setDetail] = useState<ModDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(projectId && open));
+  const [error, setError] = useState<string | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!projectId || !open) {
-      setDetail(null);
-      return;
-    }
-    setLoading(true);
-    fetch(`/api/mods/detail?id=${projectId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.title) setDetail(data);
+    if (!projectId || !open) return;
+    let current = true;
+    fetch(`/api/mods/detail?id=${encodeURIComponent(projectId)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Couldn't read mod details (HTTP ${response.status}).`);
+        const data: unknown = await response.json();
+        if (!isModDetail(data)) throw new Error("The mod detail response is incomplete.");
+        if (current) setDetail(data);
       })
-      .finally(() => setLoading(false));
+      .catch((reason) => { if (current) setError(reason instanceof Error ? reason.message : "Couldn't read mod details."); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
   }, [projectId, open]);
 
   const imageGallery = detail?.gallery.filter((g) => {
-    const url = typeof g === "string" ? g : g.url;
+    const url = galleryUrl(g);
     return !isVideoUrl(url);
   }) || [];
 
   const videoGallery = detail?.gallery.filter((g) => {
-    const url = typeof g === "string" ? g : g.url;
+    const url = galleryUrl(g);
     return isVideoUrl(url);
   }) || [];
 
@@ -108,7 +116,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
             <div className="h-4 w-full bg-muted animate-pulse rounded" />
             <div className="h-40 w-full bg-muted animate-pulse rounded" />
           </div>
-        ) : detail ? (
+        ) : error ? <><DialogTitle>Mod details unavailable</DialogTitle><p role="alert">{error} Close and reopen to retry.</p></> : detail ? (
           <>
             <DialogHeader>
               <div className="flex items-start gap-4">
@@ -187,7 +195,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
                 <p className="text-xs text-muted-foreground mb-2">Screenshots</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {imageGallery.slice(0, 9).map((img, i) => {
-                    const url = typeof img === "string" ? img : img.url;
+                    const url = galleryUrl(img);
                     return (
                       <img
                         key={i}
@@ -208,7 +216,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
                 <p className="text-xs text-muted-foreground mb-2">Videos</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {videoGallery.map((vid, i) => {
-                    const url = typeof vid === "string" ? vid : vid.url;
+                    const url = galleryUrl(vid);
                     const ytId = getYoutubeId(url);
                     return ytId ? (
                       <div key={i} className="aspect-video rounded-xl overflow-hidden border border-border/50">
@@ -273,34 +281,28 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
                 one thing that made the dependency look used. Both are gone with it. */}
             {detail.body && (
               <div className="prose max-w-none border-t border-border/50 pt-4">
-                {detail.body.trim().startsWith("<") ? (
-                  parse(detail.body, {
-                    replace: (domNode: any) => {
-                      if (domNode.type === "tag" && domNode.name === "img" && domNode.attribs?.src) {
-                        return <img src={domNode.attribs.src} alt={domNode.attribs.alt || ""} className="rounded-xl max-w-full" />;
-                      }
-                      if (domNode.type === "tag" && domNode.name === "a" && domNode.attribs?.href) {
-                        return undefined;
-                      }
-                    },
-                  })
-                ) : (
-                  <ReactMarkdown
-                    rehypePlugins={[rehypeRaw]}
-                    components={{
-                      img: ({ src, alt }) => (
-                        <img src={src} alt={alt || ""} className="rounded-xl max-w-full" />
-                      ),
-                      a: ({ href, children }) => (
-                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all inline-flex items-center gap-0.5">
-                          {children}<ExternalIcon />
-                        </a>
-                      ),
-                    }}
-                  >
-                    {detail.body}
-                  </ReactMarkdown>
-                )}
+                {/* Descriptions are upstream content. Parse raw HTML first, then
+                    sanitize the resulting tree before our link/image renderers. */}
+                <ReactMarkdown
+                  rehypePlugins={[rehypeRaw, rehypeSanitize]}
+                  components={{
+                    img: ({ src, alt }) => (
+                      <img src={src} alt={alt || ""} className="rounded-xl max-w-full" />
+                    ),
+                    a: ({ href, children }) => (
+                      <a
+                        href={href?.startsWith("#") && href.length > 1 ? `#${defaultSchema.clobberPrefix ?? ""}${href.slice(1)}` : href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline break-all inline-flex items-center gap-0.5"
+                      >
+                        {children}<ExternalIcon />
+                      </a>
+                    ),
+                  }}
+                >
+                  {detail.body}
+                </ReactMarkdown>
               </div>
             )}
           </>
@@ -344,7 +346,7 @@ export function ModDetailDialog({ projectId, open, onClose }: Props) {
         )}
 
         <img
-          src={getGalleryUrl(typeof imageGallery[lightboxIndex] === "string" ? imageGallery[lightboxIndex] as any : (imageGallery[lightboxIndex] as any).url)}
+          src={getGalleryUrl(galleryUrl(imageGallery[lightboxIndex]))}
           alt=""
           className="w-[95vw] h-[90vh] object-contain"
           onClick={(e) => e.stopPropagation()}
@@ -375,4 +377,14 @@ function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+function isModDetail(value: unknown): value is ModDetail {
+  if (!value || typeof value !== "object") return false;
+  const v = value as ModDetail;
+  return [v.title, v.description, v.body, v.date_created, v.date_modified, v.client_side, v.server_side].every((s) => typeof s === "string") &&
+    [v.icon_url, v.license, v.source_url, v.issues_url, v.wiki_url, v.discord_url].every((s) => s === null || typeof s === "string") &&
+    [v.categories, v.loaders, v.game_versions].every((list) => Array.isArray(list) && list.every((s) => typeof s === "string")) &&
+    Number.isFinite(v.downloads) && Number.isFinite(v.followers) && Array.isArray(v.gallery) &&
+    v.gallery.every((g) => typeof g === "string" || (g && typeof g.url === "string" && (g.title === undefined || g.title === null || typeof g.title === "string") && (g.description === undefined || g.description === null || typeof g.description === "string")));
 }

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import path from "node:path";
 import type { AppliedPack } from "./modpack-applied";
+import { modDirectoryPath, modFilePath } from "./mod-path";
 
 /**
  * **What is installed, decided by the directory and not by memory.**
@@ -181,6 +181,7 @@ export async function reconcileMods(
   modsDir: string,
   opts: {
     hash?: boolean;
+    boundaryRoot?: string;
     actorNames?: Readonly<Record<string, string>>;
     /**
      * The directory reader, for tests only.
@@ -201,7 +202,8 @@ export async function reconcileMods(
 ): Promise<ModInventory> {
   const hash = opts.hash === true;
   const actorNames = opts.actorNames ?? {};
-  const listing = await listModsDir(modsDir, opts.readdirImpl);
+  const directory = await modDirectoryPath(modsDir, opts.boundaryRoot);
+  const listing = await listModsDir(directory, opts.readdirImpl);
 
   const onDisk = new Set(listing.jars);
   const claimed = new Set<string>();
@@ -266,7 +268,14 @@ export async function reconcileMods(
   for (const entry of mods) {
     if (entry.state === "missing") continue;
     if (!measured.has(entry.fileName)) {
-      measured.set(entry.fileName, await measure(path.join(modsDir, entry.fileName), hash));
+      let file: string | null = null;
+      try {
+        file = await modFilePath(modsDir, entry.fileName, { boundaryRoot: opts.boundaryRoot });
+      } catch {
+        // Presence is still the directory reading. An unsafe or unresolvable link
+        // must never be opened for a size/hash; leave those measurements unknown.
+      }
+      measured.set(entry.fileName, file ? await measure(file, hash) : { size: null, sha512: null });
     }
     const m = measured.get(entry.fileName)!;
     entry.sizeBytes = m.size;

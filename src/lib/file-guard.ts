@@ -1,5 +1,6 @@
-import { readFile } from "fs/promises";
+import { lstat, realpath } from "fs/promises";
 import path from "path";
+import { readFileSnapshot } from "@/lib/file-revision";
 
 /**
  * Shared guards for the three file-browser routes (`/api/server/files`,
@@ -49,7 +50,7 @@ export function looksBinary(buf: Buffer): boolean {
 export async function readTextFile(
   fullPath: string
 ): Promise<{ ok: true; content: string } | { ok: false }> {
-  const buf = await readFile(fullPath);
+  const buf = await readFileSnapshot(fullPath);
   if (looksBinary(buf)) return { ok: false };
   return { ok: true, content: buf.toString("utf-8") };
 }
@@ -74,6 +75,86 @@ export function isPathInside(baseDir: string, resolved: string): boolean {
   const target = path.resolve(resolved);
   if (target === base) return true;
   return target.startsWith(base.endsWith(path.sep) ? base : base + path.sep);
+}
+
+interface SafeFilePathOptions {
+  /** Shortcut roots must remain within their trusted game-data root. */
+  boundaryRoot?: string;
+  /** Permit a new file/directory suffix after checking its existing parent tree. */
+  allowMissing?: boolean;
+  /** Reads may list the root; mutations must not replace or remove it. */
+  allowRoot?: boolean;
+  /** DELETE removes a contained final link itself, rather than its destination. */
+  followFinalSymlink?: boolean;
+}
+
+/**
+ * Resolve a browser path inside its configured root, including filesystem links.
+ *
+ * The root is trusted configuration and may itself be a mount or symlink. Every
+ * existing component below it is checked with lstat before resolving links, so a
+ * dangling link cannot masquerade as a legitimate new file. A missing suffix is
+ * admitted only after its existing ancestors passed the physical boundary check.
+ * Operations use the canonical parent tree to avoid following a checked parent
+ * alias again. This is path admission, not a lock against external filesystem moves.
+ */
+export async function resolveSafeFilePath(
+  baseDir: string,
+  requestedPath: unknown,
+  options: SafeFilePathOptions = {}
+): Promise<string | null> {
+  if (typeof requestedPath !== "string" || requestedPath.includes("\0")) return null;
+  if (["..", "~", "node_modules"].some((blocked) => requestedPath.includes(blocked))) {
+    return null;
+  }
+
+  const base = path.resolve(baseDir);
+  const target = path.resolve(base, requestedPath);
+  if (!isPathInside(base, target)) return null;
+  if (options.allowRoot === false && target === base) return null;
+
+  const physicalRoot = await realpath(base);
+  if (options.boundaryRoot) {
+    const boundary = await realpath(options.boundaryRoot);
+    if (!isPathInside(boundary, physicalRoot)) return null;
+  }
+  const relative = path.relative(base, target);
+  if (!relative) return physicalRoot;
+
+  const parts = relative.split(path.sep);
+  let current = physicalRoot;
+  for (let i = 0; i < parts.length; i++) {
+    const candidate = path.join(current, parts[i]);
+    let entry;
+    try {
+      entry = await lstat(candidate);
+    } catch (e) {
+      if (options.allowMissing && (e as NodeJS.ErrnoException).code === "ENOENT") {
+        return path.join(current, ...parts.slice(i));
+      }
+      throw e;
+    }
+
+    if (entry.isSymbolicLink()) {
+      let destination;
+      try {
+        destination = await realpath(candidate);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ELOOP") return null;
+        throw e;
+      }
+      if (!isPathInside(physicalRoot, destination)) return null;
+      if (i === parts.length - 1) {
+        if (options.allowRoot === false && destination === physicalRoot) return null;
+        if (options.followFinalSymlink === false) return candidate;
+      }
+      current = destination;
+    } else {
+      current = candidate;
+    }
+  }
+  return current;
 }
 
 /**

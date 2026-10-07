@@ -1,8 +1,10 @@
-import { writeFile, unlink } from "fs/promises";
-import path from "path";
+import { errorCode } from "./error-details";
+import { readFile, writeFile, unlink } from "fs/promises";
 import { db } from "./db";
 import { getProject, getProjectVersions, type ModrinthFile, type ModrinthVersion } from "./modrinth";
 import { getModsDir } from "./server-manager";
+import { modFilePath } from "./mod-path";
+import { assertFileWriteActive } from "./operations";
 import {
   checkIntegrity,
   digestsOf,
@@ -135,6 +137,8 @@ export async function installMod(params: {
   version: ModrinthVersion;
   userId: string;
   source: ModProvenance;
+  /** Synchronous final admission, after preparatory I/O and directly before write. */
+  beforeWrite?: () => void;
 }): Promise<IntegrityCheck> {
   const { modrinthId, slug, name, version, userId, source } = params;
   const modsDir = getModsDir();
@@ -142,9 +146,15 @@ export async function installMod(params: {
   const file = version.files.find((f) => f.primary) || version.files[0];
   if (!file) throw new Error("No file found for this version");
 
+  await modFilePath(modsDir, file.filename);
   const { buffer, check } = await downloadVerifiedJar(file);
-  const filePath = path.join(modsDir, file.filename);
+  const filePath = await modFilePath(modsDir, file.filename);
+  params.beforeWrite?.();
   await writeFile(filePath, buffer);
+  const written = await readFile(filePath);
+  if (!written.equals(buffer)) {
+    throw new Error("The published mod jar does not match the downloaded bytes. Check the installed files before restarting.");
+  }
 
   await db.installedMod.create({
     data: {
@@ -183,12 +193,13 @@ export async function removeMod(modId: string, userId: string): Promise<void> {
   if (!mod) throw new Error("Mod not found");
 
   const modsDir = getModsDir();
-  const filePath = path.join(modsDir, mod.fileName);
+  const filePath = await modFilePath(modsDir, mod.fileName, { followFinalSymlink: false });
 
   try {
+    assertFileWriteActive();
     await unlink(filePath);
-  } catch (e: any) {
-    if (e.code !== "ENOENT") throw e;
+  } catch (e) {
+    if (errorCode(e) !== "ENOENT") throw e;
   }
 
   await db.installedMod.delete({ where: { id: modId } });
@@ -283,18 +294,19 @@ export async function updateMod(
   const modsDir = getModsDir();
 
   // Remove old file
+  const file = newVersion.files.find((f) => f.primary) || newVersion.files[0];
+  if (!file) throw new Error("No file found for this version");
+  const oldFilePath = await modFilePath(modsDir, mod.fileName, { followFinalSymlink: false });
+  const newFilePath = await modFilePath(modsDir, file.filename);
   try {
-    await unlink(path.join(modsDir, mod.fileName));
-  } catch (e: any) {
-    if (e.code !== "ENOENT") throw e;
+    await unlink(oldFilePath);
+  } catch (e) {
+    if (errorCode(e) !== "ENOENT") throw e;
   }
 
   // Download new file
-  const file = newVersion.files.find((f) => f.primary) || newVersion.files[0];
-  if (!file) throw new Error("No file found for this version");
-
   const { buffer, check } = await downloadVerifiedJar(file);
-  await writeFile(path.join(modsDir, file.filename), buffer);
+  await writeFile(newFilePath, buffer);
 
   await db.installedMod.update({
     where: { id: modId },

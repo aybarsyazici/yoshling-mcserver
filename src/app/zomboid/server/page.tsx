@@ -1,5 +1,6 @@
 "use client";
 
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { useState } from "react";
 import { SectionHeading } from "@/components/ui-bits";
 import { TabBar } from "@/components/tab-bar";
@@ -18,6 +19,7 @@ const TABS = [
 
 export default function ZomboidServerPage() {
   const [tab, setTab] = useState("controls");
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const meta = GAMES.zomboid;
   const tint = meta.tint;
 
@@ -30,13 +32,14 @@ export default function ZomboidServerPage() {
         tint={tint}
       />
 
-      <TabBar tabs={TABS} value={tab} onChange={setTab} tint={tint} />
+      <TabBar tabs={TABS.filter((t) => t.value !== "files" || can.settings)} value={tab} onChange={setTab} tint={tint} />
 
+      {!can.settings && <p className="text-xs text-muted-foreground">Raw server files require settings access.</p>}
       <div className="min-h-[300px]">
         {tab === "controls" && <GameControls game="zomboid" />}
         {tab === "monitor" && <ServerMonitor game="zomboid" />}
         {tab === "console" && <GameConsole game="zomboid" />}
-        {tab === "files" && (
+        {tab === "files" && can.settings && (
           <FileBrowser endpoint={meta.api.files} roots={meta.fileRoots} tint={tint} />
         )}
       </div>

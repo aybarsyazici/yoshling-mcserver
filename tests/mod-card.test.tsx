@@ -7,9 +7,8 @@
  * saved pack and apply the whole pack; it could not install one mod. So the two things this
  * file pins are both "the UI reads what the route already says":
  *
- * 1. the Install button exists, posts the mod, and renders the route's own message — which is
- *    the only thing carrying the "no checksum was published, so it could not be verified"
- *    caveat;
+ * 1. the Install button posts the mod and refreshes the shared operation ledger, which
+ *    owns completion and integrity caveats without a second local success toast;
  * 2. the 409 `{error:"client-only"}` becomes a **dialog** that states the consequence and
  *    offers `allowClientOnly`. Both fields the route sends for this (`serverSide`, `decidedBy`)
  *    and the opt-in itself were unreachable from the dashboard: a refusal with no way through,
@@ -25,15 +24,13 @@ import type { ModrinthProject } from "@/lib/modrinth";
 import { installBrowserStubs } from "./helpers/dom";
 
 /**
- * Stubbed for a mechanical reason, not a behavioural one, and it is the same trap
- * `vitest.config.mts` and `CLAUDE.md` both record: `ModDetailDialog` imports
- * `html-react-parser`, which `require()`s the ESM-only `domhandler`, so on this project's
- * default Node (20.12) merely *importing* `ModCard` dies with `ERR_REQUIRE_ESM` before a
- * single test collects. Nothing below touches the detail dialog — it is a separate surface
- * opened by clicking the card body, and the install action calls `stopPropagation` precisely
- * so the two do not interact.
+ * The former html-react-parser import made this stub necessary on Node 20.12.
+ * The dialog now has its own rendered security coverage. This card suite keeps the
+ * stub to isolate write controls from the separate description fetch/render flow.
  */
 vi.mock("@/components/mod-detail-dialog", () => ({ ModDetailDialog: () => null }));
+const refreshOperations = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("@/components/operations-provider", () => ({ useOperations: () => ({ refresh: refreshOperations }) }));
 
 const toasts: { kind: string; text: string }[] = [];
 vi.mock("sonner", () => ({
@@ -52,6 +49,7 @@ afterEach(() => {
   cleanup();
   toasts.length = 0;
   posts.length = 0;
+  refreshOperations.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -127,6 +125,34 @@ const CLIENT_ONLY_409 = {
 // ── the button that did not exist ───────────────────────────────────────────
 
 describe("a search result installs one mod", () => {
+  it("does not infer install failure from a gateway timeout with no operation receipt", async () => {
+    stubFetch([{ status: 504, body: {} }]);
+    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    install();
+    await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
+    expect(toasts).toEqual([{ kind: "info", text: expect.stringContaining("Check the operation strip before retrying") }]);
+  });
+
+  it("refreshes the ledger instead of duplicating an admitted failure", async () => {
+    stubFetch([{ status: 409, body: { operationId: "install-1", error: "dependency-preflight", message: "Required dependency missing." } }]);
+    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    install();
+    await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
+    expect(toasts).toEqual([]);
+  });
+
+  it("reports an unknown result after a connection failure and refreshes the ledger", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Connection closed"); }));
+    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    install();
+    await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("info");
+    expect(toasts[0].text).toContain("result was confirmed");
+    expect(toasts[0].text).toContain("Check the operation strip before retrying");
+    expect(toasts[0].text).not.toContain("Nothing was changed");
+  });
+
   it("posts the mod to /api/mods/install, with no override", async () => {
     stubFetch([{ body: { success: true, verified: "sha512", message: "Mod installed. Restart server to activate." } }]);
     render(<ModCard mod={SODIUM} canAddToPack canInstall />);
@@ -143,12 +169,10 @@ describe("a search result installs one mod", () => {
   });
 
   /**
-   * The route's own message, not a local paraphrase. It is the only thing carrying the
-   * "nothing was published to check this against" caveat, and a friendlier local sentence
-   * would drop precisely that — which is this repo's named defect class (implying a check
-   * that did not happen).
+   * A successful HTTP response does not choose the registry's outcome: a jar can
+   * be published without a registry checksum. The ledger owns that caveat/tone.
    */
-  it("renders the route's message, including the unverified caveat", async () => {
+  it("leaves an unverified install's completion to the operation ledger", async () => {
     stubFetch([
       {
         body: {
@@ -163,10 +187,8 @@ describe("a search result installs one mod", () => {
     render(<ModCard mod={SODIUM} canAddToPack canInstall />);
     install();
 
-    await waitFor(() => expect(toasts).toHaveLength(1), WAIT);
-    expect(toasts[0].kind).toBe("success");
-    expect(toasts[0].text).toContain("Sodium");
-    expect(toasts[0].text).toContain("no checksum was published, so it could not be verified");
+    await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
+    expect(toasts).toEqual([]);
   });
 
   /**
@@ -289,12 +311,8 @@ describe("the client-only refusal becomes a dialog that offers the override", ()
       allowClientOnly: true,
     });
 
-    // The warning survives the override, which is the whole point of keeping it on the
-    // success path: whoever forced it through is the one person who needs to know the next
-    // boot may be the symptom.
-    await waitFor(() => expect(toasts).toHaveLength(1), WAIT);
-    expect(toasts[0].kind).toBe("success");
-    expect(toasts[0].text).toMatch(/can stop the server from starting/);
+    await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(2), WAIT);
+    expect(toasts).toEqual([]);
     await waitFor(() => expect(clientOnlyDialog()).toBeNull(), WAIT);
   });
 
@@ -319,7 +337,8 @@ describe("the client-only refusal becomes a dialog that offers the override", ()
     stubFetch([{ body: { success: true, verified: "sha512", message: "Mod installed. Restart server to activate." } }]);
     render(<ModCard mod={SODIUM} canAddToPack canInstall />);
     install();
-    await waitFor(() => expect(toasts).toHaveLength(1), WAIT);
+    await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
+    expect(toasts).toEqual([]);
     expect(clientOnlyDialog()).toBeNull();
   });
 });

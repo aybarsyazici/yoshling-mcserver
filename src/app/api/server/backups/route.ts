@@ -1,3 +1,4 @@
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -5,15 +6,14 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { stat, rm, mkdir } from "fs/promises";
 import path from "path";
-import { withGameStopped } from "@/lib/game-manager";
-import { isConflict, conflictResponse, fileLaneBusy } from "@/lib/operation-response";
+import { getMinecraftTarget, withGameStopped } from "@/lib/game-manager";
+import { isConflict, conflictResponse, withGameFileWrite } from "@/lib/operation-response";
 import {
   BadArchiveError,
-  readManifestSidecar,
   removeManifestSidecar,
   safeBackupName,
 } from "@/lib/backup-archive";
-import { archiveResponse, BACKUP_DIRS, listArchives } from "@/lib/backup-store";
+import { archiveResponse, BACKUP_DIRS, listArchives, readBackupManifest } from "@/lib/backup-store";
 import { createBackup, MC_DIR, type McManifest } from "@/lib/backup-create";
 import {
   describeMembers,
@@ -24,6 +24,7 @@ import { integrityFact, verifyArchive } from "@/lib/backup-integrity";
 import { describePolicy, policyFor } from "@/lib/backup-retention";
 import { readJournal, recordBackupEvent } from "@/lib/backup-log";
 import { intervalMsFor, scheduleEnabled } from "@/lib/backup-schedule";
+import { validateMcRollbackMetadata } from "@/lib/mc-rollback-metadata";
 
 // A restore now saves + stops the world, swaps the files and starts it again, so
 // the request lives as long as a graceful stop plus an extract.
@@ -38,14 +39,9 @@ const BACKUP_DIR = BACKUP_DIRS.minecraft;
  */
 const TAR_TIMEOUT_MS = 300_000;
 
-/**
- * Minecraft archives carry no `manifest.json` member — every member is a game directory,
- * `world` and (for the archive `install-modpack` takes) `mods` — so the sidecar is read
- * directly rather than through `readBackupManifest`. Going through that helper would spawn
- * a `tar -xzOf` per archive looking for a member that has never been there.
- */
+/** Sidecars are fast; pack rollback metadata also survives inside downloaded tar files. */
 async function mcManifest(name: string): Promise<McManifest | null> {
-  return readManifestSidecar<McManifest>(path.join(BACKUP_DIR, name));
+  return readBackupManifest<McManifest>(BACKUP_DIR, name);
 }
 
 export async function GET(request: NextRequest) {
@@ -216,14 +212,21 @@ export async function POST(request: NextRequest) {
       // back when they did not.
       let replaced = "";
       let restoredMods = 0;
-      // Read the sidecar before stopping the world: it is where the mod inventory lives, and
-      // a failure to read it must not be discovered halfway through a restore. `null` simply
-      // means "no inventory to put back", which is true of every routine world-only archive.
-      //
-      // `mcManifest`, not `readBackupManifest` — see its docstring: a Minecraft archive has no
-      // in-tar manifest member, so the generic helper would spawn a `tar -xzOf` per archive
-      // hunting for something that has never been there.
-      const manifest = await mcManifest(name).catch(() => null);
+      let inventoryKnown = false;
+      let provenanceRecorded = false;
+      // Resolve and validate recorded metadata before downtime. A missing legacy
+      // inventory or target stays explicitly unknown; a modern archive can recover
+      // its record from manifest.json even if the downloaded tar lost its sidecar.
+      const manifest = await mcManifest(name);
+      validateMcRollbackMetadata(manifest);
+      if (manifest?.minecraftTarget) {
+        const current = await getMinecraftTarget();
+        if (!current || current.mcVersion !== manifest.minecraftTarget.mcVersion ||
+            current.loader !== manifest.minecraftTarget.loader.toLowerCase()) {
+          return NextResponse.json({ error: "This archive records a different Minecraft target. Review and explicitly set the server version/loader before restoring; nothing was replaced.",
+            recordedTarget: manifest.minecraftTarget }, { status: 409 });
+        }
+      }
 
       // A running server holds the world in memory and writes it back on its next
       // autosave, so restoring underneath it changed nothing that survived — and
@@ -258,26 +261,53 @@ export async function POST(request: NextRequest) {
           // filename does not carry a Modrinth project id. Only an archive taken by a modpack
           // apply has them; a routine world-only backup has nothing to say about mods and is
           // left alone.
-          if (result.replaced.includes("mods") && manifest?.installedMods?.length) {
-            const rows = manifest.installedMods;
-            try {
-              await db.installedMod.deleteMany();
-              await db.installedMod.createMany({
-                data: rows.map((m) => ({ ...m, installedBy: session.user.id })),
+          if (result.replaced.includes("mods")) {
+            if (Array.isArray(manifest?.installedMods)) {
+              const rows = manifest.installedMods.map(m => ({
+                ...(m.id ? { id: m.id } : {}),
+                modrinthId: m.modrinthId, slug: m.slug, name: m.name, version: m.version,
+                fileName: m.fileName, mcVersion: m.mcVersion, loader: m.loader,
+                source: m.source ?? null, versionId: m.versionId ?? null,
+                // Legacy absent ownership remains unknown rather than becoming the
+                // current viewer's historical installation attribution.
+                installedBy: m.installedBy ?? "",
+                ...(m.installedAt ? { installedAt: new Date(m.installedAt) } : {}),
+                ...(m.updatedAt ? { updatedAt: new Date(m.updatedAt) } : {}),
+              }));
+              await db.$transaction(async (tx: Pick<typeof db, "installedMod">) => {
+                await tx.installedMod.deleteMany();
+                if (rows.length) await tx.installedMod.createMany({ data: rows });
+                const after = await tx.installedMod.findMany();
+                const project = (m: typeof rows[number]) => ({
+                  modrinthId: m.modrinthId, slug: m.slug, name: m.name, version: m.version,
+                  fileName: m.fileName, mcVersion: m.mcVersion, loader: m.loader,
+                  source: m.source ?? null, versionId: m.versionId ?? null, installedBy: m.installedBy,
+                });
+                const expected = rows.map(project).sort((a, b) => a.fileName.localeCompare(b.fileName));
+                const found: ReturnType<typeof project>[] = after.map(project);
+                found.sort((a, b) => a.fileName.localeCompare(b.fileName));
+                if (JSON.stringify(found) !== JSON.stringify(expected)) throw new Error("Restored mod inventory readback failed; the server remains stopped");
+                for (const wanted of rows) {
+                  const actual = after.find((row: typeof wanted) => row.fileName === wanted.fileName);
+                  if (wanted.id && actual?.id !== wanted.id) throw new Error("Restored inventory identity readback failed");
+                  for (const key of ["installedAt", "updatedAt"] as const) {
+                    if (wanted[key] && actual?.[key]?.getTime() !== wanted[key].getTime()) throw new Error("Restored inventory history readback failed");
+                  }
+                }
               });
               restoredMods = rows.length;
-              op.fact({ label: "Mod inventory", value: `${rows.length} restored` });
-            } catch (e) {
-              // Not fatal: the jars are already back, which is the part that decides whether
-              // the server boots. Say so rather than failing a restore that worked, and name
-              // the recovery — the next reconcile on the Mods page lists them as untracked.
-              op.fact({
-                label: "Mod inventory",
-                value: `not restored — ${(e as Error).message}`,
-                verdict: "bad",
-              });
+              inventoryKnown = true;
+              provenanceRecorded = manifest.installedMods.every(m => Object.hasOwn(m, "source") && Object.hasOwn(m, "versionId") &&
+                Object.hasOwn(m, "installedBy") && Object.hasOwn(m, "installedAt"));
+              op.fact({ label: "Mod inventory", value: `${rows.length} restored and read back` });
+              if (!provenanceRecorded) {
+                op.fact({ label: "Provenance", value: "The archive did not record complete provenance, version pins or installation history", verdict: "warn" });
+              }
+            } else {
+              op.fact({ label: "Mod inventory", value: "Unknown: this archive has no usable recorded inventory", verdict: "warn" });
             }
           }
+          if (!manifest?.minecraftTarget) op.fact({ label: "Recorded target", value: "Unknown: this archive has no usable recorded Minecraft target", verdict: "warn" });
         },
         {
           kind: "backup.restore",
@@ -286,6 +316,13 @@ export async function POST(request: NextRequest) {
           // A half-replaced world is worse than a stopped one: the game would rewrite
           // the mess on its first autosave. Staying down keeps the archive usable.
           restartOnFailure: false,
+          beforeStop: async () => {
+            if (!manifest?.minecraftTarget) return;
+            const actual = await getMinecraftTarget();
+            if (actual.mcVersion !== manifest.minecraftTarget.mcVersion || actual.loader !== manifest.minecraftTarget.loader.toLowerCase()) {
+              throw new Error("The Minecraft target changed before restore admission. No files were replaced or server stopped.");
+            }
+          },
         }
       );
       await recordBackupEvent(
@@ -297,7 +334,10 @@ export async function POST(request: NextRequest) {
         // hours and "did that restore put the mods back" is a question asked later.
         { action: "backup_restore", details: { name, restartedAfter: restarted, replaced } }
       );
-      return NextResponse.json({ success: true, restarted, checksum: integrity.state, replaced, restoredMods });
+      return NextResponse.json({ success: true, restarted, checksum: integrity.state, replaced,
+        restoredMods: inventoryKnown ? restoredMods : null, inventoryKnown, provenanceRecorded,
+        recordedTarget: manifest?.minecraftTarget ?? null,
+      });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
       // A restore that started and did not finish is the single most important thing in
@@ -341,30 +381,32 @@ export async function POST(request: NextRequest) {
     // restore is reading it, or while a create is writing into the same directory. A
     // `backup.restore` declares every `files:` lane, so "never delete the archive an
     // operation is mid-restore from" is this check and not a hope.
-    const laneBusy = fileLaneBusy("minecraft");
-    if (laneBusy) return laneBusy;
+    return withGameFileWrite("minecraft", async () => {
 
-    const target = path.join(BACKUP_DIR, name);
-    try {
-      await stat(target);
-    } catch {
-      return NextResponse.json({ error: "No such backup" }, { status: 404 });
-    }
+      const target = path.join(BACKUP_DIR, name);
+      try {
+        await stat(target);
+      } catch {
+        return NextResponse.json({ error: "No such backup" }, { status: 404 });
+      }
 
-    try {
-      await rm(target);
-      await removeManifestSidecar(target);
-      await recordBackupEvent(
-        "minecraft",
-        "delete",
-        actor,
-        { outcome: "ok", name },
-        { action: "backup_delete", details: { name } }
-      );
-      return NextResponse.json({ success: true });
-    } catch (e) {
-      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
-    }
+      try {
+        assertFileWriteActive();
+        await rm(target);
+        await removeManifestSidecar(target);
+        await recordBackupEvent(
+          "minecraft",
+          "delete",
+          actor,
+          { outcome: "ok", name },
+          { action: "backup_delete", details: { name } }
+        );
+        return NextResponse.json({ success: true });
+      } catch (e) {
+        return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+      }
+
+    });
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });

@@ -1,3 +1,5 @@
+import { SaxesParser } from "saxes";
+
 /**
  * XML attribute escaping for `sdtdserver.xml`.
  *
@@ -44,6 +46,110 @@ export function unescapeXml(s: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
+    .replace(/&#(x[\da-f]+|\d+);/gi, (entity, digits: string) => {
+      const code = digits[0].toLowerCase() === "x" ? parseInt(digits.slice(1), 16) : Number(digits);
+      return code >= 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+        ? String.fromCodePoint(code)
+        : entity;
+    })
     .replace(/&amp;/g, "&");
+}
+
+interface XmlPropertySpan {
+  start: number;
+  end: number;
+}
+
+/** Parse the actual document, excluding comments and refusing duplicate settings. */
+function parseDocument(xml: string) {
+  const parser = new SaxesParser({ xmlns: false });
+  const properties = new Map<string, string>();
+  const spans = new Map<string, XmlPropertySpan>();
+  let depth = 0;
+  let rootEnd = 0;
+  parser.on("doctype", () => { throw new Error("sdtdserver.xml must not contain a DOCTYPE"); });
+  parser.on("opentag", (tag) => {
+    if (depth === 0) {
+      if (tag.name !== "ServerSettings" || tag.isSelfClosing) throw new Error("sdtdserver.xml needs a ServerSettings document");
+      rootEnd = parser.position;
+    } else if (tag.name === "property") {
+      if (depth !== 1 || !tag.isSelfClosing) throw new Error("sdtdserver.xml properties must be direct, self-closing settings");
+      const name = tag.attributes.name;
+      const value = tag.attributes.value;
+      if (typeof name !== "string" || !name || typeof value !== "string") throw new Error("sdtdserver.xml has an incomplete property");
+      if (properties.has(name)) throw new Error(`sdtdserver.xml has duplicate property "${name}"`);
+      properties.set(name, value);
+      spans.set(name, { start: xml.lastIndexOf("<", parser.position - 1), end: parser.position });
+    } else {
+      throw new Error(`sdtdserver.xml has an unexpected element "${tag.name}"`);
+    }
+    depth++;
+  });
+  parser.on("closetag", () => { depth--; });
+  parser.write(xml).close();
+  return { properties, spans, rootEnd };
+}
+
+export function parseSdtdXmlProperties(xml: string): Map<string, string> {
+  return parseDocument(xml).properties;
+}
+
+/** Attribute values are decoded by the parser; help comes from the trailing comment. */
+export function sdtdXmlPropertyRows(xml: string): { name: string; value: string; help: string }[] {
+  const { properties, spans } = parseDocument(xml);
+  return Array.from(properties, ([name, value]) => ({
+    name,
+    value,
+    help: (xml.slice(spans.get(name)!.end).match(/^\s*<!--\s*([\s\S]*?)\s*-->/)?.[1] ?? "").replace(/\s+/g, " ").trim(),
+  }));
+}
+
+/**
+ * Change attribute text at parsed property positions, retaining the rest of the
+ * file byte for byte. Callback replacements keep $&, $$, $1 and $` literal.
+ * Missing keys are normally reported; restore may add deployment keys absent
+ * from an older archive. Parse and compare before handing any new XML to a writer.
+ */
+export function setSdtdXmlProperties(
+  xml: string,
+  updates: Record<string, string>,
+  options: { addMissing?: boolean } = {}
+): { xml: string; applied: string[]; ignored: string[] } {
+  const parsed = parseDocument(xml);
+  const edits: { start: number; end: number; text: string }[] = [];
+  const applied: string[] = [];
+  const ignored: string[] = [];
+  const additions: string[] = [];
+  for (const [name, value] of Object.entries(updates)) {
+    const encoded = escapeXml(value).replace(/\r/g, "&#13;").replace(/\n/g, "&#10;").replace(/\t/g, "&#9;");
+    const span = parsed.spans.get(name);
+    if (span) {
+      const tag = xml.slice(span.start, span.end);
+      const text = tag.replace(/(\svalue\s*=\s*)(["'])([\s\S]*?)\2/, (_match, prefix: string, quote: string) =>
+        `${prefix}${quote}${quote === "'" ? encoded.replace(/'/g, "&apos;") : encoded}${quote}`
+      );
+      edits.push({ ...span, text });
+      applied.push(name);
+    } else if (options.addMissing) {
+      additions.push(`\n  <property name="${escapeXml(name)}" value="${encoded}"/>`);
+      applied.push(name);
+    } else {
+      ignored.push(name);
+    }
+  }
+  let next = xml;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    next = next.slice(0, edit.start) + edit.text + next.slice(edit.end);
+  }
+  if (additions.length) next = next.slice(0, parsed.rootEnd) + additions.join("") + next.slice(parsed.rootEnd);
+  assertSdtdXmlValues(next, Object.fromEntries(applied.map((name) => [name, updates[name]])));
+  return { xml: next, applied, ignored };
+}
+
+/** Values come from a fresh disk read on the writer's success path. Never print secrets. */
+export function assertSdtdXmlValues(xml: string, expected: Record<string, string>): void {
+  const properties = parseSdtdXmlProperties(xml);
+  for (const [name, value] of Object.entries(expected)) {
+    if (properties.get(name) !== value) throw new Error(`Could not verify sdtdserver.xml property "${name}"`);
+  }
 }

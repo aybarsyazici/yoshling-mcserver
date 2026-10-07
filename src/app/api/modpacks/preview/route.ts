@@ -66,7 +66,8 @@ export async function GET(request: NextRequest) {
 
   const { version, matchedServerVersion } = chooseModpackVersion(
     versions,
-    server?.mcVersion ?? null
+    server?.mcVersion ?? null,
+    server?.loader
   );
   if (!version) {
     return NextResponse.json(
@@ -75,7 +76,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const needs = packNeeds(version);
+  const needs = packNeeds(version, server ?? {});
   const deps = modDepsOf(version);
 
   return NextResponse.json({

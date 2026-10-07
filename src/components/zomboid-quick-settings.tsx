@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
+
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { Reveal } from "@/components/motion";
 import { useOperations } from "@/components/operations-provider";
 import { blockedReason, powerBlocker } from "@/lib/operation-ui";
@@ -35,6 +38,10 @@ const FIELDS = [
 ] as const;
 
 export function ZomboidQuickSettings({ tint }: { tint: string }) {
+  const { can } = useGames(CAPABILITY_POLL_MS);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [revision, setRevision] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string> | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -49,44 +56,51 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
   const { operations, elapsedMs } = useOperations();
   const blocker = powerBlocker(operations, "zomboid");
 
-  useEffect(() => {
-    fetch("/api/zomboid/config")
-      .then((r) => r.json())
-      .then((data) => {
-        // `data.error` first. The GET requires `settings.read` now — the `.ini` carries
-        // `Password` and `DiscordToken` — and this read `data.properties ?? []`, so a
-        // refusal rendered as a panel of blank fields with no message at all, while
-        // `config-panel.tsx` next to it toasted the explanation. Blank fields are worse
-        // than an error: they look like a server with no settings.
-        if (data.error) {
-          setWarning(String(data.error));
-          return;
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/zomboid/config", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Couldn't read the server config (HTTP ${res.status}).`);
+      if (!Array.isArray(data?.properties)) throw new Error("The server config response is incomplete.");
+      const found: Record<string, string> = {};
+      for (const p of data.properties) {
+        if (!p || typeof p.name !== "string" || typeof p.value !== "string") throw new Error("The server config response is incomplete.");
+        if (FIELDS.some((f) => f.key === p.name)) {
+          if (p.name in found) throw new Error("The server config response contains duplicate fields.");
+          found[p.name] = p.value;
         }
-        const found: Record<string, string> = {};
-        for (const p of data.properties ?? []) {
-          if (FIELDS.some((f) => f.key === p.name)) found[p.name] = p.value;
-        }
-        setValues(found);
-        setDraft(found);
-        setWarning(data.warning ?? null);
-      })
-      .catch(() => setWarning("Couldn't read the server config."));
+      }
+      if (FIELDS.some((f) => !(f.key in found) || (f.kind === "bool" && !["true", "false"].includes(found[f.key])) ||
+          (f.kind === "number" && !/^\d+$/.test(found[f.key])))) throw new Error("The server config response is incomplete.");
+      setRevision(fileRevision(res));
+      setValues(found); setDraft(found); setLoadError(null);
+      setWarning(typeof data.warning === "string" ? data.warning : null);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Couldn't read the server config.");
+    } finally { setLoading(false); }
   }, []);
+
+  useEffect(() => {
+    // load updates state only after the awaited network read.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (can.settings) void load();
+  }, [can.settings, load]);
 
   const dirty = values ? FIELDS.filter((f) => draft[f.key] !== values[f.key]) : [];
 
   async function save() {
-    if (dirty.length === 0) return;
+    if (!can.settingsEdit || !values || loadError || loading || saving || dirty.length === 0) return;
     setSaving(true);
     try {
       const updates = Object.fromEntries(dirty.map((f) => [f.key, draft[f.key] ?? ""]));
       const res = await fetch("/api/zomboid/config", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...revisionHeaders(revision) },
         body: JSON.stringify({ updates }),
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.stale) setLoadError(data.error);
         toast.error(data.error || "Couldn't save");
         return;
       }
@@ -126,27 +140,28 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
       if (tone === "success") toast.success(message);
       else if (tone === "warning") toast.warning(message);
       else toast.error(message);
+      if (fileRevision(res)) setRevision(fileRevision(res));
+      else await load();
+    } catch {
+      toast.info("The settings save result is unconfirmed. Read the config again before retrying.");
+      setLoadError("The save result could not be confirmed.");
     } finally {
       setSaving(false);
     }
   }
 
-  if (values === null) {
-    return <div className="skeleton h-72 rounded-2xl" />;
-  }
-
-  if (warning) {
-    return (
-      <div className="rounded-2xl bg-card/70 p-6 ring-1 ring-foreground/10 backdrop-blur">
-        <p className="text-sm text-muted-foreground">{warning}</p>
-      </div>
-    );
-  }
+  if (!can.settings) return <p className="text-sm text-muted-foreground">Server settings require settings access.</p>;
+  if (values === null && loading) return <div className="skeleton h-72 rounded-2xl" />;
+  if (values === null) return <div role="alert" className="rounded-2xl bg-card/70 p-6">
+    <p>{loadError}</p><Button onClick={() => { setLoading(true); void load(); }} disabled={loading}>Retry quick settings</Button>
+  </div>;
 
   return (
     <Reveal>
       <div className="space-y-6 rounded-2xl bg-card/70 p-6 ring-1 ring-foreground/10 backdrop-blur">
         <p className="eyebrow text-muted-foreground">Quick settings</p>
+        {loadError && <div role="alert"><p>{loadError} The fields show the last successful read.</p><Button onClick={() => { setLoading(true); void load(); }} disabled={loading}>Retry quick settings</Button></div>}
+        {warning && <p className="text-xs text-chart-5">{warning}</p>}
         <div className="grid gap-5 sm:grid-cols-2">
           {FIELDS.map((f) => (
             <div key={f.key} className="space-y-1.5">
@@ -154,6 +169,7 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
               {f.kind === "bool" ? (
                 <div className="flex h-9 items-center gap-2">
                   <Switch
+                    disabled={!can.settingsEdit || !!loadError || loading}
                     checked={(draft[f.key] ?? "false") === "true"}
                     onCheckedChange={(c) =>
                       setDraft((d) => ({ ...d, [f.key]: c ? "true" : "false" }))
@@ -165,6 +181,7 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
                 </div>
               ) : (
                 <Input
+                  disabled={!can.settingsEdit || !!loadError || loading}
                   type={f.kind === "number" ? "number" : "text"}
                   value={draft[f.key] ?? ""}
                   placeholder={f.key === "Password" ? "No password" : undefined}
@@ -179,7 +196,7 @@ export function ZomboidQuickSettings({ tint }: { tint: string }) {
         <div className="flex flex-wrap items-center gap-3 border-t border-border/50 pt-5">
           <Button
             onClick={save}
-            disabled={saving || dirty.length === 0 || blocker !== undefined}
+            disabled={!can.settingsEdit || !!loadError || loading || saving || dirty.length === 0 || blocker !== undefined}
             style={{ background: tint, color: "var(--background)" }}
           >
             {saving ? "Saving…" : "Save settings"}

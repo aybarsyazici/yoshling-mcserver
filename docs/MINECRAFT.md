@@ -4,9 +4,15 @@ Depth that was accumulating in `CLAUDE.md` with nowhere to go. The shared archit
 memory, versions, `applyServiceEnv`, the operation registry — stays there; this is the
 Minecraft-specific part.
 
-Status: boots and has been exercised end to end. Compose, `ServerConfig.mcVersion` and the
-jars on disk all say **26.1.2**; it starts in `Done (1.661s)!`. **No in-game join has ever
-been observed on netcup** — only a person with the game can prove a client connects.
+Read the current configured version, container state and boot result before a live action.
+Container/RCON checks do not establish a successful client join; live verification gaps
+are in `CLAUDE.md`. Dated boot/version observations are in `MEMORY-HISTORY.md`.
+
+Current player-facing join guidance and installed-mod search/filter contracts are in
+[`FRONTEND.md`](FRONTEND.md). The join target checks configured/created-container agreement,
+keeps version aliases unknown, and does not identify a complete client pack. Inventory
+filters use actual file states and recorded origins; full diagnostics/action counts remain
+based on the whole inventory.
 
 ## Where the files are, and what a live measurement costs
 
@@ -19,15 +25,14 @@ expanding. So `MC_DIR/mods` and `/data/mods` are the same bytes, and `mc-propert
 reasoning about `/data/versions/26.1.2/server-26.1.2.jar` is the *game's* name for a path
 this doc writes as `MC_DIR/versions/…`. `MC_SERVER_DIR` is set in compose, not in `.env`.
 
-**Minecraft is normally stopped** — `exited exit=0`, and on 2026-10-06 only Project Zomboid
-and web were running. So every live figure in this doc was taken while it was deliberately
-up, and re-checking one means starting it again:
+Live figures below are dated observations. Re-checking one requires a running game; Power
+on can stop the currently played world, so read current run state first.
 
 - `docker exec yoshling-mc rcon-cli "<command>"` is the route to anything RCON, and the one
   the 2026-10-02 game-rule write was independently cross-read with (recorded in
-  `CLAUDE.md`'s Status). **RCON 25575 is not published to the host** — the service publishes only
-  `25565:25565` — so `CLAUDE.md`'s note that `scripts/rcon.py` "also works against Minecraft
-  on 25575" holds only from inside the compose network, which is the thing
+  `MEMORY-HISTORY.md`). **RCON 25575 is not published to the host** — the service publishes only
+  `25565:25565` — so `scripts/rcon.py` against Minecraft on 25575 works only from inside
+  the compose network, which is the thing
   `scripts/pz-rcon.sh` handles for PZ. There is no Minecraft equivalent of that wrapper.
 - **The compose *service* is `minecraft`; `mc` is only part of the container and volume
   names** (`yoshling-mc`, `mc-data`). `docker compose up mc` fails with "no such service",
@@ -238,6 +243,15 @@ Three things worth not re-deriving:
   tab" (gone when the page became one surface). Naming a place rather than a control is what
   made the same sentence wrong twice — it says what a set *is* now.
 
+## Mod descriptions
+
+`mod-detail-dialog.tsx` renders both upstream HTML and Markdown through ReactMarkdown,
+raw-markup parsing and `rehype-sanitize` before custom links/images. Scripts, embedded
+frames/documents, event attributes, unsafe URLs and foreign SVG content are excluded;
+allowed tables, images, links, fragments and code blocks remain usable. Treat descriptions
+as untrusted input when extending this renderer. Component regression coverage is in
+`tests/mod-description-security.test.tsx`; it uses local fixtures, not live payloads.
+
 ## Installing one mod
 
 `POST /api/mods/install` + the **Install** button on every search result
@@ -249,7 +263,16 @@ way to put one jar on the server was to make a one-mod pack and apply it, which 
 and deletes every installed mod first. Add-to-pack stays, as the *secondary* action: staging a
 set of mods to apply together is a different job from installing one.
 
-Three things came with the wiring, each closing a gap that was already in the code.
+**Required dependencies are verified before installation.** The route resolves the required
+closure, checks compatible project/build identities, and verifies actual contained installed
+jars against published digests, including exact pins. Missing, incompatible or unverifiable
+requirements produce a named refusal before the requested jar is installed. Legacy inventory
+without a pin is accepted only when its actual digest identifies the required build. Optional,
+embedded and incompatible declarations are not required-install instructions. This is a
+preflight, not automatic dependency installation; the saved-set workflow can stage a complete
+set. The tracked installation reserves the file resource and records its outcome in the shared ledger.
+
+Three things came with the original wiring, each closing a gap that was already in the code.
 
 ### The search facet defaults to the server's own version
 
@@ -276,39 +299,21 @@ mixed every Minecraft version Modrinth publishes into a 26.1.2 Fabric server's r
 
 ### Both single-mod writers now *defer to* `files:minecraft`
 
-`POST /api/mods/install` and `DELETE /api/mods/[id]` took **no resource at all**, while 23
-handlers across 18 other route files already take this lane through `fileLaneBusy`. They could
-therefore interleave with `mods.apply`, which holds the lane for the whole of a 166-mod install
-— a window that opens by deleting *every* installed jar:
+`POST /api/mods/install` is a `mods.install` registry operation holding Minecraft files
+through required-dependency checks, download, physical-path admission, jar publication and
+exact-byte readback. It records checked dependencies and integrity; another ordinary tracked
+file operation must wait or refuse. A power operation, including restore, can preempt it;
+a synchronous guard after preparatory I/O refuses the next publication step. Already in-flight
+filesystem work cannot be interrupted retroactively, and the record keeps that evidence.
+Tracked responses carry `operationId`. ModCard refreshes the shared ledger and lets it
+report completion; pre-admission errors remain local, and the client-only refusal still
+opens its override dialog. A lost response says the result is unconfirmed and directs the
+user to the strip before retrying, rather than claiming no files changed.
 
-- an **install** that lands inside it is not in the apply's plan, so it is not among the files
-  the apply re-downloads, and it survives the wipe: the pack boots with a stranger in it;
-- a **remove** racing the apply's own `removeMod` makes the loser throw (`removeMod` reads the
-  row first and throws `Mod not found` once it is gone), so the apply pushes
-  `"<name>: could not be removed"` into `errors` and names a failure for a jar that *was*
-  deleted. A reported fault that did not happen costs the same to chase as a real one.
-
-Both are sub-second writes, so they enter no operation record of their own — the discipline
-`docs/OPERATIONS.md` sets out for config writers.
-
-**They do not *hold* the lane, and this section said they did.** `fileLaneBusy` calls
-`assertResourceFree`, which only *reads* the live registry and throws if a registered operation
-is holding the resource; it registers nothing. So the guard is **one-directional by design**,
-and that is the documented intent — a sub-second write defers to a long operation, which is what
-the config writers use it for.
-
-What that means for the race above, precisely:
-
-| order | covered? |
-|---|---|
-| the apply is running, then an install/remove arrives | **yes** — 409 naming the lane, nothing written |
-| an install is already in flight when the apply starts | **no** — the apply does not wait for it |
-
-The second case stays open and is cheap to live with: **`/api/mods/installed` now reports a jar
-on disk with no row as `untracked` and names it** — see "What is installed is now a reading"
-below — and a `refuseIfPreempted` call would shorten the window. Saying "neither can interleave"
-was the overstatement — a reviewer disproved it with a direct probe, with an install mid-download
-and an apply started on top.
+`DELETE /api/mods/[id]` uses quiet reservation for its read/delete/readback interval.
+Power/restore can intentionally preempt it; publication and terminal checks preserve that
+uncertainty. Derived mods directories, individual files and inventory readers also use the
+physical game-volume boundary, including existing alias destinations.
 
 ### The client-only refusal is a dialog, with the override
 
@@ -695,26 +700,21 @@ applier's import too now — **if you move a write behind a helper, teach the gu
 helper.** `COVERED_ELSEWHERE` lets a stepped flow be pinned in its own file and asserts that
 file exists, so "covered elsewhere" is checkable rather than a way to silence the guard.
 
-### What was left alone on purpose
+### Current feature limits
 
-- **The nine `Modpack` rows.** Three `(re-imported)` duplicates and one named `a` with four
-  mods and no target version. Not deleted and not hidden: a set with no pinned versions says
-  so, and a set with no target version says so, because both change what Apply would do.
-- **Pinning `ModpackMod.versionId`.** The preview *counts* the unpinned ones; writing the pins
-  is its own increment.
-- **`checkForUpdates()` still has no route**, so there is no "Check updates" control. A button
-  that does nothing is worse than its absence.
-- **No new animation.** This is a dense reading surface and the shared `Reveal` primitive does
-  not consult `usePrefersReducedMotion`, so adding it would be adding motion a reduced-motion
-  user still gets.
-- **No live verification of the page.** Nobody has opened `/minecraft/mods` on the box, and
-  everything above about the rendering is code pinned by tests. **The reading underneath it
-  has been read against production**, though — `GET /api/mods/installed` answered 3 matched /
-  0 untracked / 0 missing with matching hashes (recorded 2026-10-06, see
-  [What is installed](#what-is-installed-is-now-a-reading-not-a-memory--2026-10-02)) — and
-  the header, the five groups and every count on this page come from that one request. So the
-  reconcile is proven against production and only the rendering is not; this bullet said
-  neither was.
+Legacy saved sets may lack targets or pins; their missing evidence remains visible. New
+imports retain validated pins, but do not retrofit old rows or make re-import idempotent.
+Minecraft mod update checking still has no public route. Full page/mobile/keyboard/contrast
+coverage, destructive live pack workflows and actual client joins remain separate checks.
+The dated desktop Firefox audit inspected the Mods page rendering/listings; it did not apply
+or roll back a live pack. Detailed measurements belong in the dated audit and CLOSED.
+
+## Complete import admission
+
+Imports resolve every required/embedded project before the database create. Failed or invalid
+metadata lookup returns 502 with the project identities and saves no shortened pack. Content
+entries lacking a project identity are explicitly refused instead of silently dropped.
+Validated dependency pins are retained; idempotent re-import remains separate feature work.
 
 ## Modpacks — and why we are NOT delegating to the image
 
@@ -759,22 +759,12 @@ author and is frequently wrong, while `version.environment` is derived by Modrin
 sidedness from the API, which is what `mod-admission.ts` already does. The image and
 Pelican's egg both take it from the index.
 
-### And the pinning problem needs no zip reader
+### Dependency pins
 
-The thing our importer actually gets wrong is that it discards data it already has:
-`dependencies[].version_id` is present on **168 of COBBLEVERSE's 186 dependencies** and the
-import throws every one away, which is why **566 of 569 production `ModpackMod` rows are
-unpinned** and "Apply" installs the newest build of each mod rather than the pack.
-
-Two batched calls replace the whole problem — measured 2026-10-02:
-
-| call | result |
-|---|---|
-| `GET /v2/versions?ids=[…]` | 168 pinned versions in **424 ms**, every primary file carrying sha512 |
-| `GET /v2/projects?ids=[…]` | 168 projects in ~0.79 s, 1.5 MB |
-
-That is two requests in place of up to 166 sequential ones, and it removes any need for a
-`.mrpack` zip reader, a central-directory parser, or a schema migration to hold file lists.
+The importer retains validated dependency version IDs and checks their project, loader and
+game compatibility. Apply resolves exact saved pins. Export uses the saved target and pin,
+reports unresolved entries explicitly, and bulk download refuses an incomplete export.
+Legacy packs can still be unpinned; re-import does not retroactively repair stored rows.
 
 ### What we are deliberately not doing, and why
 
@@ -901,20 +891,33 @@ taken while people play can be torn. And nothing archives `config/`, `logs/` or 
 `server.properties` next to them — `mods` was added because it is the directory an apply
 *destroys*, which is a narrower claim than "a Minecraft backup is complete".
 
-**The apply still runs with the world possibly up, and it is the largest open hazard in the
-Minecraft code.** `/api/mods/install-modpack` deletes every jar and writes a new set under a
-live JVM, then tells the user to restart. Measured against the route: it is **not** wrapped
-in `withGameStopped`; its `runOperation({kind: "mods.apply"})` takes the default resources
-for that kind, which are `["files:minecraft"]` and **not** `power`, so a Power on can start
-the world in the middle of it; and it calls `refuseIfPreempted` **zero** times, against ten
-call sites in `backup-create.ts` (two of it, eight of `refuseIfPreemptedEarly`; counted
-2026-10-06). On Linux a running JVM keeps the descriptors for jars that have been unlinked,
-so the server goes on serving the set it loaded at boot while the directory it will load next
-already says something else — a divergence nothing on screen names, and nothing forces the
-restart that ends it. What it should be is
-`withGameStopped(…, {restartOnFailure: false})` — a half-replaced mod set booted is worse
-than a stopped world — claiming `power` alongside the file lane. Also in `CLAUDE.md`'s
-"Genuinely open" list; this is the depth for it.
+**Pack application now holds a tracked file preflight and claims power before lifecycle changes.**
+No-source and client-only refusals finish before stopping, archiving or taking power. A running
+Minecraft is asked to save and verified stopped before the rollback archive and jar replacement;
+a failed save remains a warning in the operation record.
+A previously stopped world stays stopped. Only a complete, error-free replacement can restart
+a previously running world, with co-residency refusal and terminal state readback. Partial
+replacement, failed backup/stop/start, or unknown state cannot report a successful restart.
+Pre-emption guards stop further destructive steps; `claimOperationPower` keeps one operation
+record without invalidating unrelated backups for a refused plan.
+
+The rollback archive carries `world`/`mods` where present plus portable in-tar metadata.
+Inventory includes explicit empty sets, source/version IDs, original ownership/timestamps
+and the verified configured/applied target. Restore validates before downtime, refuses
+explicit target mismatch, transactionally replaces/reads back rows, and labels missing legacy
+metadata unknown. It never silently changes the server version.
+Pack switches preflight and snapshot every active jar, including untracked jars, remove all
+admitted active jars, preserve inactive files, and compare the resulting names/digests before
+restart. A stale DB mirror or unverified configured/applied target refuses before replacement.
+Source members and traversed links are admitted against the Minecraft volume; contained
+top-level aliases are staged as actual data under the original member names. Restore
+admits every staged source and live destination before replacement. Final destination or
+staging links are unlinked themselves so their contained targets survive. Nested contained
+links remain inert archive entries; they are not a promise to archive unrelated target trees.
+The direct-download branch uses the same mod path guard and exact jar readback as the
+ordinary installer before recording success.
+The local regression tests drive real temp directories and tar with fake Docker/RCON edges;
+production deployment and a live pack exercise are still separate verification.
 
 ## Bans
 
@@ -1130,14 +1133,14 @@ behaviour, and no refusal dressed up as a warning.
 
 ### The hazard the warning has to carry
 
-**Minecraft worlds do not downgrade.** The live server runs **26.1.2**; `COBBLEVERSE` publishes
-only **1.21.1** and `Hoplite` only up to **1.21.11**. Switching down to play one of them will
+**Minecraft worlds do not downgrade.** The dated design example compared Minecraft **26.1.2**
+with `COBBLEVERSE` **1.21.1** and `Hoplite` **1.21.11**. Recheck actual world/server/pack
+targets before planning a switch. Switching to an older version can
 very likely leave the existing world unopenable — that is Minecraft's save format, not anything
 this app does, and no amount of care in the apply changes it.
 
-Note what that means for the increment that pins pack versions: pinning makes a 166-mod pack
-install *the pack*, but the only two large packs saved here still cannot run on 26.1.2. Pinning
-is worth doing on its own merits; this flow is what makes those two packs reachable at all.
+New imports retain validated dependency pins. That does not make an incompatible pack
+compatible with the current target; confirmed target switching remains separate feature work.
 
 ### What already exists — do not rebuild these
 
@@ -1177,7 +1180,5 @@ field shape the client-only 409 had before it got a dialog. The increment is:
    unopenable" is the honest sentence, and it belongs next to the confirm button, not in a
    paragraph above it.
 
-**Pair it with the pinning increment** (`dependencies[].version_id`, discarded at import today,
-566 of 569 rows unpinned). Switching the server to 1.21.1 and then installing the newest build
-of each of a pack's 166 mods is not installing the pack, and the version switch is the thing
-that makes the mismatch *not* catch it.
+The future switch flow must retain the exact imported dependency pins. Legacy unpinned sets
+need explicit resolution rather than silently selecting newest builds after a target switch.

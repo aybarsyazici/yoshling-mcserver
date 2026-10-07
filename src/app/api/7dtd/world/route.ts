@@ -1,19 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
-import { hasPermission } from "@/lib/permissions";
+import { canAccessGame, hasPermission, isRole } from "@/lib/permissions";
+import { isWhitelisted } from "@/lib/whitelist";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdir, rm, readdir, readFile, stat } from "fs/promises";
+import { lstat, mkdir, rm, readdir, readFile, stat } from "fs/promises";
 import { randomUUID } from "crypto";
 import path from "path";
 import { db } from "@/lib/db";
 import { verifyUploadToken } from "@/lib/upload-token";
-import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
-import { conflictResponse, isConflict } from "@/lib/operation-response";
-import { unsafeZipPaths, zipMemberNames } from "@/lib/file-guard";
+import { assertFileWriteActive, runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
+import { conflictResponse, isConflict, withGameFileWrite } from "@/lib/operation-response";
+import { resolveSafeFilePath, unsafeZipPaths, zipMemberNames } from "@/lib/file-guard";
+import { checkUploadTree } from "@/lib/upload-tree-guard";
+import { gameDataPath } from "@/lib/game-data-path";
+import { parseSdtdXmlProperties } from "@/lib/sdtd-xml";
 import { formatBytes } from "@/lib/format";
 import { MAX_WORLD_UPLOAD_BYTES, MAX_WORLD_UPLOAD_LABEL } from "@/lib/sdtd-upload-limits";
+import { admitZipExpansion, runBoundedExtraction, UploadExpansionError } from "@/lib/upload-expansion";
 import {
   SAVE_MARKERS,
   WORLD_MARKERS,
@@ -62,11 +67,14 @@ export const maxDuration = 300;
  * name, not the extracted directory these use. An argv array spawns no shell.
  */
 const execFileAsync = promisify(execFile);
+function assertUploadActive(op: OpHandle): void {
+  if (op.preempted) throw new Error("The upload was interrupted by a power operation. No further files will be placed; changes may already have occurred. Inspect the world's files before retrying.");
+}
 const SAVES_DIR = process.env.SDTD_SERVER_DIR || "/sevendtd"; // = .local/share/7DaysToDie
 const WORLDS_DIR = path.join(SAVES_DIR, "GeneratedWorlds");
 const SAVES_ROOT = path.join(SAVES_DIR, "Saves");
 const SDTD_CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config";
-const TMP_DIR = "/app/data/tmp";
+const TMP_DIR = process.env.SDTD_UPLOAD_TMP_DIR || "/app/data/tmp";
 // Shared with the uploader card so the browser refuses what the server would refuse —
 // and set to what Caddy will actually carry. See `src/lib/sdtd-upload-limits.ts`.
 const MAX_BYTES = MAX_WORLD_UPLOAD_BYTES;
@@ -137,18 +145,20 @@ async function verifyPlacement(
  * `GameWorld` alone, which is the right question for a **map** under `GeneratedWorlds`
  * and the wrong one for a **save** under `Saves/` -- a save upload named
  * `Reveo Valley/Fresh2` is the live save, and the old save branch would have overwritten
- * it without asking. Returns null when the file can't be read, in which case every
- * caller treats "unknown" as "not protected" exactly as it did before.
+ * it without asking. A missing first-install config has no configured identity;
+ * refused aliases, unreadable files and invalid XML must block destructive work.
  */
 async function liveSaveIds(): Promise<{ world: string; game: string } | null> {
   try {
-    const xml = await readFile(path.join(SDTD_CONFIG_DIR, "sdtdserver.xml"), "utf-8");
-    const world = xml.match(/<property\s+name="GameWorld"\s+value="([^"]*)"/i)?.[1] ?? "";
-    const game = xml.match(/<property\s+name="GameName"\s+value="([^"]*)"/i)?.[1] ?? "";
+    const xml = await readFile(await gameDataPath(SDTD_CONFIG_DIR, "sdtdserver.xml"), "utf-8");
+    const properties = parseSdtdXmlProperties(xml);
+    const world = properties.get("GameWorld") ?? "";
+    const game = properties.get("GameName") ?? "";
     if (!world && !game) return null;
     return { world, game };
-  } catch {
-    return null;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
   }
 }
 
@@ -172,12 +182,10 @@ async function protectedWorldReason(
   mode: "delete" | "replace" = "delete"
 ): Promise<string | null> {
   // 1) the world the server is configured to load (sdtdserver.xml GameWorld).
-  try {
-    const cur = (await liveSaveIds())?.world;
-    if (cur && cur === name) {
-      return `"${name}" is the server's current world. Switch Game World to something else first.`;
-    }
-  } catch {}
+  const cur = (await liveSaveIds())?.world;
+  if (cur && cur === name) {
+    return `"${name}" is the server's current world. Switch Game World to something else first.`;
+  }
 
   // 2) a backup bundles this map, so swapping it out would leave that backup's
   //    saves paired with different terrain.
@@ -195,11 +203,15 @@ async function protectedWorldReason(
 }
 
 // Stock worlds ship inside the server files (Navezgane, Pregen*, …).
-const STOCK_WORLDS_DIR = path.join(SDTD_CONFIG_DIR, "Data", "Worlds");
-
-async function listDirs(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+async function listDirs(root: string, relative: string): Promise<string[]> {
+  const dir = await gameDataPath(root, relative);
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
 }
 
 // Returns the uploaded custom worlds AND the full set of worlds the server can
@@ -210,8 +222,14 @@ export async function GET() {
   if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
-  const generated = await listDirs(WORLDS_DIR);
-  const stock = await listDirs(STOCK_WORLDS_DIR);
+  let generated: string[];
+  let stock: string[];
+  try {
+    generated = await listDirs(SAVES_DIR, "GeneratedWorlds");
+    stock = await listDirs(SDTD_CONFIG_DIR, path.join("Data", "Worlds"));
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message || "World listing failed" }, { status: 500 });
+  }
   // "RWG" = generate a random world at runtime; always a valid option.
   const all = Array.from(new Set(["RWG", ...stock, ...generated])).sort((a, b) =>
     a === "RWG" ? -1 : b === "RWG" ? 1 : a.localeCompare(b)
@@ -230,6 +248,11 @@ export async function POST(request: NextRequest) {
   let userId: string | null = null;
   const session = await auth();
   if (session?.user) {
+    const denied = denyGame(session, "7dtd");
+    if (denied) {
+      for (const [key, value] of Object.entries(cors)) denied.headers.set(key, value);
+      return denied;
+    }
     if (!hasPermission(session.user.role, "world.upload")) {
       return json(
         { error: "Replacing a world or a save needs the admin or moderator role." },
@@ -241,7 +264,19 @@ export async function POST(request: NextRequest) {
     const token = request.headers.get("x-upload-token");
     const verified = verifyUploadToken(token);
     if (!verified) return json({ error: "Unauthorized" }, 401);
-    userId = verified.userId;
+    // A signature proves who minted the token, not that their grants still hold.
+    // Re-read the user just as the session JWT callback does: demotion, revoked
+    // world access and deleted users take effect before this request reads a body.
+    const user = await db.user.findUnique({
+      where: { id: verified.userId },
+      select: { id: true, role: true, games: true, discordId: true },
+    });
+    if (!user) return json({ error: "Unauthorized" }, 401);
+    if (!isRole(user.role) || !canAccessGame(user.role, user.games, "7dtd") || !hasPermission(user.role, "world.upload") ||
+        !(await isWhitelisted(user.discordId))) {
+      return json({ error: "No permission to upload to this server" }, 403);
+    }
+    userId = user.id;
   }
 
   // Refuse an oversized body *before* reading a byte of it. This used to be
@@ -375,6 +410,7 @@ async function placeUpload(
         destPath: zipPath,
         maxBytes: MAX_BYTES,
         onProgress: (bytes) => {
+          assertUploadActive(op);
           // Throttled: a 2 GB upload is ~32k chunks and the ledger only needs a line
           // that visibly moves. `detail`, not `progress`, because the only total
           // available is `Content-Length` — which includes the envelope and is the
@@ -405,7 +441,8 @@ async function placeUpload(
     }
     op.settle(`Wrote the upload to disk — ${formatBytes(bytesWritten)}`);
 
-    // Validate + list contents (also rejects non-zips / zip bombs early).
+    // Compressed transfer size, declared expansion and observed extraction are
+    // separate budgets. Keep disk headroom before starting the subprocess.
     op.step("Checking the upload");
     const { stdout: listing, stderr: listErr } = await execFileAsync("unzip", ["-l", zipPath], {
       maxBuffer: 16 * 1024 * 1024,
@@ -413,6 +450,14 @@ async function placeUpload(
     if (unsafeZipPaths(listing, listErr)) {
       op.reject("Rejected the upload — it contains unsafe paths");
       return { value: json({ error: "Zip contains unsafe paths" }, 400) };
+    }
+    try {
+      const expansion = await admitZipExpansion(listing, TMP_DIR);
+      op.fact({ label: "Declared expansion", value: `${formatBytes(expansion.bytes)} / ${expansion.entries.toLocaleString()} entries` });
+    } catch (e) {
+      if (!(e instanceof UploadExpansionError)) throw e;
+      op.reject(`Rejected the upload — ${e.message}`);
+      return { value: json({ error: e.message }, e.status) };
     }
     const shape = classifyZipListing(listing);
     const looksWorld = shape === "world";
@@ -438,16 +483,30 @@ async function placeUpload(
     op.step("Unpacking the upload");
     await rm(workDir, { recursive: true, force: true });
     await mkdir(workDir, { recursive: true });
-    const { stderr: unzipErr } = await execFileAsync("unzip", ["-o", "-q", zipPath, "-d", workDir], {
-      maxBuffer: 16 * 1024 * 1024,
-      timeout: 240000,
-    });
+    let unzipErr: string;
+    try {
+      const expanded = await runBoundedExtraction("unzip", ["-o", "-q", zipPath, "-d", workDir], {
+        workDir, checkInterrupted: () => assertUploadActive(op),
+      });
+      unzipErr = expanded.stderr;
+      op.fact({ label: "Actual expansion", value: `${formatBytes(expanded.bytes)} / ${expanded.entries.toLocaleString()} entries` });
+    } catch (e) {
+      if (!(e instanceof UploadExpansionError)) throw e;
+      op.reject(`Rejected the upload — ${e.message}`);
+      return { value: json({ error: e.message }, e.status) };
+    }
     // The extraction is where Info-ZIP actually announces a strip, and it announces it on
     // stderr. Nothing has been placed yet — the `finally` below removes `workDir` — so
     // refusing here still leaves the box untouched.
     if (unsafeZipPaths("", unzipErr)) {
       op.reject("Rejected the upload — it contains unsafe paths");
       return { value: json({ error: "Zip contains unsafe paths" }, 400) };
+    }
+    const tree = await checkUploadTree(workDir);
+    if (!tree.ok) {
+      const reason = `Zip contains a ${tree.kind}: "${tree.entry}". Uploads may contain only directories and regular files.`;
+      op.reject(`Rejected the upload — ${reason}`);
+      return { value: json({ error: reason }, 400) };
     }
     op.settle(`Unpacked ${entryCount.toLocaleString()} files`, {
       count: { done: entryCount, noun: "files" },
@@ -456,6 +515,7 @@ async function placeUpload(
     // Find the folder that actually contains the world/save markers (handles a
     // wrapping top-level folder in the zip).
     const rootDir = await findContentRoot(workDir, looksWorld ? WORLD_MARKERS : SAVE_MARKERS);
+    assertUploadActive(op);
 
     let installedAs: string;
     let kind: "world" | "save";
@@ -488,7 +548,11 @@ async function placeUpload(
         };
       }
       const worldName = target.name;
-      const dest = target.dest;
+      const dest = await resolveSafeFilePath(SAVES_DIR, target.dest, { allowMissing: true, allowRoot: false });
+      if (!dest) {
+        op.reject("Refused to place the world — the destination contains an unsafe filesystem link");
+        return { value: json({ error: "World destination contains an unsafe filesystem link. Nothing was replaced." }, 400) };
+      }
       // Installing over an existing world deletes it, so refuse the same worlds
       // DELETE refuses rather than silently taking out a map in use.
       // "replace", not "delete": an upload of the same name may replace terrain a
@@ -502,7 +566,9 @@ async function placeUpload(
       op.step("Placing the world");
       replacedExisting = await stat(dest).then(() => true).catch(() => false);
       await mkdir(WORLDS_DIR, { recursive: true });
+      assertUploadActive(op);
       await rm(dest, { recursive: true, force: true });
+      assertUploadActive(op);
       await execFileAsync("mv", [rootDir, dest]);
       installedAs = worldName;
       placedPath = dest;
@@ -560,7 +626,11 @@ async function placeUpload(
       }
       const worldName = target.world;
       const gameName = target.game;
-      const dest = target.dest;
+      const dest = await resolveSafeFilePath(SAVES_DIR, target.dest, { allowMissing: true, allowRoot: false });
+      if (!dest) {
+        op.reject("Refused to place the save — the destination contains an unsafe filesystem link");
+        return { value: json({ error: "Save destination contains an unsafe filesystem link. Nothing was replaced." }, 400) };
+      }
 
       // Refuse to overwrite the save the server is configured to play. `protectedWorldReason`
       // guards `GameWorld` only, which is the right question for a map and the wrong one
@@ -577,9 +647,11 @@ async function placeUpload(
       op.step("Placing the save");
       replacedExisting = await stat(dest).then(() => true).catch(() => false);
       await mkdir(path.dirname(dest), { recursive: true });
+      assertUploadActive(op);
       await rm(dest, { recursive: true, force: true });
       // `mv` the directory itself, not `cp -a <dir>/.` of its contents — that is what
       // flattened the save into `Saves/` and chowned `Saves/` to root.
+      assertUploadActive(op);
       await execFileAsync("mv", [rootDir, dest]);
       installedAs = gameName;
       installedUnder = worldName;
@@ -607,7 +679,9 @@ async function placeUpload(
     // against a scratch tree to confirm BusyBox accepts them and that `u+rwX,go+rX` turns
     // 0600/0700 into 0644/0755.
     op.step("Handing the files to the game's user");
+    assertUploadActive(op);
     await execFileAsync("chown", ["-R", `${SDTD_UID}:${SDTD_GID}`, placedPath]);
+    assertUploadActive(op);
     await execFileAsync("chmod", ["-R", "u+rwX,go+rX", placedPath]);
     op.settle(`Set ownership to ${SDTD_UID}:${SDTD_GID}`);
 
@@ -631,6 +705,7 @@ async function placeUpload(
       });
     } catch {}
 
+    assertUploadActive(op);
     return {
       facts: [
         {
@@ -688,39 +763,62 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
-  const name = new URL(request.url).searchParams.get("name") || "";
-  if (!name || name.includes("/") || name.includes("..")) {
-    return NextResponse.json({ error: "Invalid world name" }, { status: 400 });
-  }
+  return withGameFileWrite("7dtd", async () => {
+    const name = new URL(request.url).searchParams.get("name") || "";
+    if (!name || name.includes("/") || name.includes("..")) {
+      return NextResponse.json({ error: "Invalid world name" }, { status: 400 });
+    }
 
-  const target = path.join(WORLDS_DIR, name);
-  // Must be an existing custom world (only GeneratedWorlds is deletable).
-  try {
-    const st = await stat(target);
-    if (!st.isDirectory()) throw new Error();
-  } catch {
-    return NextResponse.json({ error: "That custom world doesn't exist (stock worlds can't be deleted)." }, { status: 404 });
-  }
+    let target: string;
+    let saveTarget: string;
+    try {
+      // Admit both removals before either can mutate. A contained final link is removed
+      // itself; intermediate aliases use their checked canonical parent tree.
+      target = await gameDataPath(SAVES_DIR, path.join("GeneratedWorlds", name), {
+        allowRoot: false, followFinalSymlink: false,
+      });
+      saveTarget = await gameDataPath(SAVES_DIR, path.join("Saves", name), {
+        allowRoot: false, followFinalSymlink: false,
+      });
+      const blocked = await protectedWorldReason(name);
+      if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message || "World deletion was refused" }, { status: 500 });
+    }
+    // Must be an existing custom world (only GeneratedWorlds is deletable).
+    try {
+      const st = await stat(target);
+      if (!st.isDirectory()) throw new Error();
+    } catch {
+      return NextResponse.json({ error: "That custom world doesn't exist (stock worlds can't be deleted)." }, { status: 404 });
+    }
 
-  // Never the active world, never one a backup depends on.
-  const blocked = await protectedWorldReason(name);
-  if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
-
-  try {
-    await rm(target, { recursive: true, force: true });
-    // Also drop its Saves/ progress for that world so nothing dangles.
-    await rm(path.join(SAVES_DIR, "Saves", name), { recursive: true, force: true }).catch(() => {});
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "delete_file",
-        details: JSON.stringify({ game: "7dtd", deletedWorld: name }),
-      },
-    }).catch(() => {});
-    return NextResponse.json({ success: true });
-  } catch (e) {
-    return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
-  }
+    try {
+      assertFileWriteActive();
+      await rm(target, { recursive: true, force: true });
+      // Also drop its Saves/ progress for that world so nothing dangles.
+      assertFileWriteActive();
+      await rm(saveTarget, { recursive: true, force: true });
+      for (const removed of [target, saveTarget]) {
+        try {
+          await lstat(removed);
+          throw new Error("A removed world path still exists; deletion could not be verified");
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        }
+      }
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: "delete_file",
+          details: JSON.stringify({ game: "7dtd", deletedWorld: name }),
+        },
+      }).catch(() => {});
+      return NextResponse.json({ success: true });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
+    }
+  });
 }
 
 /** Walk down into single-child wrapper folders until we find the markers. */

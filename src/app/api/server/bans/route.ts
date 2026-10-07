@@ -1,8 +1,9 @@
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite } from "@/lib/operation-response";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { containerIsRunning } from "@/lib/game-manager";
 import { sendCommand, sendCommandLong } from "@/lib/rcon";
@@ -41,6 +42,7 @@ import {
   type BanlistReply,
 } from "@/lib/mc-bans";
 import { readFile, writeFile } from "fs/promises";
+import { gameDataPath } from "@/lib/game-data-path";
 import path from "path";
 
 /**
@@ -94,8 +96,8 @@ import path from "path";
  */
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-const PLAYERS_FILE = path.join(MC_DIR, "banned-players.json");
-const IPS_FILE = path.join(MC_DIR, "banned-ips.json");
+const PLAYERS_FILE = "banned-players.json";
+const IPS_FILE = "banned-ips.json";
 
 /**
  * Generous, because `ban <name>` resolves the name through the profile cache and falls back
@@ -136,7 +138,7 @@ interface BanFiles {
  */
 async function readBanFile(file: string): Promise<string> {
   try {
-    return await readFile(file, "utf-8");
+    return await readFile(await gameDataPath(MC_DIR, file), "utf-8");
   } catch (e) {
     if ((e as { code?: string }).code === "ENOENT") return "[]";
     throw e;
@@ -162,7 +164,8 @@ async function readBanFiles(): Promise<BanFiles> {
  * ops and whitelist routes make, for the same reason.
  */
 async function writeBanFile(file: string, json: string): Promise<void> {
-  await writeFile(file, json, "utf-8");
+  assertFileWriteActive();
+  await writeFile(await gameDataPath(MC_DIR, file), json, "utf-8");
 }
 
 /**
@@ -335,112 +338,113 @@ async function applyBanChange(
   // properties, ops and whitelist writers use. It matters on *both* paths: a restore
   // would overwrite a file written through it, and an RCON ban issued mid-restore talks
   // to a server that is about to be stopped and have its save replaced.
-  const laneBusy = fileLaneBusy("minecraft");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("minecraft", async () => {
 
-  const checked = checkBanTarget(input.kind, input.target);
-  if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 });
-  const { kind, target } = checked;
+    const checked = checkBanTarget(input.kind, input.target);
+    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 });
+    const { kind, target } = checked;
 
-  /**
-   * Two signals, and the RCON one decides.
-   *
-   * A live RCON socket is proof the game is up; `containerIsRunning` is a report, and
-   * `containerState` answers `"missing"` for any `docker inspect` failure — so routing on
-   * docker alone can send a write to a file that a running game will overwrite.
-   *
-   * The reply itself is deliberately **not** kept as a "before" state. It would be the cheap
-   * way to decide a no-op, and it would be the wrong one: it is read before the command and
-   * the question is what is true after. `classifyBanReply` cross-checked against the
-   * read-back is what answers that, and the probe's only job is "did anything answer".
-   *
-   * Concurrent here, unlike the two `banlist` reads in the GET, and for a reason rather than
-   * by accident: these are two different subsystems — one forks `docker inspect`, the other
-   * opens a socket — so neither queues behind the other and there is no shared client for
-   * them to race on.
-   */
-  const [running, probe] = await Promise.all([
-    containerIsRunning("minecraft").catch(() => false),
-    readBanlist(kind),
-  ]);
-  const routing = routeBanChange({ containerRunning: running, rconAnswering: probe !== null });
+    /**
+     * Two signals, and the RCON one decides.
+     *
+     * A live RCON socket is proof the game is up; `containerIsRunning` is a report, and
+     * `containerState` answers `"missing"` for any `docker inspect` failure — so routing on
+     * docker alone can send a write to a file that a running game will overwrite.
+     *
+     * The reply itself is deliberately **not** kept as a "before" state. It would be the cheap
+     * way to decide a no-op, and it would be the wrong one: it is read before the command and
+     * the question is what is true after. `classifyBanReply` cross-checked against the
+     * read-back is what answers that, and the probe's only job is "did anything answer".
+     *
+     * Concurrent here, unlike the two `banlist` reads in the GET, and for a reason rather than
+     * by accident: these are two different subsystems — one forks `docker inspect`, the other
+     * opens a socket — so neither queues behind the other and there is no shared client for
+     * them to race on.
+     */
+    const [running, probe] = await Promise.all([
+      containerIsRunning("minecraft").catch(() => false),
+      readBanlist(kind),
+    ]);
+    const routing = routeBanChange({ containerRunning: running, rconAnswering: probe !== null });
 
-  // Container up, game silent. The one tempting thing — write the file — is the write
-  // that disappears, so this refuses and says so instead of falling back.
-  if (routing.path === "refuse") {
-    return NextResponse.json({ error: routing.error }, { status: 503 });
-  }
-
-  const result =
-    routing.path === "rcon"
-      ? await applyViaRcon(action, kind, target, input.reason, running)
-      : await applyViaFile(action, kind, target, input.reason, session.user.name);
-
-  if ("response" in result) return result.response;
-
-  const outcome: BanOutcome = {
-    action,
-    kind,
-    target,
-    path: routing.path,
-    verified: result.verified,
-    contradicted: result.contradicted,
-    noop: result.noop,
-  };
-  const message = banMessage(outcome);
-
-  // Only a confirmed change is logged. `docs/OPERATIONS.md`: a caller that writes the
-  // row regardless "reintroduces a log of things that did not happen".
-  if (result.verified && !result.noop) {
-    try {
-      await db.activity.create({
-        data: {
-          userId: session.user.id,
-          action: action === "ban" ? "ban_add" : "ban_remove",
-          details: JSON.stringify({
-            game: "minecraft",
-            kind,
-            target,
-            via: routing.path,
-            ...(action === "ban" ? { reason: sanitizeBanReason(input.reason) } : {}),
-          }),
-        },
-      });
-    } catch (e) {
-      // The change already landed; failing the response would invite a retry that
-      // double-bans. Log rather than swallow — "who banned me" is a question this log
-      // has to answer.
-      console.error("[mc-bans] activity log failed", e);
+    // Container up, game silent. The one tempting thing — write the file — is the write
+    // that disappears, so this refuses and says so instead of falling back.
+    if (routing.path === "refuse") {
+      return NextResponse.json({ error: routing.error }, { status: 503 });
     }
-  }
 
-  let files: BanFiles | null = null;
-  try {
-    files = await readBanFiles();
-  } catch {
-    // The lists are a convenience for the page, not the outcome. A read failure here
-    // must not turn a verified ban into an error.
-  }
+    const result =
+      routing.path === "rcon"
+        ? await applyViaRcon(action, kind, target, input.reason, running)
+        : await applyViaFile(action, kind, target, input.reason, session.user.name);
 
-  const body = {
-    ...outcome,
-    message,
-    why: routing.why,
-    reply: result.reply ?? null,
-    players: files ? withCreatedIso(files.players.entries) : null,
-    ips: files ? withCreatedIso(files.ips.entries) : null,
-  };
+    if ("response" in result) return result.response;
 
-  /**
-   * **Non-2xx for anything not confirmed**, on purpose. A 200 whose body carries
-   * `verified: false` relies on every present and future caller remembering to read that
-   * field, and "reports success after doing nothing" is this project's recurring defect.
-   * A no-op is a 200: nothing changed, and that is the honest, intended answer.
-   */
-  if (!result.verified) {
-    return NextResponse.json({ ...body, error: message }, { status: 500 });
-  }
-  return NextResponse.json({ ...body, success: true });
+    const outcome: BanOutcome = {
+      action,
+      kind,
+      target,
+      path: routing.path,
+      verified: result.verified,
+      contradicted: result.contradicted,
+      noop: result.noop,
+    };
+    const message = banMessage(outcome);
+
+    // Only a confirmed change is logged. `docs/OPERATIONS.md`: a caller that writes the
+    // row regardless "reintroduces a log of things that did not happen".
+    if (result.verified && !result.noop) {
+      try {
+        await db.activity.create({
+          data: {
+            userId: session.user.id,
+            action: action === "ban" ? "ban_add" : "ban_remove",
+            details: JSON.stringify({
+              game: "minecraft",
+              kind,
+              target,
+              via: routing.path,
+              ...(action === "ban" ? { reason: sanitizeBanReason(input.reason) } : {}),
+            }),
+          },
+        });
+      } catch (e) {
+        // The change already landed; failing the response would invite a retry that
+        // double-bans. Log rather than swallow — "who banned me" is a question this log
+        // has to answer.
+        console.error("[mc-bans] activity log failed", e);
+      }
+    }
+
+    let files: BanFiles | null = null;
+    try {
+      files = await readBanFiles();
+    } catch {
+      // The lists are a convenience for the page, not the outcome. A read failure here
+      // must not turn a verified ban into an error.
+    }
+
+    const body = {
+      ...outcome,
+      message,
+      why: routing.why,
+      reply: result.reply ?? null,
+      players: files ? withCreatedIso(files.players.entries) : null,
+      ips: files ? withCreatedIso(files.ips.entries) : null,
+    };
+
+    /**
+     * **Non-2xx for anything not confirmed**, on purpose. A 200 whose body carries
+     * `verified: false` relies on every present and future caller remembering to read that
+     * field, and "reports success after doing nothing" is this project's recurring defect.
+     * A no-op is a 200: nothing changed, and that is the honest, intended answer.
+     */
+    if (!result.verified) {
+      return NextResponse.json({ ...body, error: message }, { status: 500 });
+    }
+    return NextResponse.json({ ...body, success: true });
+
+  });
 }
 
 type ChangeResult =
@@ -460,6 +464,7 @@ async function applyViaRcon(
 
   let reply: string;
   try {
+    assertFileWriteActive();
     reply = await sendCommand(command, BAN_RCON_TIMEOUT_MS);
   } catch (e) {
     /**

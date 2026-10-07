@@ -23,9 +23,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * deliberately **not** mocked: the hash comparison under test is the real one.
  */
 
-const writeFile = vi.fn(async () => {});
+let persisted: Buffer = Buffer.alloc(0);
+const writeFile = vi.fn(async (_path: string, bytes: Buffer) => { persisted = bytes; });
+const readFile = vi.fn(async () => persisted);
 const unlink = vi.fn(async () => {});
-vi.mock("fs/promises", () => ({ writeFile, unlink }));
+vi.mock("fs/promises", () => ({ readFile, writeFile, unlink }));
 
 const create = vi.fn(async () => ({}));
 const activityCreate = vi.fn(async () => ({}));
@@ -38,6 +40,9 @@ const getProjectVersions = vi.fn();
 vi.mock("../modrinth", () => ({ getProject, getProjectVersions }));
 
 vi.mock("../server-manager", () => ({ getModsDir: () => "/mods" }));
+// This suite isolates integrity/provenance. Real directory/link admission runs
+// through the manager in mod-path-producers.test.ts without this I/O boundary stub.
+vi.mock("../mod-path", () => ({ modFilePath: async (dir: string, name: string) => `${dir}/${name}` }));
 
 const { ModIntegrityError, downloadVerifiedJar, installMod, serverSideFor } = await import(
   "../mod-manager"
@@ -73,6 +78,9 @@ function file(hashes: { sha1?: string; sha512?: string }, size?: number) {
 
 beforeEach(() => {
   writeFile.mockClear();
+  readFile.mockClear();
+  readFile.mockImplementation(async () => persisted);
+  persisted = Buffer.alloc(0);
   unlink.mockClear();
   create.mockClear();
   activityCreate.mockClear();
@@ -149,6 +157,16 @@ describe("downloadVerifiedJar refuses bytes that are not what was published", ()
 });
 
 describe("installMod never leaves a corrupt jar behind", () => {
+  it("records no success when published bytes fail readback", async () => {
+    serving(JAR);
+    readFile.mockResolvedValueOnce(Buffer.from("different published bytes"));
+    await expect(installMod({
+      modrinthId: "AAAA", slug: "thing", name: "Thing", source: "manual", userId: "u1",
+      version: { version_number: "1", game_versions: ["26.1.2"], loaders: ["fabric"], files: [file({ sha512: REAL.sha512 })] } as never,
+    })).rejects.toThrow("published mod jar");
+    expect(create).not.toHaveBeenCalled();
+    expect(activityCreate).not.toHaveBeenCalled();
+  });
   /**
    * The guarantee stated at the level that matters: on a hash mismatch **nothing is
    * written and nothing is recorded**. `mod-verify-before-write.test.ts` proves the check

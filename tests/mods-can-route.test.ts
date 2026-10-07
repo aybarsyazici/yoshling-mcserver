@@ -109,7 +109,14 @@ describe("the two mods flags are on the wire", () => {
     // every existing reader depends on has to come back unchanged.
     role = "MOD";
     expect(Object.keys(await can()).sort()).toEqual(
-      ["modsInstall", "modsRemove", "restart", "settings", "start", "stop"].sort()
+      ["modsInstall", "modsRemove", "restart", "settings", "start", "stop", "settingsEdit", "consoleExecute", "filesDelete", "usersManage"].sort()
     );
+  });
+});
+
+describe("privileged frontend capabilities", () => {
+  it.each(["ADMIN", "MOD", "MEMBER"] as Role[])("projects %s from the actual policy table", async (r) => {
+    role = r;
+    expect(await can()).toMatchObject({ settingsEdit: r !== "MEMBER", consoleExecute: r !== "MEMBER", filesDelete: r !== "MEMBER", usersManage: r === "ADMIN" });
   });
 });

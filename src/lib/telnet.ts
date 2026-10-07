@@ -1,11 +1,12 @@
 import net from "net";
+import { randomUUID } from "node:crypto";
 
 /**
  * Minimal telnet client for the 7 Days to Die dedicated server control port
  * (default 8081). We connect per-request because 7DTD's telnet is chatty and
  * long-lived sockets drift; a short-lived session is more robust.
  *
- * IMPORTANT: always send `exit` before closing so 7DTD tears the connection
+ * Authenticated sessions send `exit` before closing so 7DTD tears the connection
  * down cleanly. Just dropping the socket makes the server log a noisy
  * "IOException ... socket has been shut down" for every probe — which, at our
  * status-poll rate, floods the game console.
@@ -17,7 +18,7 @@ const PASSWORD = process.env.SDTD_TELNET_PASSWORD || "yoshlingcontrol";
 
 interface TelnetOpts {
   timeoutMs?: number;
-  /** How long the socket may stay quiet before we consider the reply done. */
+  /** Grace after a complete framed response, never a replacement for completion. */
   idleMs?: number;
 }
 
@@ -29,91 +30,107 @@ interface TelnetOpts {
  */
 export function telnetSession(commands: string[], opts: TelnetOpts = {}): Promise<string> {
   const { timeoutMs = 6000, idleMs = 400 } = opts;
-
+  if (!commands.length || commands.some(command => !command.trim() || /[\r\n\0]/.test(command) || command.length > 1000)) {
+    return Promise.reject(new Error("Expected one or more single-line telnet commands"));
+  }
+  // An unknown command with an unpredictable name is a reply fence. Its complete
+  // rejection line proves the server processed the preceding command queue; silence
+  // alone never proves completion. Semantic readers still validate their own output.
+  const fence = `__yoshling_done_${randomUUID().replaceAll("-", "")}`;
   return new Promise((resolve, reject) => {
     const socket = new net.Socket();
-    let buffer = "";
-    let authed = false;
-    let started = false;
-    const queue = [...commands];
+    let login = "";
+    let output = "";
+    let passwordSent = false;
+    let authenticated = false;
+    let fenced = false;
     let idleTimer: NodeJS.Timeout | null = null;
     let settled = false;
-
-    const finish = (fn: () => void) => {
+    const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(hardTimeout);
       if (idleTimer) clearTimeout(idleTimer);
-      try {
-        // Ask the server to close the session cleanly, then end our side.
-        socket.write("exit\r\n");
-      } catch {}
-      socket.end();
-      socket.destroy();
-      fn();
+      if (authenticated && !socket.destroyed) {
+        socket.end("exit\r\n");
+        socket.destroySoon();
+      } else socket.destroy();
+      if (error) reject(error);
+      else resolve(output);
     };
-
-    const hardTimeout = setTimeout(() => finish(() => resolve(buffer)), timeoutMs);
+    const hardTimeout = setTimeout(() => finish(new Error(
+      authenticated ? "Telnet command completion timed out; the command may have executed, but its result is unconfirmed" : "Telnet authentication timed out"
+    )), timeoutMs);
     hardTimeout.unref?.();
-
-    const sendNext = () => {
-      if (queue.length === 0) {
-        // small grace for the last reply, then close cleanly
-        setTimeout(() => {
-          clearTimeout(hardTimeout);
-          finish(() => resolve(buffer));
-        }, idleMs);
-        return;
-      }
-      const cmd = queue.shift()!;
-      socket.write(`${cmd}\r\n`);
-    };
-
-    const bumpIdle = () => {
+    const complete = () => {
+      if (!fenced) return;
+      if (commands.some(command => !knownReplyComplete(command, output))) return;
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => sendNext(), idleMs);
+      idleTimer = setTimeout(() => finish(), idleMs);
       idleTimer.unref?.();
     };
-
     socket.setEncoding("utf-8");
-    socket.connect(PORT, HOST);
-
-    socket.on("connect", () => {
-      // If no password prompt appears, start sending shortly regardless.
-      setTimeout(() => {
-        if (!started && !authed) {
-          started = true;
-          sendNext();
-        }
-      }, 600);
-    });
-
     socket.on("data", (chunk: string) => {
-      buffer += chunk;
-
-      if (!authed && /password:/i.test(buffer)) {
-        socket.write(`${PASSWORD}\r\n`);
-        authed = true;
-        buffer = "";
+      if (settled) return;
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      if (!authenticated) {
+        login += chunk;
+        if (/password incorrect|too many failed login attempts|authentication failed|access denied|login failed/i.test(login)) {
+          finish(new Error("Telnet authentication was rejected"));
+          return;
+        }
+        if (!passwordSent && /(?:please enter )?password\s*:/i.test(login)) {
+          passwordSent = true;
+          login = "";
+          socket.write(`${PASSWORD}\r\n`);
+          return;
+        }
+        if (passwordSent && /Logon successful\./i.test(login)) {
+          authenticated = true;
+          login = "";
+          socket.write(`${commands.join("\r\n")}\r\n${fence}\r\n`);
+        }
         return;
       }
-      if (authed && !started && /(Logon successful|Press 'help')/i.test(buffer)) {
-        started = true;
-        buffer = "";
-        sendNext();
-        return;
+      output += chunk;
+      if (output.length > 4 * 1024 * 1024) { finish(new Error("Telnet reply exceeded the response limit")); return; }
+      const lines = output.split(/\r?\n/);
+      const fenceLine = lines.findIndex((line, index) => index < lines.length - 1 && line.includes(fence) && /unknown command/i.test(line));
+      if (fenceLine >= 0) {
+        fenced = true;
+        // Keep only output before the fence. Execution log echoes of our internal
+        // marker are transport framing, not the requested command's result.
+        output = lines.slice(0, fenceLine).filter(line => !line.includes(fence)).join("\n");
       }
-      if (started) bumpIdle();
+      const completeOutput = fenced ? output : lines.slice(0, -1).join("\n");
+      if (telnetReplyRejected(completeOutput)) { finish(new Error("Telnet command was rejected; inspect the command and server state")); return; }
+      complete();
     });
-
-    socket.on("error", (err) => {
-      clearTimeout(hardTimeout);
-      finish(() => reject(err));
-    });
+    socket.on("error", error => finish(error));
     socket.on("close", () => {
-      clearTimeout(hardTimeout);
-      finish(() => resolve(buffer));
+      if (settled) return;
+      if (fenced && commands.every(command => knownReplyComplete(command, output))) finish();
+      else finish(new Error(authenticated
+        ? "Telnet closed before complete command replies were confirmed; the result is unconfirmed"
+        : "Telnet closed before authentication completed"));
     });
+    socket.connect(PORT, HOST);
   });
+}
+
+export function telnetReplyRejected(out: string): boolean {
+  return /(?:^|\n)\s*(?:\*{3}\s*)?(?:ERROR|ERR)\s*:|unknown command|command[^\n]*(?:not found|not allowed|not permitted)|permission denied|access denied|password incorrect|authentication failed|too many failed login attempts/i.test(out);
+}
+
+/** Known reads/saves require their terminal semantic marker as well as framing. */
+function knownReplyComplete(command: string, output: string): boolean {
+  switch (command.trim().toLowerCase()) {
+    case "listplayers": return /Total of \d+ in the game/i.test(output);
+    case "gettime": return /Day\s+\d+,\s*[\d:]+/i.test(output);
+    case "version": return /Game version:\s*V[^\n]+/i.test(output);
+    case "saveworld": return /\bWorld saved\b/i.test(output);
+    default: return output.trim().length > 0;
+  }
 }
 
 // Four wrappers used to sit here — `telnetCommand`, `telnetReachable`,
@@ -167,14 +184,13 @@ export function parsePlayers(out: string, maxPlayers: number): SdtdPlayers {
  * bar vanished at the same moment, on the one game that has never had an observed
  * in-game join.
  *
- * The marker is the game's own error string, deliberately. Readiness must NOT be made to
- * depend on `gettime`'s output *format* (`time !== null`): a future change to how 7DTD
- * prints the day would then pin the server at "Starting…" forever, which is a worse
- * failure than the one being fixed.
+ * Correction: rejecting only that error still accepted authentication denial and
+ * partial probes as a ready game. Readiness now requires complete known player/time/
+ * version output. A changed reply format is unconfirmed, not invented readiness.
  */
 export function sdtdSessionIsGameReady(out: string): boolean {
-  if (!out) return false;
-  return !/can only be executed when a game is started/i.test(out);
+  if (!out || telnetReplyRejected(out)) return false;
+  return /Total of \d+ in the game/i.test(out) && /Day\s+\d+,\s*[\d:]+/i.test(out) && /Game version:\s*V[^\n]+/i.test(out);
 }
 
 /**

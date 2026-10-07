@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { db } from "@/lib/db";
-import { installedModIds, readModState, splitList, writeModState } from "@/lib/zomboid";
+import { iniPath, installedModIds, readModState, splitList, writeModState } from "@/lib/zomboid";
 
 /**
  * Project Zomboid mods live in the server .ini, in two lists that have to agree:
@@ -158,81 +158,83 @@ export async function GET() {
   const gate = await gameGate("zomboid");
   if (!gate.ok) return gate.response;
 
-  let state;
-  try {
-    state = await readModState();
-  } catch {
-    return NextResponse.json({
-      mods: [],
-      orphanModIds: [],
-      warning:
-        "The Project Zomboid config file isn't there yet — start the server once to generate it.",
-    });
-  }
+  return revisionRead(() => iniPath(), async () => {
+    let state;
+    try {
+      state = await readModState();
+    } catch {
+      return NextResponse.json({
+        mods: [],
+        orphanModIds: [],
+        warning:
+          "The Project Zomboid config file isn't there yet — start the server once to generate it.",
+      });
+    }
 
-  type CachedMod = { id: string; title: string; modIds: string; previewUrl: string | null };
-  const cached: CachedMod[] = await db.zomboidMod
-    .findMany({
-      where: { id: { in: state.workshopIds } },
-      select: { id: true, title: true, modIds: true, previewUrl: true },
-    })
-    .catch(() => []);
-  const byId = new Map(cached.map((m) => [m.id, m]));
-
-  // Only ask Steam about items we've never seen before; the cache covers the rest.
-  const unknown = state.workshopIds.filter((id) => !byId.has(id));
-  const fetched = await fetchWorkshopDetails(unknown);
-
-  const enabled = new Set(state.modIds);
-  const claimed = new Set<string>();
-
-  const mods = await Promise.all(
-    state.workshopIds.map(async (id) => {
-      const row = byId.get(id);
-      const detail = fetched.get(id);
-      const onDisk = await installedModIds(id);
-      // On-disk names are authoritative; fall back to the cache, then to what
-      // the Workshop description advertised.
-      const provides = dedupe(
-        onDisk.length > 0 ? onDisk : splitList(row?.modIds ?? "").concat(detail?.describedModIds ?? [])
-      );
-      provides.forEach((m) => claimed.add(m));
-
-      return {
-        workshopId: id,
-        title: row?.title || detail?.title || "",
-        previewUrl: row?.previewUrl ?? detail?.previewUrl ?? null,
-        provides,
-        enabled: provides.filter((m) => enabled.has(m)),
-        downloaded: onDisk.length > 0,
-      };
-    })
-  );
-
-  // Remember anything Steam just told us, so the next load is offline-friendly.
-  for (const id of unknown) {
-    const detail = fetched.get(id);
-    if (!detail?.ok) continue;
-    const provides = mods.find((m) => m.workshopId === id)?.provides ?? [];
-    await db.zomboidMod
-      .upsert({
-        where: { id },
-        update: { title: detail.title, previewUrl: detail.previewUrl, modIds: provides.join(";") },
-        create: {
-          id,
-          title: detail.title,
-          previewUrl: detail.previewUrl,
-          modIds: provides.join(";"),
-        },
+    type CachedMod = { id: string; title: string; modIds: string; previewUrl: string | null };
+    const cached: CachedMod[] = await db.zomboidMod
+      .findMany({
+        where: { id: { in: state.workshopIds } },
+        select: { id: true, title: true, modIds: true, previewUrl: true },
       })
-      .catch(() => {});
-  }
+      .catch(() => []);
+    const byId = new Map(cached.map((m) => [m.id, m]));
 
-  return NextResponse.json({
-    mods,
-    // Mod ids loaded from `Mods=` that no Workshop item accounts for — usually a
-    // hand-edited entry or a mod dropped straight into the mods folder.
-    orphanModIds: state.modIds.filter((m) => !claimed.has(m)),
+    // Only ask Steam about items we've never seen before; the cache covers the rest.
+    const unknown = state.workshopIds.filter((id) => !byId.has(id));
+    const fetched = await fetchWorkshopDetails(unknown);
+
+    const enabled = new Set(state.modIds);
+    const claimed = new Set<string>();
+
+    const mods = await Promise.all(
+      state.workshopIds.map(async (id) => {
+        const row = byId.get(id);
+        const detail = fetched.get(id);
+        const onDisk = await installedModIds(id);
+        // On-disk names are authoritative; fall back to the cache, then to what
+        // the Workshop description advertised.
+        const provides = dedupe(
+          onDisk.length > 0 ? onDisk : splitList(row?.modIds ?? "").concat(detail?.describedModIds ?? [])
+        );
+        provides.forEach((m) => claimed.add(m));
+
+        return {
+          workshopId: id,
+          title: row?.title || detail?.title || "",
+          previewUrl: row?.previewUrl ?? detail?.previewUrl ?? null,
+          provides,
+          enabled: provides.filter((m) => enabled.has(m)),
+          downloaded: onDisk.length > 0,
+        };
+      })
+    );
+
+    // Remember anything Steam just told us, so the next load is offline-friendly.
+    for (const id of unknown) {
+      const detail = fetched.get(id);
+      if (!detail?.ok) continue;
+      const provides = mods.find((m) => m.workshopId === id)?.provides ?? [];
+      await db.zomboidMod
+        .upsert({
+          where: { id },
+          update: { title: detail.title, previewUrl: detail.previewUrl, modIds: provides.join(";") },
+          create: {
+            id,
+            title: detail.title,
+            previewUrl: detail.previewUrl,
+            modIds: provides.join(";"),
+          },
+        })
+        .catch(() => {});
+    }
+
+    return NextResponse.json({
+      mods,
+      // Mod ids loaded from `Mods=` that no Workshop item accounts for — usually a
+      // hand-edited entry or a mod dropped straight into the mods folder.
+      orphanModIds: state.modIds.filter((m) => !claimed.has(m)),
+    });
   });
 }
 
@@ -250,146 +252,147 @@ export async function POST(request: NextRequest) {
   // `/api/zomboid/config` takes this same lane to protect, so the two have to agree
   // about who holds it. Without this, a restore could replace the .ini from an archive
   // halfway through a mod install and the page would still toast "added".
-  const laneBusy = fileLaneBusy("zomboid");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("zomboid", async () => {
 
-  const body = await request.json();
-  const workshopId = parseWorkshopId(body?.workshopId ?? body?.url ?? "");
-  if (!workshopId) {
-    return NextResponse.json(
-      { error: "Paste a Steam Workshop link or its numeric id" },
-      { status: 400 }
+    const body = await request.json();
+    const workshopId = parseWorkshopId(body?.workshopId ?? body?.url ?? "");
+    if (!workshopId) {
+      return NextResponse.json(
+        { error: "Paste a Steam Workshop link or its numeric id" },
+        { status: 400 }
+      );
+    }
+
+    let state;
+    try {
+      state = await readModState();
+    } catch {
+      return NextResponse.json(
+        { error: "Config file not found yet — start the server once first." },
+        { status: 400 }
+      );
+    }
+    if (state.workshopIds.includes(workshopId)) {
+      return NextResponse.json({ error: "That mod is already installed" }, { status: 409 });
+    }
+
+    const detail = (await fetchWorkshopDetails([workshopId])).get(workshopId);
+    if (detail && !detail.ok) {
+      return NextResponse.json({ error: "Steam doesn't know that Workshop id" }, { status: 404 });
+    }
+    if (detail?.wrongGame) {
+      return NextResponse.json(
+        { error: "That Workshop item isn't for Project Zomboid" },
+        { status: 400 }
+      );
+    }
+
+    // Explicit mod ids win; then anything already on disk; then the description.
+    const explicit = Array.isArray(body?.modIds) ? body.modIds.map(String) : [];
+    const onDisk = await installedModIds(workshopId);
+    const modIds = dedupe(
+      explicit.length > 0 ? explicit : onDisk.length > 0 ? onDisk : detail?.describedModIds ?? []
     );
-  }
 
-  let state;
-  try {
-    state = await readModState();
-  } catch {
-    return NextResponse.json(
-      { error: "Config file not found yet — start the server once first." },
-      { status: 400 }
+    // Required items, from the Workshop's own "Required items" list. A mod whose
+    // dependency is missing usually fails quietly, so pull them in with it rather
+    // than leaving the user to notice. One level deep, which is as deep as PZ
+    // dependency chains realistically go.
+    const missingDeps = (detail?.requires ?? []).filter(
+      (id) => id !== workshopId && !state.workshopIds.includes(id)
     );
-  }
-  if (state.workshopIds.includes(workshopId)) {
-    return NextResponse.json({ error: "That mod is already installed" }, { status: 409 });
-  }
+    const depDetails = await fetchWorkshopDetails(missingDeps);
+    const addedDeps: { workshopId: string; title: string; modIds: string[] }[] = [];
+    for (const depId of missingDeps) {
+      const dep = depDetails.get(depId);
+      if (dep && !dep.ok) continue;
+      const depMods = dedupe(
+        (await installedModIds(depId)).concat(dep?.describedModIds ?? [])
+      );
+      addedDeps.push({ workshopId: depId, title: dep?.title ?? depId, modIds: depMods });
+    }
 
-  const detail = (await fetchWorkshopDetails([workshopId])).get(workshopId);
-  if (detail && !detail.ok) {
-    return NextResponse.json({ error: "Steam doesn't know that Workshop id" }, { status: 404 });
-  }
-  if (detail?.wrongGame) {
-    return NextResponse.json(
-      { error: "That Workshop item isn't for Project Zomboid" },
-      { status: 400 }
-    );
-  }
+    await writeModState({
+      // Dependencies go BEFORE the mod that needs them: PZ loads `Mods=` in order
+      // and a library has to be loaded before whatever uses it.
+      workshopIds: dedupe([...state.workshopIds, ...addedDeps.map((d) => d.workshopId), workshopId]),
+      modIds: dedupe([...state.modIds, ...addedDeps.flatMap((d) => d.modIds), ...modIds]),
+      prefix: state.prefix,
+    });
 
-  // Explicit mod ids win; then anything already on disk; then the description.
-  const explicit = Array.isArray(body?.modIds) ? body.modIds.map(String) : [];
-  const onDisk = await installedModIds(workshopId);
-  const modIds = dedupe(
-    explicit.length > 0 ? explicit : onDisk.length > 0 ? onDisk : detail?.describedModIds ?? []
-  );
+    for (const dep of addedDeps) {
+      await db.zomboidMod
+        .upsert({
+          where: { id: dep.workshopId },
+          update: { title: dep.title, modIds: dep.modIds.join(";") },
+          create: {
+            id: dep.workshopId,
+            title: dep.title,
+            modIds: dep.modIds.join(";"),
+            addedBy: session.user.id,
+          },
+        })
+        .catch(() => {});
+    }
 
-  // Required items, from the Workshop's own "Required items" list. A mod whose
-  // dependency is missing usually fails quietly, so pull them in with it rather
-  // than leaving the user to notice. One level deep, which is as deep as PZ
-  // dependency chains realistically go.
-  const missingDeps = (detail?.requires ?? []).filter(
-    (id) => id !== workshopId && !state.workshopIds.includes(id)
-  );
-  const depDetails = await fetchWorkshopDetails(missingDeps);
-  const addedDeps: { workshopId: string; title: string; modIds: string[] }[] = [];
-  for (const depId of missingDeps) {
-    const dep = depDetails.get(depId);
-    if (dep && !dep.ok) continue;
-    const depMods = dedupe(
-      (await installedModIds(depId)).concat(dep?.describedModIds ?? [])
-    );
-    addedDeps.push({ workshopId: depId, title: dep?.title ?? depId, modIds: depMods });
-  }
-
-  await writeModState({
-    // Dependencies go BEFORE the mod that needs them: PZ loads `Mods=` in order
-    // and a library has to be loaded before whatever uses it.
-    workshopIds: dedupe([...state.workshopIds, ...addedDeps.map((d) => d.workshopId), workshopId]),
-    modIds: dedupe([...state.modIds, ...addedDeps.flatMap((d) => d.modIds), ...modIds]),
-    prefix: state.prefix,
-  });
-
-  for (const dep of addedDeps) {
     await db.zomboidMod
       .upsert({
-        where: { id: dep.workshopId },
-        update: { title: dep.title, modIds: dep.modIds.join(";") },
+        where: { id: workshopId },
+        update: {
+          title: detail?.title ?? "",
+          previewUrl: detail?.previewUrl ?? null,
+          modIds: modIds.join(";"),
+        },
         create: {
-          id: dep.workshopId,
-          title: dep.title,
-          modIds: dep.modIds.join(";"),
+          id: workshopId,
+          title: detail?.title ?? "",
+          previewUrl: detail?.previewUrl ?? null,
+          modIds: modIds.join(";"),
           addedBy: session.user.id,
         },
       })
       .catch(() => {});
-  }
 
-  await db.zomboidMod
-    .upsert({
-      where: { id: workshopId },
-      update: {
-        title: detail?.title ?? "",
-        previewUrl: detail?.previewUrl ?? null,
-        modIds: modIds.join(";"),
-      },
-      create: {
-        id: workshopId,
-        title: detail?.title ?? "",
-        previewUrl: detail?.previewUrl ?? null,
-        modIds: modIds.join(";"),
-        addedBy: session.user.id,
-      },
-    })
-    .catch(() => {});
+    await db.activity
+      .create({
+        data: {
+          userId: session.user.id,
+          action: "install_mod",
+          details: JSON.stringify({
+            game: "zomboid",
+            modName: detail?.title || workshopId,
+            workshopId,
+          }),
+        },
+      })
+      .catch(() => {});
 
-  await db.activity
-    .create({
-      data: {
-        userId: session.user.id,
-        action: "install_mod",
-        details: JSON.stringify({
-          game: "zomboid",
-          modName: detail?.title || workshopId,
-          workshopId,
-        }),
-      },
-    })
-    .catch(() => {});
+    const notes: string[] = [];
+    if (modIds.length === 0) {
+      // No mod id means the server can download the item but won't load it.
+      notes.push(
+        "Couldn't work out this mod's id. Start the server once to download it — the id will then be read off disk — or type it in on the mod's card."
+      );
+    }
+    if (detail?.isMap) {
+      // A map mod needs a third list the mod manager doesn't own.
+      notes.push(
+        "This is a map mod, so it also needs its map name added to `Map=` in the server settings before the new areas appear."
+      );
+    }
 
-  const notes: string[] = [];
-  if (modIds.length === 0) {
-    // No mod id means the server can download the item but won't load it.
-    notes.push(
-      "Couldn't work out this mod's id. Start the server once to download it — the id will then be read off disk — or type it in on the mod's card."
-    );
-  }
-  if (detail?.isMap) {
-    // A map mod needs a third list the mod manager doesn't own.
-    notes.push(
-      "This is a map mod, so it also needs its map name added to `Map=` in the server settings before the new areas appear."
-    );
-  }
+    return NextResponse.json({
+      success: true,
+      workshopId,
+      title: detail?.title ?? "",
+      previewUrl: detail?.previewUrl ?? null,
+      modIds,
+      isMap: detail?.isMap ?? false,
+      addedDependencies: addedDeps.map((d) => ({ workshopId: d.workshopId, title: d.title })),
+      warning: notes.length > 0 ? notes.join(" ") : undefined,
+    });
 
-  return NextResponse.json({
-    success: true,
-    workshopId,
-    title: detail?.title ?? "",
-    previewUrl: detail?.previewUrl ?? null,
-    modIds,
-    isMap: detail?.isMap ?? false,
-    addedDependencies: addedDeps.map((d) => ({ workshopId: d.workshopId, title: d.title })),
-    warning: notes.length > 0 ? notes.join(" ") : undefined,
-  });
+  }, { request, file: () => iniPath() });
 }
 
 // ── PATCH: correct an item's mod ids ────────────────────────────────────────
@@ -402,44 +405,45 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const laneBusy = fileLaneBusy("zomboid");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("zomboid", async () => {
 
-  const body = await request.json();
-  const workshopId = parseWorkshopId(body?.workshopId ?? "");
-  const modIds = dedupe((Array.isArray(body?.modIds) ? body.modIds : []).map(String));
-  if (!workshopId) {
-    return NextResponse.json({ error: "workshopId required" }, { status: 400 });
-  }
+    const body = await request.json();
+    const workshopId = parseWorkshopId(body?.workshopId ?? "");
+    const modIds = dedupe((Array.isArray(body?.modIds) ? body.modIds : []).map(String));
+    if (!workshopId) {
+      return NextResponse.json({ error: "workshopId required" }, { status: 400 });
+    }
 
-  let state;
-  try {
-    state = await readModState();
-  } catch {
-    return NextResponse.json({ error: "Config file not found yet" }, { status: 400 });
-  }
-  if (!state.workshopIds.includes(workshopId)) {
-    return NextResponse.json({ error: "That mod isn't installed" }, { status: 404 });
-  }
+    let state;
+    try {
+      state = await readModState();
+    } catch {
+      return NextResponse.json({ error: "Config file not found yet" }, { status: 400 });
+    }
+    if (!state.workshopIds.includes(workshopId)) {
+      return NextResponse.json({ error: "That mod isn't installed" }, { status: 404 });
+    }
 
-  const row = await db.zomboidMod.findUnique({ where: { id: workshopId } }).catch(() => null);
-  const previous = new Set([...splitList(row?.modIds ?? ""), ...(await installedModIds(workshopId))]);
+    const row = await db.zomboidMod.findUnique({ where: { id: workshopId } }).catch(() => null);
+    const previous = new Set([...splitList(row?.modIds ?? ""), ...(await installedModIds(workshopId))]);
 
-  await writeModState({
-    workshopIds: state.workshopIds,
-    modIds: spliceTokens(state.modIds, previous, modIds),
-    prefix: state.prefix,
-  });
+    await writeModState({
+      workshopIds: state.workshopIds,
+      modIds: spliceTokens(state.modIds, previous, modIds),
+      prefix: state.prefix,
+    });
 
-  await db.zomboidMod
-    .upsert({
-      where: { id: workshopId },
-      update: { modIds: modIds.join(";") },
-      create: { id: workshopId, modIds: modIds.join(";"), addedBy: session.user.id },
-    })
-    .catch(() => {});
+    await db.zomboidMod
+      .upsert({
+        where: { id: workshopId },
+        update: { modIds: modIds.join(";") },
+        create: { id: workshopId, modIds: modIds.join(";"), addedBy: session.user.id },
+      })
+      .catch(() => {});
 
-  return NextResponse.json({ success: true, modIds });
+    return NextResponse.json({ success: true, modIds });
+
+  }, { request, file: () => iniPath() });
 }
 
 // ── DELETE: remove a Workshop item ──────────────────────────────────────────
@@ -452,42 +456,43 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const laneBusy = fileLaneBusy("zomboid");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("zomboid", async () => {
 
-  const workshopId = parseWorkshopId(new URL(request.url).searchParams.get("workshopId") ?? "");
-  if (!workshopId) return NextResponse.json({ error: "workshopId required" }, { status: 400 });
+    const workshopId = parseWorkshopId(new URL(request.url).searchParams.get("workshopId") ?? "");
+    if (!workshopId) return NextResponse.json({ error: "workshopId required" }, { status: 400 });
 
-  let state;
-  try {
-    state = await readModState();
-  } catch {
-    return NextResponse.json({ error: "Config file not found yet" }, { status: 400 });
-  }
+    let state;
+    try {
+      state = await readModState();
+    } catch {
+      return NextResponse.json({ error: "Config file not found yet" }, { status: 400 });
+    }
 
-  const row = await db.zomboidMod.findUnique({ where: { id: workshopId } }).catch(() => null);
-  const owned = new Set([...splitList(row?.modIds ?? ""), ...(await installedModIds(workshopId))]);
+    const row = await db.zomboidMod.findUnique({ where: { id: workshopId } }).catch(() => null);
+    const owned = new Set([...splitList(row?.modIds ?? ""), ...(await installedModIds(workshopId))]);
 
-  await writeModState({
-    workshopIds: state.workshopIds.filter((id) => id !== workshopId),
-    modIds: state.modIds.filter((m) => !owned.has(m)),
-    prefix: state.prefix,
-  });
+    await writeModState({
+      workshopIds: state.workshopIds.filter((id) => id !== workshopId),
+      modIds: state.modIds.filter((m) => !owned.has(m)),
+      prefix: state.prefix,
+    });
 
-  await db.zomboidMod.delete({ where: { id: workshopId } }).catch(() => {});
-  await db.activity
-    .create({
-      data: {
-        userId: session.user.id,
-        action: "remove_mod",
-        details: JSON.stringify({
-          game: "zomboid",
-          modName: row?.title || workshopId,
-          workshopId,
-        }),
-      },
-    })
-    .catch(() => {});
+    await db.zomboidMod.delete({ where: { id: workshopId } }).catch(() => {});
+    await db.activity
+      .create({
+        data: {
+          userId: session.user.id,
+          action: "remove_mod",
+          details: JSON.stringify({
+            game: "zomboid",
+            modName: row?.title || workshopId,
+            workshopId,
+          }),
+        },
+      })
+      .catch(() => {});
 
-  return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true });
+
+  }, { request, file: () => iniPath() });
 }

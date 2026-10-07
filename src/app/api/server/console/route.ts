@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/error-details";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
@@ -74,7 +75,7 @@ export async function POST(request: NextRequest) {
     const { sendCommand } = await import("@/lib/rcon");
     const response = await sendCommand(command);
     return NextResponse.json({ response });
-  } catch (e: any) {
+  } catch (e) {
     const failure = classifyRconFailure(e);
     // 503, not 500: nothing is broken, the server is simply not there to ask — or is there
     // and busy. Either way the command did not run and retrying is the right next move.
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest) {
     // information, and hiding it behind a friendly sentence is how a real fault becomes
     // invisible.
     return NextResponse.json(
-      { error: "RCON error: " + (e.message || "connection failed") },
+      { error: "RCON error: " + (errorMessage(e) || "connection failed") },
       { status: 500 }
     );
   }

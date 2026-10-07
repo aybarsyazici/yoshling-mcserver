@@ -52,7 +52,6 @@ vi.mock("@/lib/auth", () => ({
   auth: async () => ({ user: { id: "u1", name: "Ayb", role: "ADMIN" } }),
 }));
 vi.mock("@/lib/game-gate", () => ({ denyGame: () => null }));
-vi.mock("@/lib/operation-response", () => ({ fileLaneBusy: () => null }));
 vi.mock("@/lib/permissions", () => ({ hasPermission: () => true }));
 vi.mock("@/lib/game-manager", () => ({ containerIsRunning: async () => containerRunning }));
 vi.mock("@/lib/db", () => ({
@@ -90,6 +89,11 @@ vi.mock("@/lib/mc-identity", async () => {
   };
 });
 vi.mock("fs/promises", () => ({
+  realpath: async (file: string) => file,
+  lstat: async (file: string) => {
+    if (files[file] === undefined) throw Object.assign(new Error("missing fixture"), { code: "ENOENT" });
+    return { isSymbolicLink: () => false };
+  },
   readFile: async (file: string) => {
     const got = files[file];
     if (got === undefined) {

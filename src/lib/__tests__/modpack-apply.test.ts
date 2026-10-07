@@ -196,7 +196,7 @@ describe("applyModpackToServer", () => {
       }) as unknown as Response)
     );
     const outcome = await applyModpackToServer({ modpackId: "p", packName: "Big Pack" });
-    expect(outcome.kind).toBe("error");
+    expect(outcome.kind).toBe("still-running");
   });
 });
 
@@ -253,11 +253,11 @@ describe("importAndApply", () => {
       })
     );
     const outcome = await importAndApply({ modrinthId: "abc", packName: "Big Pack" });
-    expect(outcome.kind).toBe("error");
+    expect(outcome.kind).toBe("unconfirmed-import");
     expect(posts).toEqual(["/api/modpacks/import"]);
   });
 
-  it("says nothing was changed when the import never reached the server", async () => {
+  it("leaves a lost import response unconfirmed without applying", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -265,10 +265,10 @@ describe("importAndApply", () => {
       })
     );
     const outcome = await importAndApply({ modrinthId: "abc", packName: "Big Pack" });
-    expect(outcome.kind).toBe("error");
-    if (outcome.kind !== "error") throw new Error("unreachable");
-    expect(outcome.message).toMatch(/Nothing was changed/);
-    // And NOT still-running: the apply was never requested, so there is nothing running.
-    expect(outcome.message).not.toMatch(/still/i);
+    expect(outcome.kind).toBe("unconfirmed-import");
+    if (outcome.kind !== "unconfirmed-import") throw new Error("unreachable");
+    expect(outcome.message).not.toMatch(/Nothing was changed/);
+    expect(outcome.message).toContain("No apply was requested");
+    expect(outcome.message).toContain("check Saved sets");
   });
 });

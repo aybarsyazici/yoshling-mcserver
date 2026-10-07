@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
+import { StatusFreshness } from "@/components/status-freshness";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
@@ -27,7 +29,7 @@ export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, running, busy: serverBusy, can, memoryGb, clockSkewMs, refresh } = useGames(
+  const { games, running, busy: serverBusy, can, memoryGb, clockSkewMs, lastSuccessAt, pollError, refresh } = useGames(
     localBusy ? 1500 : 4000
   );
   /**
@@ -43,7 +45,7 @@ export function GameControls({ game }: { game: GameId }) {
   const co = coResidency(running);
   // The registry, not just the power lock: a four-minute backup of this world also
   // has to disable these buttons, and the single-slot lock could never say so.
-  const { operations, elapsedMs } = useOperations();
+  const { operations, elapsedMs, refresh: refreshOperations } = useOperations();
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
   const isOnline = status === "online";
@@ -163,25 +165,17 @@ export function GameControls({ game }: { game: GameId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
-      if (!res.ok) return void toast.error(data.error || "Command failed");
+      const data = await readOperationResponse(res);
+      if (!data.operationId && res.status === 409) return void toast.error(data.error || "A server operation is already in progress");
+      if (!data.operationId && !res.ok) return void toast.error(data.error || "Command failed");
       // No success toast: the operation's own completion toast carries the server's
       // summary, and it cannot say more than was actually observed. A "saved &
-      // stopped" here would fire before the 300s Project Zomboid stop had finished.
+      // stopped" here would fire before the operation had verified its final state.
       setTimeout(refresh, reduced ? 0 : 1500);
-    } catch {
-      // The request died; the operation did not. `/api/games/control` awaits the
-      // whole thing, and a Project Zomboid stop is a fixed 300s ending in SIGKILL —
-      // well past Cloudflare's ~100s origin read timeout. So EVERY successful PZ stop
-      // and restart used to report a red "Network error" from all three power UIs,
-      // which is the most-hit lie in the app. The strip at the top of the page is the
-      // source of truth, and it survives this.
-      toast.info(
-        `Still working on ${meta.name}. The connection timed out before it finished, which is ` +
-          `normal for a long stop — watch the strip at the top of the page.`
-      );
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage(`${meta.name} power operation`, error));
     } finally {
+      void refreshOperations();
       setLocalBusy(false);
     }
   }
@@ -190,6 +184,7 @@ export function GameControls({ game }: { game: GameId }) {
 
   return (
     <div className="grid gap-4 md:grid-cols-[1.4fr_1fr]" style={{ ["--tint" as string]: meta.tint }}>
+      <StatusFreshness lastSuccessAt={lastSuccessAt} pollError={pollError} />
       {/* The box is running more than one world. One sentence, from `coResidency()`, so
           this page, `/{game}` and `/home` cannot word the same fact three ways — the
           three-copies drift that `docs/OPERATIONS.md` records for the power control. */}

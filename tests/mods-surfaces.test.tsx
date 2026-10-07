@@ -48,17 +48,9 @@ vi.mock("@/lib/use-games", async (importOriginal) => ({
 }));
 
 /**
- * `ModDetailDialog` is replaced by a stub, and it has to be.
- *
- * It is the one thing `mod-card.tsx` and `modpack-browser-modrinth.tsx` import that cannot be
- * loaded here: it pulls in `html-react-parser`, which `require()`s the ESM-only `domhandler`,
- * so on this project's Node 20.12 collecting the file dies with `ERR_REQUIRE_ESM` before a
- * single test runs — the same trap `vitest.config.mts` and the Prisma CLI note record.
- *
- * Replacing it costs this file nothing: it carries **no write control at all** (measured —
- * every `<Button>` in it is an external link to Source / Wiki / Issues / Discord, and its only
- * request is a GET to `/api/mods/detail`), so it is not a surface this file is about. It stays
- * mounted as an element so a card's click-through still renders.
+ * The former html-react-parser import required a stub on Node 20.12. Description
+ * rendering now has its own real-component security suite. This stub keeps these
+ * permission/control tests focused, while retaining the card's click-through surface.
  */
 vi.mock("@/components/mod-detail-dialog", () => ({
   ModDetailDialog: ({ open }: { open: boolean }) => (open ? <div>mod detail</div> : null),
@@ -224,6 +216,8 @@ function stubFetch() {
         return json(200, {
           modpack: { name: "Big Pack", description: "", mcVersion: "26.1.2", loader: "fabric" },
           mods: exportMods,
+          complete: exportMods.every((m) => typeof (m as { downloadUrl?: unknown }).downloadUrl === "string"),
+          unresolved: exportMods.filter((m) => !(m as { downloadUrl?: unknown }).downloadUrl).map((m) => ({ name: (m as { name: string }).name, reason: "No compatible download" })),
         });
       return json(404, { error: `unstubbed ${u}` });
     })
@@ -643,7 +637,9 @@ describe("Download All", () => {
     await waitFor(() => expect(screen.queryByText("Big Pack")).not.toBeNull(), WAIT);
     fireEvent.click(screen.getByRole("button", { name: "Export" }));
     await waitFor(() => expect(button("Download All")).not.toBeNull(), WAIT);
-    fireEvent.click(button("Download All")!);
+    const bulk = button("Download All") as HTMLButtonElement;
+    if (mods.some((m) => !(m as { downloadUrl?: unknown }).downloadUrl)) { expect(bulk.disabled).toBe(true); fireEvent.click(bulk); return; }
+    fireEvent.click(bulk);
     await waitFor(() => expect(toasts).toHaveLength(1), WAIT);
   }
 
@@ -682,8 +678,8 @@ describe("Download All", () => {
     await downloadAll([
       { name: "Sodium", slug: "sodium", modrinthId: "a", fileName: null, downloadUrl: null, version: null },
     ]);
-    expect(toasts[0].kind).toBe("warning");
-    expect(toasts[0].text).toMatch(/nothing to download/);
+    expect(toasts).toEqual([]);
+    expect(screen.getByRole("alert").textContent).toContain("Sodium: No compatible download");
   });
 });
 
@@ -925,8 +921,8 @@ describe("what a saved set says about itself", () => {
  * `useGames` has to guess until the route answers, and the two mods flags guess `false`
  * deliberately — they guard writes that delete a pack or replace every jar on the server, so a
  * control that is live for a moment and then dead is the defect rather than the cure.
- * `settings` guesses `true` for the opposite reason, spelled out at its declaration: it is a
- * navigation link, and one that vanishes on load and reappears reads as broken.
+ * Settings and privileged file navigation also start false after F28. They require
+ * privileged reads, so the former guess of true offered links that only refused.
  *
  * This is here because flipping the initial values to `true` left all 1190 tests green: every
  * surface test above sets `can` directly, so none of them ever observes the pre-fetch state. A
@@ -934,7 +930,7 @@ describe("what a saved set says about itself", () => {
  * exact defect this file exists to prevent, in the window nothing was looking at.
  */
 describe("the state before the capability check returns", () => {
-  it("guesses no for the mods writes and yes for the settings link", () => {
+  it("waits for a successful capability read before offering writes or privileged settings", () => {
     // `readFileSync` + `path`, which this file already imports for the drift guard above.
     const source = readFileSync(
       path.join(__dirname, "..", "src", "lib", "use-games.ts"),
@@ -945,7 +941,7 @@ describe("the state before the capability check returns", () => {
     // `modsInstall: false` appears in the type and in the merge too.
     expect(init).toMatch(/modsInstall:\s*false/);
     expect(init).toMatch(/modsRemove:\s*false/);
-    expect(init).toMatch(/settings:\s*true/);
+    expect(init).toMatch(/settings:\s*false/);
     expect(init).toMatch(/start:\s*false/);
   });
 });

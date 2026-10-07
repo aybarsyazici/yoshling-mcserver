@@ -11,7 +11,7 @@ import { blockedReason, powerBlocker, spellMinutes } from "@/lib/operation-ui";
 import { AlertTriangle, Check, MemoryStick } from "lucide-react";
 
 interface MemoryState {
-  hostGb: number;
+  hostGb: number | null;
   supported: boolean;
   reason?: string;
   configuredGb: number | null;
@@ -21,6 +21,9 @@ interface MemoryState {
   maxGb: number;
   /** Lowest applicable heap (the service's MIN_MEMORY / -Xms). 1 when there is no floor. */
   minGb?: number;
+  configuredLimitGb?: number | null;
+  containerLimitGb?: number | null;
+  nativeReserveGb?: number;
 }
 
 /**
@@ -47,7 +50,7 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   const [saving, setSaving] = useState(false);
 
   /**
-   * Saving here IS a power operation — `setMemory` holds `POWER_RESOURCES`, saves and
+   * Saving here IS a power operation — `setMemory` holds power and this world's files, saves and
    * stops the world, recreates the container and starts it again. This card never
    * consulted the registry, so during any other power operation Save stayed enabled, the
    * PUT came back 409 and the user got a red toast: the exact "pressed the button, got
@@ -59,12 +62,14 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   // For the ceiling note only: which worlds are up, their heaps, and the raw cap. The same
   // three fields `/home` reads, from the same poll, so the two surfaces cannot disagree
   // about how much of the box is already spoken for.
-  const { running, memoryGb, maxGb } = useGames(10000);
+  const { running, memoryGb, maxGb, can } = useGames(10000);
+  const canEdit = can.settings;
 
   async function load() {
     try {
       const res = await fetch(`/api/games/memory?game=${game}`);
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't read the memory setting");
       setState(data);
       setGb(data.configuredGb ?? null);
     } catch {
@@ -79,7 +84,7 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   }, [game]);
 
   async function save() {
-    if (gb === null) return;
+    if (gb === null || !canEdit) return;
     setSaving(true);
     try {
       const res = await fetch("/api/games/memory", {
@@ -94,16 +99,11 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
       }
       setState(data);
       setGb(data.configuredGb ?? gb);
-      toast.success(
-        data.applied
-          ? `${meta.name} is set to ${data.configuredGb} GB${data.running ? " and back up" : ""}.`
-          : `Saved ${gb} GB, but the container still reports ${data.liveGb} GB.`
-      );
+      // The registry owns the operation outcome. A running container does not
+      // establish that the game has finished booting.
     } catch {
-      // For Project Zomboid `setMemory` opens with a 300s graceful stop, so the request
-      // cannot come back inside Cloudflare's ~100s window — this fired red while the
-      // change was being applied perfectly. The configured-vs-live read-back still
-      // happens; it just arrives through the strip instead of through this response.
+      // Long recreates or a fallback shutdown can outlive the proxy connection.
+      // Loss of that connection does not establish the operation's result.
       toast.info(
         `Still applying the memory change to ${meta.name}. The connection timed out before it ` +
           `finished, which is normal — watch the strip at the top of the page, then reload this ` +
@@ -128,21 +128,21 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
    */
   const minGb = Math.max(1, state.minGb ?? 1);
   const options = Array.from({ length: Math.max(0, state.maxGb - minGb + 1) }, (_, i) => minGb + i);
+  const validSelection = gb !== null && Number.isInteger(gb) && gb >= minGb && gb <= state.maxGb;
 
   /**
    * The ceiling's assumption, said out loud — and deliberately **reported, not enforced**.
    *
-   * `maxGameGb()` subtracts nothing for whatever else is up, so this card would offer
-   * Minecraft 13 GB while Project Zomboid held 12. `perWorldCeiling` is the sentence for
-   * that, and it is the same derivation `/home` uses, so the two cannot disagree.
+   * The service-specific cap includes its container limits. It still assumes one
+   * world runs at a time; the same neighbour calculation as `/home` names that assumption.
    *
    * Not a refusal, on purpose. A heap is configuration for the next boot, not an
-   * allocation now: with Minecraft stopped and PZ up, setting Minecraft to 13 GB
+   * allocation now: with Minecraft stopped and PZ up, changing Minecraft's heap
    * over-commits nothing, and `setMemory` starts a world only if it was already running.
    * Refusing here would be a false "no" for the common case, which is the mirror of the
    * defect this project keeps paying for. Saying it is what the reader needs.
    */
-  const ceiling = perWorldCeiling({ maxGb, forGame: game, running, memoryGb });
+  const ceiling = perWorldCeiling({ maxGb, serviceMaxGb: state.maxGb, forGame: game, running, memoryGb });
 
   return (
     <div
@@ -160,7 +160,7 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
           <p className="font-display text-base font-semibold">Server memory</p>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {state.supported
-              ? `Heap size for ${meta.name}. This box has ${state.hostGb} GB, and the server's real memory use runs about a gigabyte above its heap — so ${state.maxGb} GB is the most that leaves room for the OS and the dashboard. Going higher gets the server killed, not faster.`
+              ? `Heap size for ${meta.name}. Up to ${state.maxGb} GB is available after the host reserve and ${state.nativeReserveGb ?? 2} GB for native memory below the configured and current container limits.`
               : state.reason}
           </p>
         </div>
@@ -174,14 +174,17 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-chart-5" />
               <p className="text-xs text-muted-foreground">
                 Configured for <strong className="text-foreground">{state.configuredGb} GB</strong>,
-                but the current container was created with{" "}
-                <strong className="text-foreground">{state.liveGb} GB</strong>. Save again to
-                recreate it — a plain restart keeps the old value.
+                {state.liveGb === null ? (
+                  <>; the current container&apos;s heap could not be read. {canEdit ? "Save to recreate it and verify the value." : "An admin or moderator can apply and verify it."}</>
+                ) : (
+                  <> but the current container was created with{" "}
+                    <strong className="text-foreground">{state.liveGb} GB</strong>. {canEdit ? "Save again to recreate it" : "Ask an admin or moderator to recreate it"} — a plain restart keeps the old value.</>
+                )}
               </p>
             </div>
           )}
 
-          <div className="mt-4 flex flex-wrap items-end gap-3">
+          {canEdit ? <div className="mt-4 flex flex-wrap items-end gap-3">
             <div className="space-y-1.5">
               <p className="eyebrow text-muted-foreground">Allocate</p>
               <div className="inline-flex gap-1 rounded-xl bg-muted/60 p-1 ring-1 ring-foreground/10">
@@ -212,12 +215,12 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
 
             <Button
               onClick={save}
-              disabled={saving || !dirty || blocker !== undefined}
+              disabled={saving || !validSelection || (!dirty && state.applied) || blocker !== undefined}
               style={{ background: tint, color: "var(--background)" }}
             >
               {saving ? "Applying…" : "Save memory"}
             </Button>
-          </div>
+          </div> : <p className="mt-3 text-xs text-muted-foreground">Changing memory requires the admin or moderator role.</p>}
 
           {ceiling.note && (
             <p className="mt-3 text-xs text-muted-foreground">{ceiling.note}</p>
@@ -235,9 +238,7 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
             {state.applied && !dirty ? (
               <>
                 <Check className="h-3.5 w-3.5" style={{ color: tint }} />
-                {state.liveGb === null
-                  ? `Set to ${state.configuredGb} GB; applies when the server is first started.`
-                  : `In effect: the server container is running with ${state.liveGb} GB.`}
+                {`Verified on the ${state.running ? "running" : "stopped"} container: ${state.liveGb} GB.`}
               </>
             ) : state.running ? (
               // The downtime, from `GameMeta.stopSeconds` rather than the flat "about a

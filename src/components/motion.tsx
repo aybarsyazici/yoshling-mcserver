@@ -1,20 +1,19 @@
 "use client";
 
-import { motion, useMotionValue, useSpring, useTransform, type Variants } from "motion/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { motion, useMotionValue, useSpring, type Variants } from "motion/react";
+import { useCallback, useEffect, useSyncExternalStore, type ReactNode } from "react";
 
-/* Respect reduced-motion at the JS layer too. */
+/* Match the browser preference without changing state in a mount effect. */
+function subscribeReducedMotion(notify: () => void) {
+  const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+  query.addEventListener("change", notify);
+  return () => query.removeEventListener("change", notify);
+}
+function reducedMotionSnapshot() {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 export function usePrefersReducedMotion() {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(mq.matches);
-    const on = () => setReduced(mq.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
-  return reduced;
+  return useSyncExternalStore(subscribeReducedMotion, reducedMotionSnapshot, () => false);
 }
 
 const easeOut = [0.22, 1, 0.36, 1] as const;
@@ -102,17 +101,14 @@ export function AnimatedNumber({
   const reduced = usePrefersReducedMotion();
   const mv = useMotionValue(0);
   const spring = useSpring(mv, { stiffness: 90, damping: 20 });
-  const [display, setDisplay] = useState("0");
+  const subscribe = useCallback((notify: () => void) => spring.on("change", notify), [spring]);
+  const snapshot = useCallback(() => spring.get(), [spring]);
+  const animated = useSyncExternalStore(subscribe, snapshot, () => 0);
+  const display = (reduced ? value : animated).toFixed(decimals);
 
   useEffect(() => {
-    if (reduced) {
-      setDisplay(value.toFixed(decimals));
-      return;
-    }
-    mv.set(value);
-    const unsub = spring.on("change", (v) => setDisplay(v.toFixed(decimals)));
-    return () => unsub();
-  }, [value, decimals, mv, spring, reduced]);
+    if (!reduced) mv.set(value);
+  }, [value, mv, reduced]);
 
   return (
     <span className={className}>

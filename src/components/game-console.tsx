@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { Input } from "@/components/ui/input";
@@ -21,6 +22,8 @@ const EXAMPLES: Record<GameId, string> = {
 };
 
 export function GameConsole({ game }: { game: GameId }) {
+  const { can } = useGames(CAPABILITY_POLL_MS);
+  const canSend = can.consoleExecute === true;
   const meta = GAMES[game];
   const endpoint = meta.api.console;
   const [logs, setLogs] = useState("");
@@ -43,7 +46,7 @@ export function GameConsole({ game }: { game: GameId }) {
    * A stale console during an incident is worse than a blank one, because it reads
    * as "the server has gone quiet".
    */
-  async function fetchLogs() {
+  const fetchLogs = useCallback(async () => {
     try {
       const res = await fetch(`${endpoint}?lines=200`);
       const data = await res.json().catch(() => ({}));
@@ -56,19 +59,18 @@ export function GameConsole({ game }: { game: GameId }) {
     } catch {
       setError("Couldn't reach the server to read the log");
     }
-  }
+  }, [endpoint]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchLogs();
-  }, []);
+    void fetchLogs();
+  }, [fetchLogs]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(fetchLogs, 3000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh]);
+  }, [autoRefresh, fetchLogs]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -76,7 +78,7 @@ export function GameConsole({ game }: { game: GameId }) {
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
-    if (!command.trim()) return;
+    if (!canSend || sending || !command.trim()) return;
     setSending(true);
     setHistory((h) => [command.trim(), ...h].slice(0, 50));
     setHistIdx(-1);
@@ -153,7 +155,7 @@ export function GameConsole({ game }: { game: GameId }) {
         </pre>
       </div>
 
-      <form onSubmit={send} className="mt-3 flex gap-2">
+      {canSend && <form onSubmit={send} className="mt-3 flex gap-2">
         <div className="relative flex-1">
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm" style={{ color: meta.tint }}>
             ›
@@ -170,9 +172,9 @@ export function GameConsole({ game }: { game: GameId }) {
         <Button type="submit" disabled={sending || !command.trim()}>
           Send
         </Button>
-      </form>
+      </form>}
       <p className="mt-2 text-xs text-muted-foreground">
-        Sent via {TRANSPORT[game]}. No leading slash needed. ↑/↓ for history.
+        {canSend ? `Sent via ${TRANSPORT[game]}. No leading slash needed. ↑/↓ for history.` : "This account can read the console but cannot send commands."}
       </p>
     </div>
   );

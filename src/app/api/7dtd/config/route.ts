@@ -1,17 +1,18 @@
+import { readFileSnapshot, recordFileRevision, assertFileRevision } from "@/lib/file-revision";
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
-import path from "path";
-import { escapeXml } from "@/lib/sdtd-xml";
+import { gameDataPath } from "@/lib/game-data-path";
+import { assertSdtdXmlValues, parseSdtdXmlProperties, setSdtdXmlProperties } from "@/lib/sdtd-xml";
 import {
   SANDBOX_SCOPE_WARNING,
   clampPlayerCount,
   normalizeSandboxCode,
-  readXmlProperty,
   sandboxCodeIssue,
 } from "@/lib/sdtd-settings";
 
@@ -25,7 +26,7 @@ import {
 // does not exist, `/sevendtd-config/sdtdserver.xml` does). Latent only because
 // SDTD_CONFIG_DIR happens to be set in production; without it every read here would
 // ENOENT and the route would report "the server config file isn't present yet".
-const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml");
+const CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config";
 
 // Maps our friendly config keys → the sdtdserver.xml property names.
 //
@@ -94,44 +95,36 @@ export async function GET() {
       { status: 403 }
     );
   }
-  const config = await db.sevenDaysConfig.findUnique({ where: { id: "main" } });
-  const row = { id: "main", ...DEFAULTS, ...(config ?? {}) };
+  return revisionRead(() => gameDataPath(CONFIG_DIR, "sdtdserver.xml"), async () => {
+    const config = await db.sevenDaysConfig.findUnique({ where: { id: "main" } });
+    const row = { id: "main", ...DEFAULTS, ...(config ?? {}) };
 
-  // **`sandboxCode` is read out of `sdtdserver.xml`, not out of this row** — the whole
-  // point of this line.
-  //
-  // The file has two writers: this route and `/api/7dtd/config/all`, whose DB mirror map
-  // covers `ServerName`, `ServerPassword` and `ServerMaxPlayerCount` and (before today)
-  // **not** `SandboxCode`. So editing the sandbox code in "All settings" wrote the file
-  // and left this row holding the old code; the next quick save then wrote that stale code
-  // straight back over the file. Set a difficulty, rename the server a week later, and the
-  // difficulty silently reverts — with a green toast both times. Reading the file here
-  // makes the file the only source of truth for what this page shows, which is the half of
-  // the fix that cannot drift. (`config/all` now mirrors `SandboxCode` into the row too,
-  // so the fresh-install recovery copy stops rotting, but nothing *reads* the mirror.)
-  let sandboxCode = row.sandboxCode;
-  let sandboxCodeSource: "file" | "db" = "db";
-  try {
-    const fromFile = readXmlProperty(await readFile(XML_PATH, "utf-8"), "SandboxCode");
-    if (fromFile !== null) {
-      sandboxCode = fromFile;
-      sandboxCodeSource = "file";
+    // All four quick fields follow the file. A backup restore intentionally changes
+    // them without replacing the DB; reading the old mirror would revert the restored
+    // password and name on the next quick save. The DB remains the first-install fallback.
+    let current = row;
+    let sandboxCodeSource: "file" | "db" = "db";
+    try {
+      const properties = parseSdtdXmlProperties(await readFileSnapshot(await gameDataPath(CONFIG_DIR, "sdtdserver.xml"), "utf-8"));
+      current = { ...row, ...configFromProperties(properties, row) };
+      if (properties.has("SandboxCode")) sandboxCodeSource = "file";
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        return NextResponse.json({ error: "The 7DTD server config could not be read or validated." }, { status: 500 });
+      }
     }
-  } catch {
-    // Before 7DTD's first install there is no file. Fall through to the stored copy and
-    // say which one this is, rather than showing a blank box that looks like "unset".
-  }
 
-  // Explicit, not `...row`: the four dead columns (`gameDifficulty`, `dayLength`,
-  // `version`, `maxMemory`) were being handed to the page as if the page could use them.
-  // Additive — a future column is absent from this response until someone adds it here.
-  return NextResponse.json({
-    id: row.id,
-    serverName: row.serverName,
-    password: row.password,
-    maxPlayers: row.maxPlayers,
-    sandboxCode,
-    sandboxCodeSource,
+    // Explicit, not `...row`: the four dead columns (`gameDifficulty`, `dayLength`,
+    // `version`, `maxMemory`) were being handed to the page as if the page could use them.
+    // Additive — a future column is absent from this response until someone adds it here.
+    return NextResponse.json({
+      id: row.id,
+      serverName: current.serverName,
+      password: current.password,
+      maxPlayers: current.maxPlayers,
+      sandboxCode: current.sandboxCode,
+      sandboxCodeSource,
+    });
   });
 }
 
@@ -150,170 +143,203 @@ export async function PUT(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  const laneBusy = fileLaneBusy("7dtd");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("7dtd", async () => {
 
-  const body = await request.json();
+    const body = await request.json();
 
-  // The existing row, so a key the client omits keeps its stored value instead of
-  // snapping back to `DEFAULTS`. This row is the only config that survives a fresh
-  // SteamCMD install, so it is the copy a recovery reads, and silently rewriting a
-  // recovery source is exactly the defect class this page is being cleaned up for.
-  //
-  // (The four dead columns are a weaker version of the same hazard and are now dealt with
-  // by not writing them at all — see `DEFAULTS`. They used to be clamped back to `2` /
-  // `60` on any save that omitted them, so renaming the server rewrote a difficulty
-  // nobody had set.)
-  const existing = await db.sevenDaysConfig.findUnique({ where: { id: "main" } }).catch(() => null);
-  const prev = { ...DEFAULTS, ...(existing ?? {}) };
+    // The existing row, so a key the client omits keeps its stored value instead of
+    // snapping back to `DEFAULTS`. This row is the only config that survives a fresh
+    // SteamCMD install, so it is the copy a recovery reads, and silently rewriting a
+    // recovery source is exactly the defect class this page is being cleaned up for.
+    //
+    // (The four dead columns are a weaker version of the same hazard and are now dealt with
+    // by not writing them at all — see `DEFAULTS`. They used to be clamped back to `2` /
+    // `60` on any save that omitted them, so renaming the server rewrote a difficulty
+    // nobody had set.)
+    const existing = await db.sevenDaysConfig.findUnique({ where: { id: "main" } }).catch(() => null);
+    let prev = { ...DEFAULTS, ...(existing ?? {}) };
 
-  // Read the file **before** deciding anything, because for `sandboxCode` the file — not
-  // the row — is what is being replaced (see the GET). A client that omits the key must
-  // leave the file's code alone; falling back to the row would write a stale code back
-  // over an edit made in "All settings", which is the exact revert this change removes.
-  let xml: string | null = null;
-  let xmlReadError: NodeJS.ErrnoException | null = null;
-  try {
-    xml = await readFile(XML_PATH, "utf-8");
-  } catch (e) {
-    xmlReadError = e as NodeJS.ErrnoException;
-  }
-  const currentSandbox = (xml && readXmlProperty(xml, "SandboxCode")) ?? prev.sandboxCode;
-
-  const sandboxCode =
-    body.sandboxCode === undefined ? currentSandbox : normalizeSandboxCode(body.sandboxCode);
-  const sandboxChanged = sandboxCode !== currentSandbox;
-
-  // Shape-check only what this request actually changes. A value already on disk must not
-  // be able to block renaming the server — and `sandboxCodeIssue` is a judgement about a
-  // paste, not about history.
-  const sandboxIssue = sandboxChanged ? sandboxCodeIssue(sandboxCode) : {};
-  if (sandboxIssue.error) {
-    // Refused before the DB write, so nothing is stored and nothing is claimed. The page
-    // shows `error` verbatim.
-    return NextResponse.json({ error: sandboxIssue.error }, { status: 400 });
-  }
-
-  const players = clampPlayerCount(body.maxPlayers, prev.maxPlayers);
-
-  const data = {
-    serverName: String(body.serverName ?? prev.serverName).slice(0, 80),
-    password: String(body.password ?? prev.password),
-    maxPlayers: players.value,
-    sandboxCode,
-  };
-
-  await db.sevenDaysConfig.upsert({
-    where: { id: "main" },
-    update: data,
-    create: { id: "main", ...data },
-  });
-
-  // What each key was before this request, so "did this request change it" is answerable.
-  // `sandboxCode`'s baseline is the **file**, not the row — the row can be stale.
-  const before: Record<string, string> = {
-    serverName: String(prev.serverName),
-    password: String(prev.password),
-    maxPlayers: String(prev.maxPlayers),
-    sandboxCode: currentSandbox,
-  };
-
-  // Best-effort sync to the XML on disk (may not exist until first install).
-  let xmlWarning: string | undefined;
-  // Keys whose property this server's config doesn't have **and whose value this
-  // request actually changed**. We store them in the DB regardless (that row is the
-  // only thing that survives a fresh install), so without reporting them the page
-  // toasts "Settings saved" for a value that changed nothing in-game.
-  //
-  // All four of the keys left in `XML_KEYS` do exist in the live file (counted on the box
-  // 2026-10-01: 69 properties, including `ServerName`, `ServerPassword`,
-  // `ServerMaxPlayerCount` and `SandboxCode`), so this array is expected to stay empty —
-  // it is the guard for a future game version that drops one of them, which is how
-  // `GameDifficulty` and `DayNightLength` became writes to nowhere in the first place.
-  //
-  // The "actually changed" half matters. This used to report every missing property on
-  // every PUT, so renaming the server raised an amber "Difficulty had no effect in-game"
-  // warning about a field the user never touched — and this page's warning toast is its
-  // *only* honesty channel, so firing it on every save trains people to dismiss it unread.
-  const skipped: string[] = [];
-  if (xml === null) {
-    xmlWarning =
-      xmlReadError?.code === "ENOENT"
-        ? "Saved. The server config file isn't present yet — settings will apply once 7DTD finishes its first install."
-        : `Saved here, but the server config could not be read, so nothing changed on the server: ${xmlReadError?.message}`;
-  } else {
+    // A client that omits any quick field must retain the current file value, including
+    // settings restored from an archive, rather than overwrite it with a stale DB mirror.
+    let xml: string | null = null;
+    let file = "";
+    let xmlReadError: NodeJS.ErrnoException | null = null;
     try {
-      let next = xml;
-      for (const [key, xmlName] of Object.entries(XML_KEYS)) {
-        const value = String((data as Record<string, unknown>)[key]);
-        const re = new RegExp(
-          `(<property\\s+name="${xmlName}"\\s+value=")[^"]*(")`,
-          "i"
-        );
-        if (re.test(next)) {
-          next = next.replace(re, `$1${escapeXml(value)}$2`);
-        } else if (value !== before[key]) {
-          skipped.push(xmlName);
-        }
-      }
-      await writeFile(XML_PATH, next, "utf-8");
-      if (skipped.length > 0) {
-        const named = skipped.map((x) => `${labelFor(x)} (${x})`).join(" or ");
-        xmlWarning =
-          `Saved, but the server config has no ${named} property, so ${skipped.length > 1 ? "those settings" : "that setting"} ` +
-          `had no effect in-game. Current 7DTD versions fold them into the sandbox preset — set them in Sandbox code instead.`;
-      }
+      file = await gameDataPath(CONFIG_DIR, "sdtdserver.xml");
+      xml = await readFile(file, "utf-8");
     } catch (e) {
-      xmlWarning = `Saved here, but writing the server config failed, so nothing changed on the server: ${(e as Error).message}`;
+      xmlReadError = e as NodeJS.ErrnoException;
+      if (xmlReadError.code !== "ENOENT") {
+        return NextResponse.json({ error: "The 7DTD server config could not be read or validated; nothing was saved." }, { status: 500 });
+      }
     }
-  }
+    if (xml !== null) {
+      try {
+        prev = { ...prev, ...configFromProperties(parseSdtdXmlProperties(xml), prev) };
+      } catch {
+        return NextResponse.json({ error: "The 7DTD server config could not be validated; nothing was saved." }, { status: 500 });
+      }
+    }
+    const currentSandbox = prev.sandboxCode;
 
-  try {
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "edit_file",
-        details: JSON.stringify({ game: "7dtd", file: "sdtdserver.xml" }),
-      },
+    const sandboxCode =
+      body.sandboxCode === undefined ? currentSandbox : normalizeSandboxCode(body.sandboxCode);
+    const sandboxChanged = sandboxCode !== currentSandbox;
+
+    // Shape-check only what this request actually changes. A value already on disk must not
+    // be able to block renaming the server — and `sandboxCodeIssue` is a judgement about a
+    // paste, not about history.
+    const sandboxIssue = sandboxChanged ? sandboxCodeIssue(sandboxCode) : {};
+    if (sandboxIssue.error) {
+      // Refused before the DB write, so nothing is stored and nothing is claimed. The page
+      // shows `error` verbatim.
+      return NextResponse.json({ error: sandboxIssue.error }, { status: 400 });
+    }
+
+    const players = clampPlayerCount(body.maxPlayers, prev.maxPlayers);
+
+    const data = {
+      serverName: String(body.serverName ?? prev.serverName).slice(0, 80),
+      password: String(body.password ?? prev.password),
+      maxPlayers: players.value,
+      sandboxCode,
+    };
+
+    const updates = Object.fromEntries(Object.entries(XML_KEYS).map(([key, name]) => [name, String(data[key as keyof typeof data])]));
+    let xmlPlan: ReturnType<typeof setSdtdXmlProperties> | null = null;
+    if (xml !== null) {
+      try {
+        xmlPlan = setSdtdXmlProperties(xml, updates);
+      } catch {
+        return NextResponse.json({ error: "These settings cannot be written as valid XML; nothing was saved." }, { status: 400 });
+      }
+    }
+
+    await db.sevenDaysConfig.upsert({
+      where: { id: "main" },
+      update: data,
+      create: { id: "main", ...data },
     });
-  } catch {}
 
-  // Everything this request did that the request did not ask for, in the order that
-  // matters: a failed write first (it invalidates the rest), then the clamp, then what a
-  // new sandbox code does and does not reach.
-  //
-  // Each clause only fires when it applies to *this* request — a note on every save is a
-  // note nobody reads, which is how the old blanket "Difficulty had no effect" warning
-  // trained people to dismiss this page's one honesty channel. `xmlWarning` is the only
-  // one that leads with "Saved", because it is the one about the write itself; the rest are
-  // clauses, so a toast never contains two separate verdicts.
-  const clauses = [
-    players.note,
-    sandboxIssue.warning,
-    sandboxChanged ? SANDBOX_SCOPE_WARNING : undefined,
-  ].filter(Boolean) as string[];
-  const notes = xmlWarning
-    ? [xmlWarning, ...clauses].join(" ")
-    : clauses.length > 0
-    ? ["Saved.", ...clauses].join(" ")
-    : "";
+    // The file baseline distinguishes actual changes from omitted or unchanged values.
+    const before: Record<string, string> = {
+      serverName: String(prev.serverName),
+      password: String(prev.password),
+      maxPlayers: String(prev.maxPlayers),
+      sandboxCode: currentSandbox,
+    };
 
-  // `stored` is what is now in the row, so the page can redisplay the saved values rather
-  // than keep showing what was typed. Asking for 99 players stored 16 and left "99" in the
-  // box — the UI manufacturing a confirmation the server had not given.
-  //
-  // `skipped` is the honest part of "success": these keys reached the DB but not the
-  // server.
-  return NextResponse.json({
-    success: true,
-    warning: notes || undefined,
-    skipped,
-    clamped: players.note ? ["maxPlayers"] : [],
-    stored: data,
-  });
+    // Best-effort sync to the XML on disk (may not exist until first install).
+    let xmlWarning: string | undefined;
+    // Keys whose property this server's config doesn't have **and whose value this
+    // request actually changed**. We store them in the DB regardless (that row is the
+    // only thing that survives a fresh install), so without reporting them the page
+    // toasts "Settings saved" for a value that changed nothing in-game.
+    //
+    // All four of the keys left in `XML_KEYS` do exist in the live file (counted on the box
+    // 2026-10-01: 69 properties, including `ServerName`, `ServerPassword`,
+    // `ServerMaxPlayerCount` and `SandboxCode`), so this array is expected to stay empty —
+    // it is the guard for a future game version that drops one of them, which is how
+    // `GameDifficulty` and `DayNightLength` became writes to nowhere in the first place.
+    //
+    // The "actually changed" half matters. This used to report every missing property on
+    // every PUT, so renaming the server raised an amber "Difficulty had no effect in-game"
+    // warning about a field the user never touched — and this page's warning toast is its
+    // *only* honesty channel, so firing it on every save trains people to dismiss it unread.
+    const skipped: string[] = [];
+    if (xml === null) {
+      xmlWarning =
+        xmlReadError?.code === "ENOENT"
+          ? "Saved. The server config file isn't present yet — settings will apply once 7DTD finishes its first install."
+          : `Saved here, but the server config could not be read, so nothing changed on the server: ${xmlReadError?.message}`;
+    } else {
+      try {
+        const { xml: next, applied, ignored } = xmlPlan!;
+        for (const name of ignored) {
+          const key = Object.keys(XML_KEYS).find((key) => XML_KEYS[key] === name)!;
+          if (updates[name] !== before[key]) skipped.push(name);
+        }
+        await assertFileRevision(file);
+        assertFileWriteActive();
+        await writeFile(file, next, "utf-8");
+        recordFileRevision(file, next);
+        const storedXml = await readFile(file, "utf-8");
+        if (storedXml !== next) throw new Error("The server config did not match the completed write");
+        assertSdtdXmlValues(storedXml, Object.fromEntries(applied.map((name) => [name, updates[name]])));
+        if (skipped.length > 0) {
+          const named = skipped.map((x) => `${labelFor(x)} (${x})`).join(" or ");
+          xmlWarning =
+            `Saved, but the server config has no ${named} property, so ${skipped.length > 1 ? "those settings" : "that setting"} ` +
+            `had no effect in-game. Current 7DTD versions fold them into the sandbox preset — set them in Sandbox code instead.`;
+        }
+      } catch (e) {
+        return NextResponse.json(
+          { success: false, stored: data, error: `Saved here, but the server config write could not be verified: ${(e as Error).message}` },
+          { status: 500 }
+        );
+      }
+    }
+
+    try {
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: "edit_file",
+          details: JSON.stringify({ game: "7dtd", file: "sdtdserver.xml" }),
+        },
+      });
+    } catch {}
+
+    // Everything this request did that the request did not ask for, in the order that
+    // matters: a failed write first (it invalidates the rest), then the clamp, then what a
+    // new sandbox code does and does not reach.
+    //
+    // Each clause only fires when it applies to *this* request — a note on every save is a
+    // note nobody reads, which is how the old blanket "Difficulty had no effect" warning
+    // trained people to dismiss this page's one honesty channel. `xmlWarning` is the only
+    // one that leads with "Saved", because it is the one about the write itself; the rest are
+    // clauses, so a toast never contains two separate verdicts.
+    const clauses = [
+      players.note,
+      sandboxIssue.warning,
+      sandboxChanged ? SANDBOX_SCOPE_WARNING : undefined,
+    ].filter(Boolean) as string[];
+    const notes = xmlWarning
+      ? [xmlWarning, ...clauses].join(" ")
+      : clauses.length > 0
+      ? ["Saved.", ...clauses].join(" ")
+      : "";
+
+    // `stored` is what is now in the row, so the page can redisplay the saved values rather
+    // than keep showing what was typed. Asking for 99 players stored 16 and left "99" in the
+    // box — the UI manufacturing a confirmation the server had not given.
+    //
+    // `skipped` is the honest part of "success": these keys reached the DB but not the
+    // server.
+    return NextResponse.json({
+      success: true,
+      warning: notes || undefined,
+      skipped,
+      clamped: players.note ? ["maxPlayers"] : [],
+      stored: data,
+    });
+
+  }, { request, file: () => gameDataPath(CONFIG_DIR, "sdtdserver.xml") });
 }
 
 function labelFor(xmlName: string): string {
   const key = Object.keys(XML_KEYS).find((k) => XML_KEYS[k] === xmlName);
   return (key && LABELS[key]) || xmlName;
+}
+
+function configFromProperties(properties: Map<string, string>, fallback: typeof DEFAULTS): typeof DEFAULTS {
+  const rawPlayers = properties.get("ServerMaxPlayerCount");
+  const maxPlayers = rawPlayers === undefined ? fallback.maxPlayers : Number(rawPlayers);
+  if (!Number.isInteger(maxPlayers) || maxPlayers < 1) throw new Error("The current ServerMaxPlayerCount is invalid");
+  return {
+    serverName: properties.get("ServerName") ?? fallback.serverName,
+    password: properties.get("ServerPassword") ?? fallback.password,
+    maxPlayers,
+    sandboxCode: properties.get("SandboxCode") ?? fallback.sandboxCode,
+  };
 }

@@ -15,7 +15,7 @@
 #     "updated 0 of N mods".
 #
 #   scripts/deploy.sh                          # rebuild web (the usual case)
-#   scripts/deploy.sh --service zomboid        # rebuild the derived PZ image
+#   scripts/deploy.sh --service zomboid        # recreate PZ only after dashboard power-off
 #   scripts/deploy.sh --verify 'AbortSignal'   # assert a string reached the image
 #
 # Only `web` is rebuilt by default. Game containers are left alone: recreating one
@@ -35,6 +35,11 @@ while [ $# -gt 0 ]; do
     *) echo "deploy: unknown argument $1" >&2; exit 64 ;;
   esac
 done
+
+case "$SERVICE" in
+  web|zomboid) ;;
+  *) echo "deploy: --service must be web or zomboid" >&2; exit 64 ;;
+esac
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -66,6 +71,69 @@ ssh -i "$KEY" "$BOX" "bash -s -- $REMOTE_ARGS" <<'REMOTE'
 set -euo pipefail
 SERVICE="$1"; VERIFY="$2"; EXPECT_SHA="$3"
 
+# A PZ recreate must never signal a running game or start a stopped one. Power
+# off through the dashboard first, where RCON quit saves and shuts it down.
+# Check again after the build because somebody may have powered it on meanwhile.
+assert_pz_stopped() {
+  local running
+  if ! running=$(docker inspect -f '{{.State.Running}}' yoshling-pz 2>/dev/null); then
+    echo "deploy: cannot verify Project Zomboid is stopped; no game recreate attempted." >&2
+    return 1
+  fi
+  if [ "$running" != "false" ]; then
+    echo "deploy: Project Zomboid is running or its state is unknown. Power it off through the dashboard first." >&2
+    return 1
+  fi
+}
+
+# The new sign-in gate requires IDs. Validate the next web service's effective
+# file/seed before replacing a working dashboard; print no policy/env contents.
+assert_app_invites_ready() {
+  docker compose -p yoshling -f /opt/yoshling/docker-compose.yml run --rm --no-deps -T --pull never --entrypoint node web -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const file = path.resolve(process.env.WHITELIST_FILE || "/app/data/whitelist.json");
+    function absent() {
+      let current = file;
+      for (;;) {
+        try { fs.lstatSync(current); }
+        catch (e) {
+          if (e.code !== "ENOENT") return false;
+          const parent = path.dirname(current);
+          if (parent === current) return false;
+          current = parent;
+          continue;
+        }
+        if (current === file) return false;
+        try { fs.realpathSync(current); return fs.statSync(current).isDirectory(); }
+        catch { return false; }
+      }
+    }
+    function id(value) {
+      return typeof value === "string" && /^[1-9]\d{0,19}$/.test(value.trim()) && BigInt(value.trim()) <= BigInt("18446744073709551615");
+    }
+    try {
+      let values;
+      try { values = JSON.parse(fs.readFileSync(file, "utf8")); }
+      catch (e) {
+        if (e.code !== "ENOENT" || !absent()) throw e;
+        values = (process.env.ALLOWED_DISCORD_IDS ?? process.env.ALLOWED_DISCORD_USERS ?? "").split(",").map(value => value.trim()).filter(Boolean);
+      }
+      if (!Array.isArray(values) || values.some(value => !id(value))) throw new Error("ID policy required");
+      console.log("deploy: app invitation policy format verified (Discord ID strings)");
+    } catch {
+      console.error("deploy: app invitation policy is unreadable or still contains legacy names. Review docs/AUTHENTICATION.md and prepare Discord IDs before deploying.");
+      process.exit(1);
+    }
+  '
+}
+
+case "$SERVICE" in
+  web) assert_app_invites_ready ;;
+  zomboid) assert_pz_stopped ;;
+  *) echo "deploy: --service must be web or zomboid" >&2; exit 64 ;;
+esac
+
 # A seed in flight means SteamCMD is writing the workshop volume. Deploying now
 # recreates web, which orphans that run and lets the fresh process start a second
 # one on top of it; two SteamCMD runs race and the loser silently updates nothing.
@@ -82,16 +150,23 @@ SERVICE="$1"; VERIFY="$2"; EXPECT_SHA="$3"
 #     the seed runs steamcmd.sh. Needs --no-trunc; docker ps truncates commands.
 # The second is kept as a backstop because bash cannot import the label from the
 # app, so a rename there would otherwise quietly restore the never-fires bug.
-SEEDS=$(docker ps --no-trunc \
-          --format '{{.Names}} {{.Label "yoshling.role"}} {{.Command}}' \
-        | grep -E 'pz-seed|steamcmd' || true)
-if [ -n "$SEEDS" ]; then
-  echo "deploy: a SteamCMD mod seed is running — wait for it to finish:" >&2
-  echo "$SEEDS" | sed 's/^/        /' >&2
-  exit 1
-fi
+assert_no_background_work() {
+  local containers seeds work_dirs before_bytes after_bytes
+  # Separate inspection from filtering: a Docker error is unknown, never quiet.
+  if ! containers=$(docker ps --no-trunc \
+      --format '{{.Names}}|{{.Label "yoshling.role"}}|{{.Command}}' 2>/dev/null); then
+    echo "deploy: cannot inspect running containers; no service replacement attempted." >&2
+    return 1
+  fi
+  seeds=$(printf '%s\n' "$containers" | grep -E 'pz-seed|steamcmd' || true)
+  if [ -n "$seeds" ]; then
+    echo "deploy: a SteamCMD mod seed is running — wait for it to finish:" >&2
+    # Commands are useful for detection but may contain credentials. Names/roles suffice.
+    printf '%s\n' "$seeds" | awk -F '|' '{printf "        %s %s\n", $1, $2}' >&2
+    return 1
+  fi
 
-# Refuse while a backup is mid-copy, and name an orphan if one is lying around.
+# Refuse present backup staging, including a copy whose size is no longer growing.
 #
 # Paid for on 2026-09-30: a Project Zomboid `backup.create` was 4m14s into copying a
 # 1.9 GB save when a deploy recreated the web container. Everything about it was lost at
@@ -104,25 +179,30 @@ fi
 # implementation — ask `/api/operations` — needs a session cookie that a deploy script has
 # no business holding, and the first draft of this guard invented an unauthenticated
 # endpoint that does not exist, which is the seed guard's never-fires bug reinvented one
-# commit after documenting it. A `.work-*` directory is a real artefact on a real volume,
-# and the growth check below is what distinguishes "in flight" from "someone's leftovers".
-WORK_DIRS=$(ls -d /var/lib/docker/volumes/yoshling_web-data/_data/backups-*/.work-* 2>/dev/null || true)
-if [ -n "$WORK_DIRS" ]; then
-  A=$(du -sb $WORK_DIRS 2>/dev/null | awk '{t+=$1} END {print t+0}')
-  sleep 3
-  B=$(du -sb $WORK_DIRS 2>/dev/null | awk '{t+=$1} END {print t+0}')
-  if [ "$B" -gt "$A" ]; then
-    echo "deploy: a backup is copying right now — recreating web kills it and loses the record:" >&2
-    echo "$WORK_DIRS" | sed 's/^/        /' >&2
-    echo "        grew $((B-A)) bytes in 3s. Wait for it, or FORCE_OPS=1 to accept losing it." >&2
-    [ "${FORCE_OPS:-0}" = "1" ] || exit 1
+# commit after documenting it. A `.work-*` directory is a real artefact on a real volume.
+# Growth confirms copying; static staging may still be compressing into an archive outside
+# that directory. Its presence therefore cannot establish that the backup has finished.
+  work_dirs=$(ls -d /var/lib/docker/volumes/yoshling_web-data/_data/backups-*/.work-* 2>/dev/null || true)
+  if [ -n "$work_dirs" ]; then
+    before_bytes=$(du -sb $work_dirs 2>/dev/null | awk '{t+=$1} END {print t+0}')
+    sleep 3
+    after_bytes=$(du -sb $work_dirs 2>/dev/null | awk '{t+=$1} END {print t+0}')
+    if [ "$after_bytes" -gt "$before_bytes" ]; then
+      echo "deploy: a backup is copying right now — recreating web kills it and loses the record:" >&2
+      echo "$work_dirs" | sed 's/^/        /' >&2
+      echo "        grew $((after_bytes-before_bytes)) bytes in 3s. Wait for it, or FORCE_OPS=1 to accept losing it." >&2
+    else
+      echo "deploy: backup staging is present and completion is unverified:" >&2
+      echo "$work_dirs" | sed 's/^/        /' >&2
+      echo "        observed $before_bytes then $after_bytes bytes; compression may still be running." >&2
+      echo "        Wait for completion or inspect staging before deploying; FORCE_OPS=1 accepts interruption." >&2
+    fi
+    [ "${FORCE_OPS:-0}" = "1" ] || return 1
     echo "        FORCE_OPS=1 set — proceeding." >&2
-  else
-    echo "deploy: note — orphaned backup staging left by an interrupted run (not growing):" >&2
-    du -sh $WORK_DIRS 2>/dev/null | sed 's/^/        /' >&2
-    echo "        Safe to delete; nothing prunes these." >&2
   fi
-fi
+}
+
+assert_no_background_work
 
 cd /opt/yoshling
 git fetch -q /root/y.bundle main
@@ -182,8 +262,28 @@ if ! docker compose build "$SERVICE" >/tmp/deploy-build.log 2>&1; then
   exit 1
 fi
 
-# --no-deps so bringing up web cannot start a game container as a side effect.
-docker compose up -d --no-deps "$SERVICE"
+if [ "$SERVICE" = "zomboid" ]; then
+  assert_pz_stopped
+  docker compose create --force-recreate zomboid
+  # Prove the stopped container uses the image just built and retained its
+  # compose service identity. The image tag alone cannot establish that.
+  assert_pz_stopped
+  BUILT_IMAGE=$(docker image inspect -f '{{.Id}}' yoshling/project-zomboid:latest)
+  CREATED_IMAGE=$(docker inspect -f '{{.Image}}' yoshling-pz)
+  CREATED_SERVICE=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' yoshling-pz)
+  if [ "$BUILT_IMAGE" != "$CREATED_IMAGE" ] || [ "$CREATED_SERVICE" != "zomboid" ]; then
+    echo "deploy: Project Zomboid recreation could not be verified; check the container before powering it on." >&2
+    exit 1
+  fi
+  echo "==> Project Zomboid image applied and container verified stopped. Power on through the dashboard when ready."
+else
+  # Recheck the next Compose/image's policy and work started during the build.
+  # These are observations, not a lock: avoid starting new work during deployment.
+  assert_app_invites_ready
+  assert_no_background_work
+  # --no-deps so bringing up web cannot start a game container as a side effect.
+  docker compose up -d --no-deps web
+fi
 
 if [ -n "$VERIFY" ] && [ "$SERVICE" = "web" ]; then
   sleep 8

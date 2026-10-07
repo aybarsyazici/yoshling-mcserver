@@ -45,7 +45,8 @@ import type { McArchiveMember } from "@/lib/mc-archive";
 import { sha256File, shortHash } from "@/lib/backup-integrity";
 import { applyRetention } from "@/lib/backup-retention";
 import { recordBackupEvent } from "@/lib/backup-log";
-import { copyTreeCounting, countTree } from "@/lib/backup-copy";
+import { backupSourcePath, copyTreeCounting, countTree } from "@/lib/backup-copy";
+import { gameDataPath } from "@/lib/game-data-path";
 
 const execFileAsync = promisify(execFile);
 
@@ -109,13 +110,7 @@ export const SDTD_XML_PATH = path.join(SDTD_CONFIG_DIR, "sdtdserver.xml");
 
 // ── manifests ────────────────────────────────────────────────────────────────
 
-/**
- * Minecraft has no in-tar manifest and deliberately still does not get one: its members
- * are game directories (`world`, and `mods` on the archive `install-modpack` takes before
- * it deletes every jar), and the restore swaps exactly those. Adding a `manifest.json`
- * member would change the archive's shape for the sake of metadata the sidecar holds
- * anyway — and the restore would then have to know to skip it.
- */
+/** Routine MC archives stay world-only; pack rollback archives also embed portable metadata. */
 export type McManifest = BaseManifest;
 
 export interface SevenDaysManifest extends BaseManifest {
@@ -486,6 +481,7 @@ async function createMinecraft(
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `world-${stamp}.tar.gz`;
   const target = path.join(dir, filename);
+  const work = path.join(dir, `.work-${stamp}`);
 
   /**
    * A routine Minecraft backup is world-only, and stays world-only.
@@ -503,6 +499,9 @@ async function createMinecraft(
    */
   const members: McArchiveMember[] = ["world"];
   try {
+    const sourceRoot = await backupSourcePath(MC_DIR, MC_DIR);
+    const world = await backupSourcePath(sourceRoot, path.join(sourceRoot, "world"));
+    await countTree(world, sourceRoot);
     await mkdir(dir, { recursive: true });
 
     // Quiesce the world before reading it off disk. No `create` path used to do this,
@@ -520,9 +519,18 @@ async function createMinecraft(
       // ~5s, so the saving here is small; the correctness of where the check sits is not.)
       refuseIfPreemptedEarly(op, "this backup");
 
+      // A contained top-level alias still has to archive the world, rather than just
+      // the link to a sibling that is absent from the world-only archive. Stage that
+      // uncommon case; nested contained links keep their existing inert representation.
+      let archiveRoot = sourceRoot;
+      if (world !== path.join(sourceRoot, "world")) {
+        await mkdir(work, { recursive: true });
+        await copyTreeCounting(world, path.join(work, "world"), () => {}, { sourceRoot });
+        archiveRoot = work;
+      }
       op.step("Compressing the archive");
       try {
-        await execFileAsync("tar", ["-czf", target, "-C", MC_DIR, ...members], {
+        await execFileAsync("tar", ["-czf", target, "-C", archiveRoot, ...members], {
           timeout: TAR_TIMEOUT_MS,
         });
       } catch (e) {
@@ -571,6 +579,8 @@ async function createMinecraft(
     await rm(target, { force: true }).catch(() => {});
     await removeManifestSidecar(target);
     throw e;
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -643,8 +653,10 @@ async function createSevenDays(
     // Determine the active world from the config.
     let xml = "";
     try {
-      xml = await readFile(SDTD_XML_PATH, "utf-8");
-    } catch {}
+      xml = await readFile(await gameDataPath(SDTD_CONFIG_DIR, "sdtdserver.xml"), "utf-8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
     const gameWorld = readGameWorld(xml);
 
     // Stage the pieces in a work dir, then tar them together.
@@ -655,23 +667,27 @@ async function createSevenDays(
     // user and the copy has to keep its ownership. A backup without Saves/ is worthless,
     // so refuse instead of writing one that looks fine.
     op.step("Copying the saves");
-    const savesSrc = path.join(SDTD_DIR, "Saves");
+    const savesSrc = await backupSourcePath(SDTD_DIR, path.join(SDTD_DIR, "Saves"));
     if (!(await isDir(savesSrc))) {
       throw new Error(`No Saves/ in ${SDTD_DIR} — the server has not generated a world yet.`);
     }
-    await execFileAsync("cp", ["-a", savesSrc, work]);
+    await countTree(savesSrc, SDTD_DIR);
+    await execFileAsync("cp", ["-a", savesSrc, path.join(work, "Saves")]);
     op.settle("Copied the saves");
 
     // The saves copy is the long one, so this boundary saves the most.
     refuseIfPreemptedEarly(op, "this backup");
 
     // 2) the custom world map, only if the active world is a custom one.
-    const worldSrc = path.join(SDTD_DIR, "GeneratedWorlds", gameWorld);
+    const worldSrc = gameWorld
+      ? await backupSourcePath(SDTD_DIR, path.join(SDTD_DIR, "GeneratedWorlds", gameWorld))
+      : "";
     let includesWorldMap = false;
     op.step("Copying the world map");
     if (gameWorld && (await isDir(worldSrc))) {
       await mkdir(path.join(work, "GeneratedWorlds"), { recursive: true });
-      await execFileAsync("cp", ["-a", worldSrc, path.join(work, "GeneratedWorlds")]);
+      await countTree(worldSrc, SDTD_DIR);
+      await execFileAsync("cp", ["-a", worldSrc, path.join(work, "GeneratedWorlds", gameWorld)]);
       includesWorldMap = true;
       op.settle(`Copied the world map — ${gameWorld}`);
     } else {
@@ -835,7 +851,7 @@ async function createZomboid(
     if (await exists(world)) {
       op.step("Counting the world's files");
       op.detail(name);
-      const total = await countTree(world);
+      const total = await countTree(world, RUNTIME.zomboid.dir);
       op.settle(`Counted ${total.toLocaleString()} files`);
 
       op.step("Copying the world");
@@ -845,7 +861,7 @@ async function createZomboid(
       const copied = await copyTreeCounting(world, dest, (done, current) => {
         op.progress({ kind: "count", done, total, noun: "files" });
         op.detail(path.basename(current));
-      });
+      }, { sourceRoot: RUNTIME.zomboid.dir });
       worldFiles = copied.files;
       includesWorld = true;
       op.settle(`Copied the world — ${copied.files.toLocaleString()} of ${total.toLocaleString()} files`, {
@@ -902,7 +918,7 @@ async function createZomboid(
     let includesDb = false;
     if (await exists(dbFile)) {
       await mkdir(path.join(work, "db"), { recursive: true });
-      await cp(dbFile, path.join(work, "db", `${name}.db`));
+      await cp(await backupSourcePath(RUNTIME.zomboid.dir, dbFile), path.join(work, "db", `${name}.db`));
       includesDb = true;
       op.settle("Copied the player database");
     } else {
@@ -917,7 +933,9 @@ async function createZomboid(
     let configFiles = 0;
     for (const f of await readdir(serverDir)) {
       if (!f.startsWith(name)) continue;
-      await cp(path.join(serverDir, f), path.join(work, "Server", f), { recursive: true });
+      const source = await backupSourcePath(RUNTIME.zomboid.dir, path.join(serverDir, f));
+      if (await isDir(source)) await countTree(source, RUNTIME.zomboid.dir);
+      await cp(source, path.join(work, "Server", f), { recursive: true });
       configFiles++;
     }
     op.settle("Copied the server config", { count: { done: configFiles, noun: "files" } });

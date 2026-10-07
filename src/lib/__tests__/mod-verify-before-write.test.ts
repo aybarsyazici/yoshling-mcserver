@@ -111,11 +111,17 @@ describe("a corrupt jar is never written to the mods directory", () => {
 
     const gotBytes = source.indexOf("arrayBuffer()");
     const checked = source.indexOf("checkIntegrity(");
-    const wrote = source.indexOf("writeFile(path.join(getModsDir()");
+    const admitted = source.indexOf("await modFilePath(getModsDir(), fileName)");
+    const wrote = source.indexOf("writeFile(filePath, buffer)");
+    const readBack = source.indexOf("readFile(filePath)");
+    const recorded = source.indexOf("await db.installedMod.create(");
 
-    expect([gotBytes, checked, wrote].every((i) => i >= 0)).toBe(true);
+    expect([gotBytes, checked, admitted, wrote, readBack, recorded].every((i) => i >= 0)).toBe(true);
     expect(checked).toBeGreaterThan(gotBytes);
     expect(wrote).toBeGreaterThan(checked);
+    expect(wrote).toBeGreaterThan(admitted);
+    expect(readBack).toBeGreaterThan(wrote);
+    expect(recorded).toBeGreaterThan(readBack);
 
     // The declaration comes off the response, not from a literal. `checkIntegrity({}, …)`
     // is the dead-guard shape and must not come back.
@@ -124,7 +130,8 @@ describe("a corrupt jar is never written to the mods directory", () => {
 
     // There is exactly one place in this route that writes into the mods directory. A
     // second one would not be covered by the ordering asserted above.
-    expect(source.split("writeFile(").length - 1).toBe(1);
+    const direct = source.slice(source.indexOf('if (item.kind === "direct")'));
+    expect(direct.split("writeFile(").length - 1).toBe(1);
   });
 
   /**

@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
+
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { SectionHeading } from "@/components/ui-bits";
 import { Reveal } from "@/components/motion";
@@ -50,49 +52,75 @@ interface SdtdConfig {
   sandboxCode: string;
 }
 
+function isConfig(value: unknown): value is SdtdConfig & { sandboxCodeSource?: "file" | "db" } {
+  if (!value || typeof value !== "object") return false;
+  const data = value as Record<string, unknown>;
+  return typeof data.serverName === "string" && typeof data.password === "string" &&
+    typeof data.maxPlayers === "number" && Number.isInteger(data.maxPlayers) &&
+    data.maxPlayers >= 1 && data.maxPlayers <= 16 && typeof data.sandboxCode === "string" &&
+    (data.sandboxCodeSource === undefined || data.sandboxCodeSource === "file" || data.sandboxCodeSource === "db");
+}
+
+async function readConfig() {
+  const response = await fetch("/api/7dtd/config");
+  const data: unknown = await response.json();
+  if (!response.ok) {
+    const error = data !== null && typeof data === "object" && "error" in data ? data.error : null;
+    throw new Error(typeof error === "string" ? error : "Could not load 7DTD settings.");
+  }
+  if (!isConfig(data)) {
+    throw new Error("The 7DTD settings response is incomplete. Reload before editing.");
+  }
+  return { data, revision: fileRevision(response) };
+}
+
 export default function SevenDtdSettings() {
   const tint = GAMES["7dtd"].tint;
-  const [config, setConfig] = useState<SdtdConfig>({
-    serverName: "Yoshling 7DTD",
-    password: "",
-    maxPlayers: 8,
-    sandboxCode: "",
-  });
+  const [revision, setRevision] = useState<string | null>(null);
+  const [config, setConfig] = useState<SdtdConfig | null>(null);
   // Whether the sandbox code on screen came from `sdtdserver.xml` or from the stored
   // recovery copy, which is only the case before 7DTD's first install has produced the
   // file. A blank box with no explanation reads as "no code set".
   const [sandboxFromFile, setSandboxFromFile] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/7dtd/config")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data && !data.error) {
-          setConfig({
-            serverName: data.serverName ?? "Yoshling 7DTD",
-            password: data.password ?? "",
-            maxPlayers: data.maxPlayers ?? 8,
-            sandboxCode: data.sandboxCode ?? "",
-          });
-          setSandboxFromFile(data.sandboxCodeSource !== "db");
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+  const loadConfig = useCallback(() => {
+    return readConfig().then(({ data, revision }) => {
+      setRevision(revision);
+      setConfig({
+        serverName: data.serverName,
+        password: data.password,
+        maxPlayers: data.maxPlayers,
+        sandboxCode: data.sandboxCode,
+      });
+      setSandboxFromFile(data.sandboxCodeSource !== "db");
+      setLoadError(null);
+    }).catch((error) => {
+      setConfig(null);
+      setLoadError(error instanceof Error ? error.message : "Could not load 7DTD settings.");
+    }).finally(() => {
+      setLoading(false);
+    });
   }, []);
 
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
+
   async function save() {
+    if (config === null || loading || saving) return;
     setSaving(true);
     try {
       const res = await fetch("/api/7dtd/config", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...revisionHeaders(revision) },
         body: JSON.stringify(config),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (data.stale) { setConfig(null); setLoadError(data.error); }
         toast.error(data.error || "Failed to save");
         return;
       }
@@ -100,7 +128,7 @@ export default function SevenDtdSettings() {
       // 1–16, so asking for 99 stored 16 and left "99" in the box — the UI manufacturing a
       // confirmation the server had not given, which is this project's house defect.
       if (data.stored) {
-        setConfig((p) => ({
+        setConfig((p) => p && ({
           serverName: data.stored.serverName ?? p.serverName,
           password: data.stored.password ?? p.password,
           maxPlayers: data.stored.maxPlayers ?? p.maxPlayers,
@@ -114,6 +142,10 @@ export default function SevenDtdSettings() {
       // A warning rendered as a success is the defect class this whole change is about.
       if (data.warning) toast.warning(data.warning);
       else toast.success("Settings saved. Restart 7DTD to apply.");
+      if (fileRevision(res)) setRevision(fileRevision(res));
+      else await loadConfig();
+    } catch {
+      toast.error("Failed to save 7DTD settings.");
     } finally {
       setSaving(false);
     }
@@ -125,10 +157,10 @@ export default function SevenDtdSettings() {
   // code one character short of the rule and nothing explains it, so refusing on length
   // could reject something the game itself emitted. See that file for the measurements.
   const sandboxLooksIncomplete =
-    config.sandboxCode.length > 0 && (config.sandboxCode.length - 1) % 3 !== 0;
+    config !== null && config.sandboxCode.length > 0 && (config.sandboxCode.length - 1) % 3 !== 0;
 
   function set<K extends keyof SdtdConfig>(key: K, value: SdtdConfig[K]) {
-    setConfig((p) => ({ ...p, [key]: value }));
+    setConfig((p) => p && ({ ...p, [key]: value }));
   }
 
   return (
@@ -142,6 +174,16 @@ export default function SevenDtdSettings() {
 
       {loading ? (
         <div className="skeleton h-80 rounded-2xl" />
+      ) : config === null ? (
+        <div role="alert" className="space-y-3 rounded-2xl bg-card/70 p-6 ring-1 ring-foreground/10">
+          <p className="op-warn text-sm">{loadError || "Could not load 7DTD settings."}</p>
+          <p className="text-xs text-muted-foreground">Load the current settings before making changes.</p>
+          <Button variant="outline" onClick={() => {
+            setLoading(true);
+            setLoadError(null);
+            void loadConfig();
+          }}>Retry 7DTD settings</Button>
+        </div>
       ) : (
         <Reveal>
           <div className="space-y-6 rounded-2xl bg-card/70 p-6 ring-1 ring-foreground/10 backdrop-blur">
@@ -230,7 +272,7 @@ export default function SevenDtdSettings() {
             </div>
 
             <div className="flex items-center gap-3 border-t border-border/50 pt-5">
-              <Button onClick={save} disabled={saving} style={{ background: tint, color: "var(--background)" }}>
+              <Button onClick={save} disabled={saving || loading} style={{ background: tint, color: "var(--background)" }}>
                 {saving ? "Saving…" : "Save settings"}
               </Button>
               <p className="text-xs text-muted-foreground">Changes apply on the next server restart.</p>

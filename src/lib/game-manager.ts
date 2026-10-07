@@ -1,6 +1,8 @@
 import { readFile } from "fs/promises";
 import path from "path";
+import { gameDataPath } from "@/lib/game-data-path";
 import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
+import { CoResidencyError } from "@/lib/coresidency";
 import { sendCommand as rconSend } from "@/lib/rcon";
 import { getSdtdStatus, sdtdSaveWorld, sdtdSessionIsGameReady, telnetSession } from "@/lib/telnet";
 import { getPzStatus, pzConsole, pzConsoleLong, pzSave, readModState } from "@/lib/zomboid";
@@ -163,6 +165,37 @@ async function containerState(container: string): Promise<string> {
   } catch {
     return "missing";
   }
+}
+
+const stoppedContainerStates = new Set(["exited", "created", "missing"]);
+
+async function stateBeforeChangingGame(game: GameId): Promise<string> {
+  const { state } = await inspectContainerBudget(RUNTIME[game].container);
+  if (state !== "running" && !stoppedContainerStates.has(state)) {
+    throw new Error(`${GAMES[game].name}'s container is ${state}; it cannot be safely changed.`);
+  }
+  return state;
+}
+
+async function requireGameStopped(game: GameId): Promise<void> {
+  const { state } = await inspectContainerBudget(RUNTIME[game].container);
+  if (!stoppedContainerStates.has(state)) {
+    throw new Error(`${GAMES[game].name}'s container was not verified stopped (${state}). Refusing to change its files or recreate it.`);
+  }
+}
+
+async function verifyPowerState(op: OpHandle, game: GameId, expectedRunning: boolean): Promise<string> {
+  const { state } = await inspectContainerBudget(RUNTIME[game].container);
+  const matches = expectedRunning ? state === "running" : stoppedContainerStates.has(state);
+  op.fact({
+    label: "Power",
+    value: state === "running" ? "running" : stoppedContainerStates.has(state) ? "powered off" : `in state ${state}`,
+    ...(matches ? {} : { verdict: "bad" as const }),
+  });
+  if (!matches) {
+    throw new Error(`${GAMES[game].name} is ${stoppedContainerStates.has(state) ? "powered off" : `in state ${state}`} after the change; it was expected to ${expectedRunning ? "be running" : "remain powered off"}. Check the container before retrying.`);
+  }
+  return state;
 }
 
 async function containerStartedAt(container: string): Promise<number | null> {
@@ -1151,13 +1184,13 @@ async function withPowerOperation<T>(
         return await fn(op);
       } catch (err) {
         try {
-          const state = await containerState(RUNTIME[spec.game].container);
+          const { state } = await inspectContainerBudget(RUNTIME[spec.game].container);
           op.fact({
             label: "Power",
-            value: state === "running" ? "still running" : "still powered off",
+            value: state === "running" ? "still running" : stoppedContainerStates.has(state) ? "still powered off" : `in state ${state}`,
           });
         } catch {
-          /* nothing to add; the summary falls back to "check its page" */
+          op.fact({ label: "Power", value: "in an unknown state", verdict: "warn" });
         }
         throw err;
       }
@@ -1213,7 +1246,7 @@ async function containerExit(container: string): Promise<{ state: string; exitCo
  */
 async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
   const name = GAMES[game].name;
-  if ((await containerState(RUNTIME[game].container)) !== "running") {
+  if ((await stateBeforeChangingGame(game)) !== "running") {
     op.step(`Checking ${name}`, { game });
     op.settle(`${name} was already stopped — nothing to save or stop`, { kind: "noop" });
     return false;
@@ -1258,6 +1291,8 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
     answering: saved,
     narrate: (line) => op.detail(`${savedPrefix} — ${line}`),
   });
+
+  await requireGameStopped(game);
 
   const { state, exitCode } = await containerExit(RUNTIME[game].container);
   if (state === "running") {
@@ -1323,12 +1358,34 @@ export async function containerIsRunning(game: GameId): Promise<boolean> {
   return (await containerState(RUNTIME[game].container)) === "running";
 }
 
+/** Strict inspection for destructive workflows: an unavailable Docker socket is unknown. */
+export async function gameContainerState(game: GameId): Promise<string> {
+  return (await inspectContainerBudget(RUNTIME[game].container)).state;
+}
+
 /** Start the container and prove it came up, rather than assuming `docker start` meant it. */
 async function narratedStart(op: OpHandle, game: GameId): Promise<void> {
   const name = GAMES[game].name;
+  const runningPeers: GameId[] = [];
+  for (const other of otherGames(game)) {
+    if ((await stateBeforeChangingGame(other)) === "running") runningPeers.push(other);
+  }
+  if (runningPeers.length) {
+    throw new CoResidencyError(
+      `${runningPeers.map((other) => GAMES[other].name).join(" and ")} ${runningPeers.length > 1 ? "are" : "is"} already running, so ${name} was not started. Use Power on to switch servers.`,
+      runningPeers
+    );
+  }
   op.step(`Starting ${name}`, { game });
   await DRIVERS[game].start();
-  const state = await containerState(RUNTIME[game].container);
+  let state;
+  try {
+    state = (await inspectContainerBudget(RUNTIME[game].container)).state;
+  } catch (e) {
+    op.settle("Ran docker start, but the container state could not be read", { kind: "noop" });
+    op.fact({ label: "Power", value: "in an unknown state", verdict: "bad" });
+    throw new Error(`Couldn't verify that ${name} started: ${(e as Error).message}`);
+  }
   if (state === "running") {
     op.settle("Started the container");
     op.fact({ label: "Power", value: "running" });
@@ -1338,6 +1395,7 @@ async function narratedStart(op: OpHandle, game: GameId): Promise<void> {
     // exists to stop.
     op.settle(`Ran docker start — the container is "${state}"`, { kind: "noop" });
     op.fact({ label: "Power", value: state, verdict: "bad" });
+    throw new Error(`${name} did not start (container state: ${state}). Check the container before retrying.`);
   }
 }
 
@@ -1369,7 +1427,7 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
   // no-op, not a failure. If the container is up and the game is silent, the original
   // sentence is exactly right and stays. Both branches hold no resources and return no
   // steps, so the route's `changed = steps.length > 0` keeps working unchanged.
-  if ((await containerState(RUNTIME[game].container)) === "running") {
+  if ((await stateBeforeChangingGame(game)) === "running") {
     const answering = await DRIVERS[game]
       .status()
       .then((s) => s.status === "online")
@@ -1413,7 +1471,7 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
   // name rather than quietly stopping a world it never claimed.
   const runningOthers: GameId[] = [];
   for (const other of otherGames(game)) {
-    if ((await containerState(RUNTIME[other].container)) === "running") runningOthers.push(other);
+    if ((await stateBeforeChangingGame(other)) === "running") runningOthers.push(other);
   }
   const title = runningOthers.length
     ? `Starting ${GAMES[game].name} — saving and stopping ${runningOthers
@@ -1438,7 +1496,7 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
       const steps: HandoffStep[] = [];
 
       for (const other of otherGames(game)) {
-        if ((await containerState(RUNTIME[other].container)) !== "running") continue;
+        if ((await stateBeforeChangingGame(other)) !== "running") continue;
         if (!runningOthers.includes(other)) {
           // A world came up between the probe and admission, so this operation never
           // claimed its file lane and must not write to it. Only an out-of-band
@@ -1447,7 +1505,7 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
           // reports co-residency instead of silently working around it.
           throw new Error(
             `${GAMES[other].name} started while this operation was being admitted, so ` +
-              `${GAMES[game].name} was not started and nothing was stopped. ` +
+              `${GAMES[game].name} was not started. ` +
               `Check which worlds are running and try again.`
           );
         }
@@ -1479,7 +1537,7 @@ export async function powerOn(game: GameId, startedBy?: string | null): Promise<
  * `powerOn`'s own guard is what this always should have been.
  */
 export async function powerOff(game: GameId, startedBy?: string | null): Promise<boolean> {
-  if ((await containerState(RUNTIME[game].container)) !== "running") {
+  if ((await stateBeforeChangingGame(game)) !== "running") {
     return runOperation(
       {
         kind: "power",
@@ -1565,9 +1623,11 @@ export async function withGameStopped(
      * recoverable — it leaves the archive intact and a second restore possible.
      */
     restartOnFailure?: boolean;
+    /** Final read-only admission under the power lock, before save/stop. */
+    beforeStop?: () => Promise<void>;
   } = {}
 ): Promise<{ restarted: boolean }> {
-  const { stage, restartOnFailure = true, kind = "power", title, startedBy } = opts;
+  const { stage, restartOnFailure = true, kind = "power", title, startedBy, beforeStop } = opts;
   return withPowerOperation(
     {
       kind,
@@ -1577,8 +1637,10 @@ export async function withGameStopped(
       startedBy,
     },
     async (op) => {
-      const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
+      await beforeStop?.();
+      const wasRunning = (await stateBeforeChangingGame(game)) === "running";
       if (wasRunning) await narratedStop(op, game);
+      await requireGameStopped(game);
       let failed = false;
       try {
         // Only open a step when the caller gave one. A caller that narrates itself
@@ -1599,6 +1661,7 @@ export async function withGameStopped(
       }
       // "Restored but the world stayed down" is a materially different outcome from
       // "restored and it's coming back up", and nothing else on the page says which.
+      await verifyPowerState(op, game, wasRunning);
       op.fact({ label: "Server", value: wasRunning ? "starting again" : "left powered off" });
       return { value: { restarted: wasRunning } };
     }
@@ -1648,9 +1711,11 @@ export async function restartGame(game: GameId, startedBy?: string | null): Prom
       // already down records "nothing to stop" as evidence instead of a `noop` step —
       // which would drag the whole record to `partial` and a "but it did not go cleanly"
       // sentence about an operation that did exactly what was asked.
-      const wasRunning = (await containerState(RUNTIME[game].container)) === "running";
+      const wasRunning = (await stateBeforeChangingGame(game)) === "running";
       if (wasRunning) await narratedStop(op, game);
+      await requireGameStopped(game);
       await narratedStart(op, game);
+      await verifyPowerState(op, game, true);
       if (!wasRunning) {
         op.fact({ label: "Shutdown", value: "nothing to stop — it was already off", game });
       }
@@ -1678,14 +1743,21 @@ export async function restartGame(game: GameId, startedBy?: string | null): Prom
  * wrong here — it offered 6 GB on a 7.5 GB box, which OOM-kills the server.
  */
 const HOST_RESERVE_GB = 2.5;
+// Both shipped heap defaults leave 2 GiB below their container limits (MC 4/6,
+// PZ 12/14). Reserve that space for the JVM, native libraries and mapped data.
+const CONTAINER_RESERVE_GB = 2;
 
-export async function hostTotalGb(): Promise<number> {
+async function measuredHostGb(): Promise<number | null> {
   try {
     const meminfo = await readFile("/proc/meminfo", "utf-8");
     const kb = Number(/MemTotal:\s+(\d+)/.exec(meminfo)?.[1] ?? 0);
-    if (kb > 0) return kb / 1024 / 1024;
+    if (Number.isFinite(kb) && kb > 0) return kb / 1024 / 1024;
   } catch {}
-  return 8;
+  return null;
+}
+
+export async function hostTotalGb(): Promise<number> {
+  return (await measuredHostGb()) ?? 8;
 }
 
 export async function maxGameGb(): Promise<number> {
@@ -1763,7 +1835,7 @@ export async function configuredMemoryGb(): Promise<Record<GameId, number | null
 export interface MemoryState {
   game: GameId;
   /** Total host RAM, so the UI can explain the ceiling. */
-  hostGb: number;
+  hostGb: number | null;
   /** False for games with no configurable heap (7 Days to Die). */
   supported: boolean;
   reason?: string;
@@ -1785,6 +1857,9 @@ export interface MemoryState {
    * JVM that will not start. The refusal is the safety net; not offering it is the fix.
    */
   minGb: number;
+  configuredLimitGb?: number | null;
+  containerLimitGb?: number | null;
+  nativeReserveGb?: number;
 }
 
 /** "4G" / "4096m" → GB. */
@@ -1810,18 +1885,76 @@ async function liveEnv(container: string, key: string): Promise<string | null> {
   return null;
 }
 
+/** Missing containers have no current ceiling; failed inspection is unknown. */
+async function inspectContainerBudget(container: string): Promise<{
+  state: string;
+  limitGb: number | null;
+}> {
+  try {
+    const { stdout } = await execAsync(
+      `docker inspect ${container} --format '{{.State.Status}}|{{.HostConfig.Memory}}'`
+    );
+    const [state, raw] = stdout.trim().replace(/^'|'$/g, "").split("|");
+    const bytes = Number(raw);
+    if (!state || !raw || !/^\d+$/.test(raw) || !Number.isFinite(bytes) || bytes < 0) {
+      throw new Error("Docker returned an unreadable container memory limit");
+    }
+    return { state, limitGb: bytes === 0 ? null : bytes / 1024 ** 3 };
+  } catch (e) {
+    if (/no such (?:object|container)/i.test((e as Error).message)) {
+      return { state: "missing", limitGb: null };
+    }
+    throw e;
+  }
+}
+
+function composeLimitGb(value: string | null): number | null {
+  if (value === null) return null;
+  const match = /^(\d+(?:\.\d+)?)\s*([kmgt]?)(?:i?b)?$/i.exec(value.trim());
+  if (!match) throw new Error("The service's mem_limit is unreadable");
+  const power = { "": 0, k: 1, m: 2, g: 3, t: 4 }[match[2].toLowerCase()]!;
+  const bytes = Number(match[1]) * 1024 ** power;
+  if (!Number.isFinite(bytes)) throw new Error("The service's mem_limit is unreadable");
+  return bytes === 0 ? null : bytes / 1024 ** 3;
+}
+
+async function memoryBudget(game: GameId) {
+  const rt = RUNTIME[game];
+  const hostGb = await measuredHostGb();
+  if (hostGb === null) throw new Error("Couldn't read the host memory capacity. Nothing was changed.");
+  const compose = await readCompose();
+  const env = await readEnvMap();
+  if (rt.memory && parseGb(readServiceEnv(compose, rt.service, rt.memory.keys[0], env)) === null) {
+    throw new Error("The configured heap setting is unreadable");
+  }
+  const configuredLimitGb = composeLimitGb(readServiceEnv(compose, rt.service, "mem_limit", env));
+  const container = await inspectContainerBudget(rt.container);
+  const floorRaw = readServiceEnv(compose, rt.service, "MIN_MEMORY", env);
+  const floor = parseGb(floorRaw);
+  if (floorRaw !== null && floor === null) throw new Error("The service's MIN_MEMORY is unreadable");
+  const caps = [hostGb - HOST_RESERVE_GB];
+  for (const limit of [configuredLimitGb, container.limitGb]) {
+    if (limit !== null) caps.push(limit - CONTAINER_RESERVE_GB);
+  }
+  return {
+    hostGb: Math.round(hostGb * 10) / 10,
+    configuredLimitGb,
+    containerLimitGb: container.limitGb,
+    nativeReserveGb: CONTAINER_RESERVE_GB,
+    maxGb: Math.max(0, Math.floor(Math.min(...caps))),
+    minGb: Math.max(1, Math.ceil(floor ?? 1)),
+  };
+}
+
 export async function getMemoryState(game: GameId): Promise<MemoryState> {
   const rt = RUNTIME[game];
   const running = (await containerState(rt.container)) === "running";
   const base = {
     game,
     running,
-    maxGb: await maxGameGb(),
-    // `?? 1`: no MIN_MEMORY in the block means no floor (Minecraft's single `MEMORY` sets
-    // both bounds), and an unreadable compose is reported by the branches below rather
-    // than by pretending there is a floor.
-    minGb: (await heapFloorGb(game)) ?? 1,
-    hostGb: Math.round((await hostTotalGb()) * 10) / 10,
+    maxGb: 0,
+    minGb: 1,
+    hostGb: null as number | null,
   };
 
   if (!rt.memory) {
@@ -1836,30 +1969,52 @@ export async function getMemoryState(game: GameId): Promise<MemoryState> {
   }
 
   const key = rt.memory.keys[0];
+  let budget;
   let configuredGb: number | null = null;
   try {
+    budget = await memoryBudget(game);
     configuredGb = parseGb(readServiceEnv(await readCompose(), rt.service, key, await readEnvMap()));
-  } catch {
+  } catch (e) {
     return {
       ...base,
       supported: false,
-      reason: `Can't read ${COMPOSE_FILE}. Memory can only be changed on the server itself.`,
+      reason: `Couldn't verify the memory limits: ${(e as Error).message.replace(/\.$/, "")}. Memory changes are unavailable.`,
       configuredGb: null,
       liveGb: null,
-      applied: true,
+      applied: false,
     };
   }
 
   const liveGb = parseGb(await liveEnv(rt.container, key));
   return {
     ...base,
+    ...budget,
     supported: true,
     configuredGb,
     liveGb,
-    // No container yet = nothing to disagree with; it'll be created with the
-    // configured value on first power on.
-    applied: liveGb === null || liveGb === configuredGb,
+    // Missing/unreadable container env is unknown, never proof of application.
+    applied: configuredGb !== null && liveGb !== null && liveGb === configuredGb,
   };
+}
+
+function mappedServiceEnvUpdates(
+  game: GameId,
+  updates: Record<string, string>
+): Record<string, string> {
+  const rt = RUNTIME[game];
+
+  const mapped: Record<string, string> = {};
+  for (const [composeKey, value] of Object.entries(updates)) {
+    const envKey = rt.envKeys[composeKey];
+    if (!envKey) {
+      throw new Error(
+        `${composeKey} is not a UI-owned setting for ${rt.service}: it has no .env key in ` +
+          `RUNTIME["${game}"].envKeys, so it can only be changed in docker-compose.yml on the server.`
+      );
+    }
+    mapped[envKey] = value;
+  }
+  return mapped;
 }
 
 /**
@@ -1894,19 +2049,7 @@ async function writeServiceEnvToDotEnv(
   updates: Record<string, string>
 ): Promise<{ applied: string[]; added: string[] }> {
   const rt = RUNTIME[game];
-
-  const mapped: Record<string, string> = {};
-  for (const [composeKey, value] of Object.entries(updates)) {
-    const envKey = rt.envKeys[composeKey];
-    if (!envKey) {
-      throw new Error(
-        `${composeKey} is not a UI-owned setting for ${rt.service}: it has no .env key in ` +
-          `RUNTIME["${game}"].envKeys, so it can only be changed in docker-compose.yml on the server.`
-      );
-    }
-    mapped[envKey] = value;
-  }
-
+  const mapped = mappedServiceEnvUpdates(game, updates);
   const { text, applied, added } = patchEnvFile(await readEnvFile(), mapped);
   await writeEnvFile(text);
 
@@ -1957,18 +2100,46 @@ async function writeServiceEnvToDotEnv(
 export async function applyServiceEnv(
   game: GameId,
   updates: Record<string, string>,
-  { stage, setting, startedBy }: { stage: string; setting?: string; startedBy?: string | null }
+  { stage, setting, startedBy, onApplied }: {
+    stage: string;
+    setting?: string;
+    startedBy?: string | null;
+    /** Persist dependent state only after verification, while still holding power. */
+    onApplied?: () => Promise<void>;
+  }
 ): Promise<void> {
   const rt = RUNTIME[game];
   return withPowerOperation(
     { kind: "settings", game, action: "restart", title: stage, startedBy },
     async (op) => {
+      mappedServiceEnvUpdates(game, updates);
+      // The database is a record of an applied setting, never evidence the container
+      // received it. In particular, retries after a failed recreate must check both.
+      const compose = await readCompose();
+      const env = await readEnvMap();
+      const container = await inspectContainerBudget(rt.container);
+      if (container.state !== "running" && !stoppedContainerStates.has(container.state)) {
+        throw new Error(`${GAMES[game].name}'s container is ${container.state}; it cannot be safely changed.`);
+      }
+      let alreadyApplied = container.state !== "missing";
+      for (const [key, value] of Object.entries(updates)) {
+        if (readServiceEnv(compose, rt.service, key, env) !== value ||
+            await liveEnv(rt.container, key) !== value) alreadyApplied = false;
+      }
+      if (alreadyApplied) {
+        await recordEnvApplied(op, game, updates, setting ?? Object.keys(updates).join("/"));
+        op.fact({ label: "Power", value: container.state === "running" ? "still running" : "powered off" });
+        await onApplied?.();
+        return { value: undefined as void };
+      }
+
       op.step(`Editing ${ENV_FILE}`, { game });
       const { applied } = await writeServiceEnvToDotEnv(game, updates);
       op.settle(`Set ${applied.join(", ")} in ${ENV_FILE}`);
 
-      const wasRunning = (await containerState(rt.container)) === "running";
+      const wasRunning = container.state === "running";
       if (wasRunning) await narratedStop(op, game);
+      await requireGameStopped(game);
 
       op.step("Recreating the container", { game });
       await recreateService(game, { start: false });
@@ -1982,6 +2153,8 @@ export async function applyServiceEnv(
       // is the same configured-vs-live comparison the memory card makes, which is
       // the one report in this codebase that has never been wrong.
       await recordEnvApplied(op, game, updates, setting ?? Object.keys(updates).join("/"));
+      await verifyPowerState(op, game, wasRunning);
+      await onApplied?.();
       return { value: undefined as void };
     }
   );
@@ -2008,33 +2181,8 @@ async function recordEnvApplied(
   op.fact({ label: "Setting", value: setting });
   op.fact({ label: "Configured", value: wanted });
   op.fact({ label: "Container", value: live.join(", "), verdict: agrees ? undefined : "warn" });
-}
-
-/**
- * The floor a game's heap may not go under, because `-Xmx` below `-Xms` is a JVM that
- * refuses to start at all.
- *
- * Project Zomboid's compose block sets both, and only `MAX_MEMORY` is UI-owned
- * (`RUNTIME.zomboid.memory.keys`). Measured on production 2026-09-30, from the
- * container's own log: `-Xms2048m -Xmx12288m` against `MIN_MEMORY: "2048m"` and
- * `MAX_MEMORY: "12288m"` — the two lines reach the JVM verbatim. So picking 1 GB on the
- * memory card wrote `-Xmx1024m` under `-Xms2048m`, and the JVM dies on
- * "Initial heap size set to a larger value than the maximum heap size" before the game
- * exists. The card then compared configured against live, found them equal, and rendered
- * the setting as applied — green, correct by its own lights, and the world unbootable.
- *
- * Returns null when the service declares no minimum (Minecraft: `MEMORY` sets both).
- */
-async function heapFloorGb(game: GameId): Promise<number | null> {
-  const rt = RUNTIME[game];
-  try {
-    const compose = await readCompose();
-    const env = await readEnvMap();
-    return parseGb(readServiceEnv(compose, rt.service, "MIN_MEMORY", env));
-  } catch {
-    // Unreadable compose is already handled by `getMemoryState`, which says so. Not
-    // being able to read the floor is not a reason to refuse a change outright.
-    return null;
+  if (!agrees) {
+    throw new Error("The container settings could not be verified after applying them. Retry the change.");
   }
 }
 
@@ -2057,20 +2205,21 @@ export function isMemoryRangeError(e: unknown): e is MemoryRangeError {
 export async function setMemory(game: GameId, gb: number, startedBy?: string | null): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");
-  const cap = await maxGameGb();
-  if (!Number.isFinite(gb) || gb < 1 || gb > cap) {
+  const budget = await memoryBudget(game);
+  const cap = budget.maxGb;
+  if (!Number.isInteger(gb) || gb < 1 || gb > cap) {
     throw new MemoryRangeError(
-      `Memory must be between 1 and ${cap} GB. This host has ` +
-        `${Math.round(await hostTotalGb())} GB, and the server needs roughly a gigabyte ` +
-        `above its heap plus room for the OS and the dashboard.`
+      `Memory must be a whole number between 1 and ${cap} GB. This ceiling leaves ` +
+        `${CONTAINER_RESERVE_GB} GB below the configured and current container limits ` +
+        `for native memory, plus room on the host for the OS and dashboard. Nothing was changed.`
     );
   }
 
   // Checked BEFORE the operation is admitted, like the cap above: a change that cannot
   // be applied must not stop the world, recreate its container, or mark an in-flight
   // backup pre-empted on the way to failing.
-  const floorGb = await heapFloorGb(game);
-  if (floorGb !== null && gb < floorGb) {
+  const floorGb = budget.minGb;
+  if (gb < floorGb) {
     throw new MemoryRangeError(
       `${GAMES[game].name}'s heap can't be set below ${floorGb} GB: docker-compose.yml also ` +
         `sets MIN_MEMORY (-Xms) to ${floorGb} GB, and a JVM with -Xmx under -Xms refuses to ` +
@@ -2088,6 +2237,7 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
       startedBy,
     },
     async (op) => {
+      const wasRunning = (await stateBeforeChangingGame(game)) === "running";
       const value = rt.memory!.format(gb);
       const updates = Object.fromEntries(rt.memory!.keys.map((k) => [k, value]));
 
@@ -2099,9 +2249,9 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
       const { applied } = await writeServiceEnvToDotEnv(game, updates);
       op.settle(`Set ${applied.join(", ")} to ${value} in ${ENV_FILE}`);
 
-      const wasRunning = (await containerState(rt.container)) === "running";
       // Save first — recreating a running game server is otherwise a hard kill.
       if (wasRunning) await narratedStop(op, game);
+      await requireGameStopped(game);
 
       // Recreate without starting, then start again only if it was running before.
       op.step("Recreating the container", { game });
@@ -2112,13 +2262,16 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
       else op.fact({ label: "Power", value: "powered off" });
 
       const state = await getMemoryState(game);
+      const finalState = await verifyPowerState(op, game, wasRunning);
+      state.running = finalState === "running";
       op.fact({ label: "Setting", value: "Memory" });
       op.fact({ label: "Configured", value: `${state.configuredGb ?? gb} GB` });
       op.fact({
         label: "Container",
-        value: state.liveGb != null ? `${state.liveGb} GB` : "no container yet",
+        value: state.liveGb != null ? `${state.liveGb} GB` : "heap value unavailable",
         verdict: state.applied ? undefined : "warn",
       });
+      if (!state.applied) throw new Error("The new container's memory setting could not be verified. Retry the change.");
       return { value: state };
     }
   );
@@ -2127,7 +2280,7 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
 // ── config file readers (shared) ─────────────────────────────────────────────
 
 export async function getMinecraftProperties(): Promise<Record<string, string>> {
-  const filePath = path.join(RUNTIME.minecraft.dir, "server.properties");
+  const filePath = await gameDataPath(RUNTIME.minecraft.dir, "server.properties");
   const content = await readFile(filePath, "utf-8");
   const properties: Record<string, string> = {};
   for (const line of content.split("\n")) {
@@ -2136,4 +2289,21 @@ export async function getMinecraftProperties(): Promise<Record<string, string>> 
     properties[key.trim()] = valueParts.join("=").trim();
   }
   return properties;
+}
+
+/** Only selected, nonsecret values leave this verified config/container comparison. */
+export async function getMinecraftTarget(): Promise<{ mcVersion: string; loader: string }> {
+  const compose = await readCompose();
+  const env = await readEnvMap();
+  const rt = RUNTIME.minecraft;
+  const mcVersion = readServiceEnv(compose, rt.service, "VERSION", env);
+  const loader = readServiceEnv(compose, rt.service, "TYPE", env)?.toLowerCase();
+  const [appliedVersion, appliedLoader] = await Promise.all([
+    liveEnv(rt.container, "VERSION"), liveEnv(rt.container, "TYPE"),
+  ]);
+  if (!mcVersion || !loader || !appliedVersion || !appliedLoader ||
+      mcVersion !== appliedVersion || loader !== appliedLoader.toLowerCase()) {
+    throw new Error("The Minecraft version/loader is unknown or differs between configured and created-container values. Verify the settings before changing game files.");
+  }
+  return { mcVersion, loader };
 }

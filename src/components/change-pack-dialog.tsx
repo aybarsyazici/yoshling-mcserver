@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { useOperations } from "@/components/operations-provider";
 import { ApplyReportDialog } from "@/components/apply-report-dialog";
 import {
   ModpackBrowserModrinth,
@@ -69,6 +70,7 @@ export function ChangePackDialog({
   onApplied: () => void;
 }) {
   const { can } = useGames(CAPABILITY_POLL_MS);
+  const { refresh: refreshOperations } = useOperations();
   const [chosen, setChosen] = useState<ModpackResult | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -137,6 +139,7 @@ export function ChangePackDialog({
         modrinthId: chosen.project_id,
         packName: chosen.title,
       });
+      if (result.kind === "unconfirmed-import") { toast.info(result.message); return; }
       if (result.kind === "error") {
         toast.error(result.message);
         return;
@@ -147,6 +150,7 @@ export function ChangePackDialog({
       setOpen(false);
       onApplied();
     } finally {
+      void refreshOperations();
       setApplying(false);
     }
   }

@@ -44,11 +44,34 @@
 
 import { chmod, copyFile, lstat, mkdir, readdir, readlink, symlink } from "fs/promises";
 import path from "path";
+import { resolveSafeFilePath } from "@/lib/file-guard";
+
+/** Check producer-controlled source roots against the configured game volume. */
+export async function backupSourcePath(sourceRoot: string, src: string): Promise<string> {
+  // `src` can already be canonical (PZ's savePaths), while sourceRoot may be a mount
+  // alias. Admit both through the physical configured root, then keep using that tree.
+  const root = await resolveSafeFilePath(sourceRoot, "");
+  if (!root) throw new Error("Refusing a backup source outside the configured game volume");
+  const relative = path.relative(path.resolve(sourceRoot), path.resolve(src));
+  const requested = path.isAbsolute(src) && !relative.startsWith(`..${path.sep}`) && relative !== ".."
+    ? relative
+    : path.relative(root, path.resolve(src));
+  const admitted = await resolveSafeFilePath(root, requested, { allowMissing: true });
+  if (!admitted) throw new Error("Refusing a backup source outside the configured game volume");
+  return admitted;
+}
 
 /** Every file, symlink and other non-directory entry under `src`. Directories excluded. */
-export async function countTree(src: string): Promise<number> {
+export async function countTree(src: string, sourceRoot = src): Promise<number> {
   let total = 0;
-  const stack = [src];
+  let admitted: string;
+  try {
+    admitted = await backupSourcePath(sourceRoot, src);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw e;
+  }
+  const stack = [admitted];
   while (stack.length > 0) {
     const dir = stack.pop()!;
     let entries;
@@ -60,8 +83,12 @@ export async function countTree(src: string): Promise<number> {
       continue;
     }
     for (const e of entries) {
-      if (e.isDirectory()) stack.push(path.join(dir, e.name));
-      else total++;
+      const entry = path.join(dir, e.name);
+      if (e.isDirectory()) stack.push(await backupSourcePath(sourceRoot, entry));
+      else {
+        if (e.isSymbolicLink()) await backupSourcePath(sourceRoot, entry);
+        total++;
+      }
     }
   }
   return total;
@@ -88,10 +115,12 @@ export async function copyTreeCounting(
   src: string,
   dest: string,
   onProgress: (done: number, currentPath: string) => void,
-  opts: { everyFiles?: number; everyMs?: number } = {}
+  opts: { everyFiles?: number; everyMs?: number; sourceRoot?: string } = {}
 ): Promise<CopyTreeResult> {
   const everyFiles = opts.everyFiles ?? 500;
   const everyMs = opts.everyMs ?? 500;
+  const sourceRoot = opts.sourceRoot ?? src;
+  const admitted = await backupSourcePath(sourceRoot, src);
 
   let files = 0;
   let dirs = 0;
@@ -111,10 +140,11 @@ export async function copyTreeCounting(
       const s = path.join(from, e.name);
       const d = path.join(to, e.name);
       if (e.isDirectory()) {
-        await walk(s, d);
+        await walk(await backupSourcePath(sourceRoot, s), d);
         continue;
       }
       if (e.isSymbolicLink()) {
+        await backupSourcePath(sourceRoot, s);
         await symlink(await readlink(s), d);
         files++;
       } else if (e.isFile()) {
@@ -134,7 +164,7 @@ export async function copyTreeCounting(
     }
   }
 
-  await walk(src, dest);
+  await walk(admitted, dest);
   // Always report the final figure, so the last thing recorded is the total and not
   // whatever the throttle happened to have emitted.
   onProgress(files, dest);

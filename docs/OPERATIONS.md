@@ -7,6 +7,20 @@ adversarial lenses, 4 blockers and 23 majors found and repaired).
 **If you add an operation that can take more than ten seconds, wrap it in
 `runOperation`. Do not invent a second mechanism.**
 
+## Deployment admission
+
+`scripts/deploy.sh` observes seeds and backup staging before checkout/build and again
+immediately before web replacement. It revalidates the next Compose/image's invitation
+policy first. Failed Docker inspection refuses replacement. Seed command text is used for
+detection; only names/roles are reported.
+
+Any `.work-*` backup staging is active or unverified, even when its size stays constant:
+compression and checksumming can leave the staging data unchanged. Default deployment
+refuses it; verify the operation before cleaning leftovers. Explicit `FORCE_OPS` is an
+operator acknowledgement of possible interruption and is not enabled automatically.
+These checks are observations rather than a maintained lock; avoid concurrent work during
+rollout. Web uses `--no-deps`; PZ image deployment separately requires verified stopped state.
+
 ## Why it exists
 
 Two measured failures, both of which are the same failure:
@@ -96,9 +110,11 @@ exception worth a stated rule, because it is easy to read as a general escape ha
   Note that `live` and `finished` alias by reference but `seq` is a number — it is
   mutated as `REGISTRY.seq += 1`, never copied into a local, or ids would collide per
   layer.
-- **Every Project Zomboid stop records a `Shutdown: killed after 300s` warn fact**, so
-  every operation that stops PZ concludes `partial`. That is correct and should stay —
-  but it means **a summary template must never branch on `outcome === "partial"` to make
+- **Before the RCON `quit` fix, every Project Zomboid stop recorded a
+  `Shutdown: killed after 300s` warn fact**, so every operation that stopped PZ concluded
+  `partial`. Clean PZ stops now exit through `quit`; the warn belongs only to a forced
+  shutdown. **Corrected 2026-10-06:** the old present-tense claim was stale. The summary
+  rule still holds: **a summary template must never branch on `outcome === "partial"` to make
   a specific claim.** Three separate blockers came from that one mistake, including a
   restore that said "stayed powered off" while restarting. Select on the fact you are
   actually about (`warnValue(entry, "Container")`, `factValue(entry, "Server")`), and use
@@ -189,43 +205,52 @@ than one-off fixes:
   already up *is* the active one. A new caller that ignores the return value reintroduces
   "a log of things that did not happen". (This said "both control routes", which sends an
   auditor hunting for a second one.)
-- **`assertResourceFree()` / `fileLaneBusy()`** is how a sub-second writer joins the
-  resource lanes without entering a record of its own (a record would double-toast).
-  **25 handlers across 20 route files** use it (`grep -rl fileLaneBusy src/app/api`); this
-  said "seven" and had been right at the time. Any new short writer should — and *writer* is
-  broader than "config": `/api/mods/install` and `/api/mods/[id]` joined on 2026-10-02
-  because they write into the Minecraft mods directory that `mods.apply` is busy emptying
-  (see [`MINECRAFT.md`](MINECRAFT.md#both-single-mod-writers-now-defer-to-filesminecraft)).
+- **Quiet short-write reservations** use `runFileWrite` in the shared registry across
+  read/modify/write/readback without adding a completion toast. Ordinary writers/backups
+  refuse overlap; power/restore can preempt, and publication/terminal checks then return
+  an honest interrupted response. In-flight effects may remain. `fileLaneBusy` remains
+  a compatibility check, not a reservation. Single-mod installation enters `runOperation` as
+  `mods.install`, holding `files:minecraft` throughout metadata/download/publication;
+  its potentially long work cannot use a one-time lane check. Mod removal uses a quiet
+  reservation (see [`MINECRAFT.md`](MINECRAFT.md#both-single-mod-writers-now-defer-to-filesminecraft)).
 - **Pre-emption is global, so every confirm dialog must be.** `liveFileOperations()` +
   `namedFileOperations()` in `operation-ui.ts` are the one definition. `powerBlocker`
   stays per-world — that is the *disable* decision and it is correct.
+- **Planning a destructive action must not interrupt another world's backup.** Pack
+  application, 7DTD reset and update first hold only their target file lane. After
+  preflight they call `claimOperationPower`, repeat any live-state checks, then change
+  files or lifecycle. The synchronous claim refuses lost/preempted admission or a held
+  power lane without preempting an unrelated file operation. Ordinary power recovery
+  retains its ability to preempt file work.
 
 ## What is deliberately not fixed
 
-- **A routine PZ restore or mod update shows an amber toast, not green**, because PZ's
-  unavoidable SIGKILL is a genuine `warn`. The summaries are correct and the colour
-  agrees with them. Making `concludeOperation` ignore that warn would trade a truthful
-  amber for a comfortable lie.
+- **A forced PZ shutdown produces an amber outcome**, because SIGKILL is a genuine warn.
+  Clean RCON-`quit` shutdowns do not require that warn. **Corrected 2026-10-06:** this
+  previously called SIGKILL unavoidable and every routine restore/update amber, contradicting
+  the already-fixed driver. Preserve the warning when a forced shutdown really occurred.
 - **Pre-emption cannot *interrupt* work — but it can stop more of it being started, and
   there are two guards for that.** A new long operation wants the second one more often
   than the first, and this list named only the first for months:
-  - **`refuseIfPreemptedEarly(op, what)`** — `src/lib/backup-archive.ts:76`, called **8
-    times** in `backup-create.ts` (`:521, 641, 666, 711, 816, 898, 912, 939`). The
-    step-boundary check: it fires *before* anything is written, and its sentence ends
-    "Nothing was changed — try again once the server has settled". It exists because of a
+  - **`refuseIfPreemptedEarly(op, what)`** — `src/lib/backup-archive.ts`, used at
+    step boundaries in `backup-create.ts`. The
+    step-boundary check: it refuses the next step before publication and says that the
+    step was not continued. Single-mod installation also uses it immediately before jar
+    publication. It makes no claim that earlier steps changed nothing. It exists because of a
     measurement: on production 2026-09-29 `op.preempted` was set **94 s into a 9m 43s** PZ
     backup and the only check ran *after* the 291 MiB tar finished, so the app spent a
     further **~7m 55s** competing for disk for a result it had already condemned, then
     handed the user nothing. Two of three PZ attempts that afternoon were pre-empted.
-  - **`refuseIfPreempted(op, what)`** — `operations.ts:491`, called **twice**
-    (`backup-create.ts:325, 346`). The post-artefact check: it declines to *publish* a
+  - **`refuseIfPreempted(op, what)`** — `operations.ts`, used by `backup-create.ts`.
+    The post-artefact check: it declines to *publish* a
     torn archive, and the route's `catch` does the `rm`. That is why its sentence ends "It
     has been deleted" — and why calling it at a step boundary would be a lie, since
     nothing exists to delete yet.
 
-  What still cannot be cancelled is an in-flight `cp -r` or a 166-mod install. The mod
-  path has no artefact to delete, so its dialog's "some mods will be missing" remains a
-  prediction.
+  An in-flight copy, download or write cannot be interrupted retroactively. Pack
+  application checks before further removal/install/start steps; single-mod installation
+  checks immediately before publication. An interrupted replacement may be incomplete,
+  so preserve that evidence rather than promising unchanged files.
 
   While you are in there: **`src/lib/backup-archive.ts` holds three things and its name
   only suggests one**, and no doc mentioned any of them. Besides `refuseIfPreemptedEarly`
@@ -364,7 +389,7 @@ own response instead.
 
 # The test suite — added 2026-09-30
 
-`npm test` → **1502 tests, ~12.4 s, no Docker, no network, no running server.** (This said 199
+The pre-remediation measurement on 2026-10-06 was **1502 tests, ~12.4 s, no Docker, no network, no running server.** (This said 199
 and the section below said 549 — one file holding two different counts, which is how a number
 stops being read.)
 
@@ -460,7 +485,9 @@ over `noop`.
 
 # Closing the last open items — 2026-09-30
 
-`npm test` is now **1502 tests, ~12.42 s**, still with no Docker, network or server.
+The pre-remediation harness was measured at **1502 tests, ~12.42 s**, with no Docker,
+network or server. Current verification is recorded in `CLOSED.md`; do not treat that
+historical count as a current suite inventory.
 
 ## `game-manager.ts` is testable, and the seam is the point
 
@@ -654,15 +681,23 @@ skips and no failures opens **no** dialog and raises **no** toast. Without that 
 
 Nothing else in this app runs on a clock, **two of the three can stop or start a game
 container**, and until 2026-10-06 only one was documented anywhere — so this is the first
-place to look when something moved by itself. All three are a plain `setInterval` with a
-re-entry guard, never a tick that re-arms from a `finally`: that shape died permanently on
-one hung call (2026-09-15).
+place to look when something moved by itself. All three use a plain `setInterval`; the
+watcher and backup timer have re-entry guards. **Corrected 2026-10-06:** the stats collector
+does not have one and still lacks command timeouts, so the former claim that all three
+were guarded was wrong. A tick that re-armed from a `finally` died permanently on one hung
+watcher call (2026-09-15).
 
 | Timer | Cadence | Off switch |
 |-------|---------|-----------|
 | `collectStats` (`:66`) — the monitor graphs | 5 s | — |
-| PZ Workshop watcher (`:84`, `src/lib/zomboid-updates.ts`) — **restarts PZ itself when empty** | `PZ_UPDATE_PENDING_POLL_MS` 15 s tick, `PZ_UPDATE_POLL_MS` 5 min full check | **`PZ_UPDATE_WATCH=false`** |
+| PZ Workshop watcher (`src/lib/zomboid-updates.ts`) — **restarts PZ itself when empty** | defaults: `PZ_UPDATE_PENDING_POLL_MS` 15 s tick, `PZ_UPDATE_POLL_MS` 5 min full check | `PZ_UPDATE_WATCH=false` in `.env`, then recreate web |
 | `backupTick` (`:168`, `src/lib/backup-schedule.ts`) | `BACKUP_CHECK_MS` 5 min; first run 5 min after boot | **`BACKUP_SCHEDULE=off`** |
+
+The watcher switch and both cadences are interpolated from the operator environment.
+Changing `.env` requires web recreation; restart cannot change container env. Local source
+checks and an isolated recreated Compose fixture verified all three overrides. Production
+toggle verification remains separate. The superseded literal override is recorded in the
+dated audit rather than treated as a current instruction.
 
 **Scheduled backups** — `shouldRunScheduledBackup` is the whole decision in one tri-state
 function (`run`/`skip`/`probe`), so a `readdir` gates the expensive half of probing three

@@ -4,12 +4,18 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { readFile, writeFile, rm, readdir, mkdir } from "fs/promises";
+import { readFile, writeFile, rm, readdir, mkdir, stat } from "fs/promises";
 import path from "path";
 import { db } from "@/lib/db";
-import { RUNTIME } from "@/lib/game-manager";
-import { POWER_RESOURCES, runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
+import { RUNTIME, gameContainerState } from "@/lib/game-manager";
+import { claimOperationPower, runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
+import { BACKUP_DIRS, listArchives } from "@/lib/backup-store";
+import { CoResidencyError, refuseCoResidency } from "@/lib/coresidency";
+import { parseSdtdXmlProperties, setSdtdXmlProperties } from "@/lib/sdtd-xml";
+import { GAME_LIST } from "@/lib/games";
+import { gameDataPath } from "@/lib/game-data-path";
+import { copyTreeCounting, countTree } from "@/lib/backup-copy";
 
 // A Vercel-only hint; `node server.js` ignores it. It was also *shorter* than the
 // operation it claimed to protect. Kept as a statement of intent only — the registry
@@ -29,14 +35,13 @@ export const maxDuration = 300;
  */
 const execFileAsync = promisify(execFile);
 const SAVES_DIR = RUNTIME["7dtd"].dir; // .local/share/7DaysToDie
-const XML_PATH = path.join(process.env.SDTD_CONFIG_DIR || "/sevendtd-config", "sdtdserver.xml");
+const CONFIG_DIR = process.env.SDTD_CONFIG_DIR || "/sevendtd-config";
 
 function getProp(xml: string, name: string): string {
-  return xml.match(new RegExp(`<property\\s+name="${name}"\\s+value="([^"]*)"`, "i"))?.[1] ?? "";
+  return xml ? parseSdtdXmlProperties(xml).get(name) ?? "" : "";
 }
 function setProp(xml: string, name: string, value: string): string {
-  const re = new RegExp(`(<property\\s+name="${name}"\\s+value=")[^"]*(")`, "i");
-  return xml.replace(re, `$1${value}$2`);
+  return setSdtdXmlProperties(xml, { [name]: value }).xml;
 }
 
 // GET: what a reset would do (current world + game name + next name), for the UI.
@@ -46,7 +51,16 @@ export async function GET() {
   const denied = denyGame(session, "7dtd");
   if (denied) return denied;
   let xml = "";
-  try { xml = await readFile(XML_PATH, "utf-8"); } catch {}
+  try {
+    xml = await readFile(await gameDataPath(CONFIG_DIR, "sdtdserver.xml"), "utf-8");
+    // Validate before returning a preview; refused aliases and malformed XML are not
+    // an empty first-install configuration.
+    if (xml) parseSdtdXmlProperties(xml);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      return NextResponse.json({ error: "The 7DTD server config could not be read or validated." }, { status: 500 });
+    }
+  }
   const world = getProp(xml, "GameWorld");
   const gameName = getProp(xml, "GameName");
   return NextResponse.json({ world, gameName, nextGameName: bumpName(gameName) });
@@ -61,8 +75,8 @@ function bumpName(name: string): string {
 }
 
 /**
- * How many pre-reset safety snapshots to keep. Names sort chronologically (ISO stamp), so
- * "newest" is a reverse lexical sort and needs no `stat`.
+ * Keep the current recovery copy plus the newest older one by mtime. A world name
+ * precedes the timestamp, so sorting full names does not sort creation times.
  */
 const PRESET_SNAPSHOTS_KEPT = 2;
 
@@ -88,8 +102,8 @@ export async function POST() {
      * operation where a Power on could interleave — and the ~14s safety `tar` ran
      * outside the lock too, against a live server.
      *
-     * Holding `POWER_RESOURCES` for the duration closes both windows. The stop and the
-     * start are open-coded here rather than delegated to `powerOff`/`restartGame`,
+     * Preflight holds this world's files, then claims power before any changes. The
+     * stop and start are open-coded here rather than delegated to `powerOff`/`restartGame`,
      * because those enter operations of their own and would be refused by this one.
      */
     return await runOperation(
@@ -97,14 +111,16 @@ export async function POST() {
         kind: "world.reset",
         game: "7dtd",
         title: "Resetting the world",
-        action: "restart",
-        resources: POWER_RESOURCES,
+        resources: ["files:7dtd"],
         startedBy: session.user.name ? { name: session.user.name } : null,
       },
       (op) => resetWorld(op, session.user.id)
     );
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof CoResidencyError) {
+      return NextResponse.json({ error: e.message, conflict: "coresidency", running: e.running }, { status: 409 });
+    }
     return NextResponse.json({ error: (e as Error).message || "Reset failed" }, { status: 500 });
   }
 }
@@ -114,6 +130,25 @@ async function resetWorld(
   userId: string
 ): Promise<OpSuccess<NextResponse>> {
   {
+    // Preflight holds this world's files. Check peers now and again after claiming
+    // power, before any writes; another world's start can finish during preflight.
+    op.step("Checking no other world is running");
+    const readStates = async () => new Map(await Promise.all(GAME_LIST.map(async game => {
+      const state = await gameContainerState(game.id);
+      if (!["running", "paused", "restarting", "exited", "created", "missing"].includes(state)) {
+        throw new Error(`Cannot verify ${game.name}'s container state. No save was reset.`);
+      }
+      return [game.id, state] as const;
+    })));
+    const states = await readStates();
+    await refuseCoResidency("7dtd", async game => ["running", "paused", "restarting"].includes(states.get(game)!), "The reset");
+    const initialState = states.get("7dtd");
+    if (!["running", "exited", "created"].includes(initialState!)) {
+      throw new Error(`Cannot reset 7 Days to Die while its container is ${initialState}. No save was reset.`);
+    }
+    const wasRunning = initialState === "running";
+    op.settle("No other world is running");
+
     // Both refusals below go through `op.reject` before returning their 4xx.
     //
     // Without it the operation settled zero steps and zero facts, so
@@ -122,7 +157,11 @@ async function resetWorld(
     // nothing could be read back to confirm it. Check the worlds list before relying
     // on it." beside the route's own 400. The tool was already in use one screen down
     // for the failed-tar case; it just wasn't applied here.
-    let xml = await readFile(XML_PATH, "utf-8").catch(() => "");
+    const xmlPath = await gameDataPath(CONFIG_DIR, "sdtdserver.xml");
+    let xml = await readFile(xmlPath, "utf-8").catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return "";
+      throw e;
+    });
     if (!xml) {
       op.reject("Refused — sdtdserver.xml could not be read");
       return { value: NextResponse.json({ error: "Config not found" }, { status: 400 }) };
@@ -145,16 +184,41 @@ async function resetWorld(
       };
     }
     const oldName = getProp(xml, "GameName");
+    if (!oldName || oldName === "." || oldName === ".." || /[/\\]/.test(oldName)) {
+      op.reject("Refused — sdtdserver.xml has no usable GameName");
+      return { value: NextResponse.json({ error: "Set a usable Game Name in All settings before resetting. Nothing was changed." }, { status: 400 }) };
+    }
     const newName = bumpName(oldName);
 
     // 1) Back up the current save first (safety), if it exists.
-    const savePath = path.join(SAVES_DIR, "Saves", world);
+    const savesRoot = await gameDataPath(SAVES_DIR, "Saves", { allowRoot: false });
+    const saveSource = await gameDataPath(SAVES_DIR, path.join("Saves", world), { allowRoot: false });
+    const savePath = await gameDataPath(SAVES_DIR, path.join("Saves", world), {
+      allowRoot: false, followFinalSymlink: false,
+    });
+    const profilePath = await gameDataPath(SAVES_DIR, path.join("Saves", "sdcs_profiles.sdf"), {
+      allowRoot: false, followFinalSymlink: false,
+    });
+    const nextXml = setProp(xml, "GameName", newName);
+    const hadSave = await readdir(saveSource).then(() => true).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === "ENOENT") return false;
+      throw e;
+    });
+    if (hadSave) await countTree(saveSource, SAVES_DIR);
+    // Preflight holds only this world's files. Power is claimed after every refusal
+    // boundary, so an unusable reset cannot invalidate another world's backup.
+    claimOperationPower(op);
+    const admittedStates = await readStates();
+    await refuseCoResidency("7dtd", async game => ["running", "paused", "restarting"].includes(admittedStates.get(game)!), "The reset");
+    if (admittedStates.get("7dtd") !== initialState) {
+      throw new Error("7 Days to Die changed state during reset preflight. No save was reset.");
+    }
     // Deliberately NOT the backups dir: this tar has no manifest.json and its
     // members are rooted at "<world>/", but the backups page lists every
     // *.tar.gz in that folder as a restorable row — and restoring this one wipes
     // Saves/ and then finds no Saves/ inside the tar to put back, losing every
     // save. Keep it out of that listing; it's a recovery artefact, not a backup.
-    const backupDir = "/app/data/backups-7dtd/presreset";
+    const backupDir = path.join(BACKUP_DIRS["7dtd"], "presreset");
     await mkdir(backupDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     // Probe and archive separately. They used to share one catch commented "no
@@ -164,18 +228,20 @@ async function resetWorld(
     // at this point, so tar can fail for real reasons — GNU tar exits 1 on "file
     // changed as we read it" when an autosave lands mid-archive.
     op.step("Backing the save up first");
-    const hadSave = await readdir(savePath).then(() => true).catch(() => false);
     if (hadSave) {
       const archive = path.join(backupDir, `presreset-${world}-${stamp}.tar.gz`);
+      const work = path.join(backupDir, `.work-${stamp}`);
       try {
+        let archiveRoot = savesRoot;
+        if (saveSource !== path.join(savesRoot, world)) {
+          await copyTreeCounting(saveSource, path.join(work, world), () => {}, { sourceRoot: SAVES_DIR });
+          archiveRoot = work;
+        }
         await execFileAsync(
           "tar",
-          ["-czf", archive, "-C", path.join(SAVES_DIR, "Saves"), world],
+          ["-czf", archive, "-C", archiveRoot, world],
           { timeout: 120000 }
         );
-        op.settle(`Backed the old save up — presreset-${world}-${stamp}.tar.gz`);
-        op.fact({ label: "Safety copy", value: `presreset-${world}-${stamp}.tar.gz` });
-
         // Bound this directory. Retention does not reach it and never will: `listArchives`
         // deliberately does not recurse, precisely so these recovery artefacts can never be
         // a prune candidate or reset the automatic-backup clock. That is right, and it left
@@ -187,17 +253,20 @@ async function resetWorld(
         // count is small. Two, not five: the reason to keep a second is that a reset that
         // went wrong is usually noticed after the next one.
         try {
-          const kept = (await readdir(backupDir))
-            .filter((f) => f.startsWith("presreset-") && f.endsWith(".tar.gz"))
-            .sort()
-            .reverse();
-          for (const old of kept.slice(PRESET_SNAPSHOTS_KEPT)) {
-            await rm(path.join(backupDir, old), { force: true });
+          const currentName = path.basename(archive);
+          const copies = (await listArchives(backupDir)).filter((f) => f.name.startsWith("presreset-"));
+          const keep = new Set([
+            currentName,
+            ...copies.filter(f => f.name !== currentName).slice(0, PRESET_SNAPSHOTS_KEPT - 1).map(f => f.name),
+          ]);
+          const removed = copies.filter(f => !keep.has(f.name));
+          for (const old of removed) {
+            await rm(path.join(backupDir, old.name));
           }
-          if (kept.length > PRESET_SNAPSHOTS_KEPT) {
+          if (removed.length > 0) {
             op.fact({
               label: "Older safety copies",
-              value: `deleted ${kept.length - PRESET_SNAPSHOTS_KEPT}, kept ${PRESET_SNAPSHOTS_KEPT}`,
+              value: `deleted ${removed.length}, kept ${copies.length - removed.length}`,
             });
           }
         } catch (e) {
@@ -205,6 +274,12 @@ async function resetWorld(
           // abandon one that has just been written successfully.
           console.error("[7dtd/reset] could not prune old pre-reset snapshots:", e);
         }
+        // Check after retention, before the wipe: a successful tar is not proof
+        // that the recovery copy still exists.
+        const copy = await stat(archive);
+        if (!copy.isFile() || copy.size === 0) throw new Error("The safety copy is missing or empty");
+        op.settle(`Backed the old save up — ${path.basename(archive)} (${copy.size} bytes)`);
+        op.fact({ label: "Safety copy", value: path.basename(archive) });
       } catch (e) {
         // Drop the partial archive so nothing later mistakes it for a backup.
         await rm(archive, { force: true }).catch(() => {});
@@ -217,6 +292,8 @@ async function resetWorld(
             { status: 500 }
           ),
         };
+      } finally {
+        await rm(work, { recursive: true, force: true }).catch(() => {});
       }
     } else {
       op.settle("No existing save to back up");
@@ -225,36 +302,55 @@ async function resetWorld(
     // 2) Stop the server (graceful), keeping the world map in GeneratedWorlds.
     //    Open-coded rather than `powerOff("7dtd")`, because that enters an operation
     //    of its own and this one already holds every resource it would want.
-    const { stopGameForOperation, startGameForOperation, containerIsRunning } = await import(
+    const { stopGameForOperation, startGameForOperation } = await import(
       "@/lib/game-manager"
     );
-    const wasRunning = await containerIsRunning("7dtd");
     if (wasRunning) await stopGameForOperation(op, "7dtd");
+    const stoppedState = await gameContainerState("7dtd");
+    if (!["exited", "created", "missing"].includes(stoppedState)) {
+      throw new Error("7 Days to Die is not verified stopped. The live save was not reset; the safety copy was retained.");
+    }
 
     // 3) Wipe the save for this world + the cross-play profile cache. Keep the
     //    world MAP (GeneratedWorlds) so we don't lose the custom map.
     op.step("Wiping the save");
     await rm(savePath, { recursive: true, force: true });
-    await rm(path.join(SAVES_DIR, "Saves", "sdcs_profiles.sdf"), { force: true }).catch(() => {});
+    await rm(profilePath, { force: true });
     op.settle(`Wiped the save for "${world}" — the world map was kept`);
 
     // 4) Bump GameName so the fresh save has a new identity.
     op.step("Naming the new save");
-    xml = setProp(xml, "GameName", newName);
-    await writeFile(XML_PATH, xml, "utf-8");
+    xml = nextXml;
+    await writeFile(xmlPath, xml, "utf-8");
     // Read it back off disk: the whole reset hinges on the server booting onto the
     // NEW name, and "we wrote the file" is not the same claim.
-    const readBack = getProp(await readFile(XML_PATH, "utf-8").catch(() => ""), "GameName");
+    const readBack = getProp(await readFile(xmlPath, "utf-8").catch(() => ""), "GameName");
     op.settle(`Named the new save "${newName}"`);
     op.fact({
       label: "New game name",
       value: readBack || "could not be read back",
       verdict: readBack === newName ? undefined : "warn",
     });
+    if (readBack !== newName) throw new Error("The new game name could not be verified. The server was not restarted; recover the old save from the safety copy.");
     op.fact({ label: "World map", value: `kept — ${world}` });
 
     // 5) Start onto the fresh save.
     await startGameForOperation(op, "7dtd");
+    let finalState: string;
+    try {
+      finalState = await gameContainerState("7dtd");
+    } catch {
+      op.fact({ label: "Power", value: "in an unknown state", verdict: "bad" });
+      throw new Error("The save was reset, but the final server state could not be verified. Check the container before retrying.");
+    }
+    op.fact({
+      label: "Power", value: finalState === "running" ? "running" : `in state ${finalState}`,
+      ...(finalState === "running" ? {} : { verdict: "bad" as const }),
+    });
+    if (finalState !== "running") {
+      throw new Error(`The save was reset, but 7 Days to Die is ${finalState} after the start request. Check the container before retrying.`);
+    }
+    op.fact({ label: "Server", value: "starting again" });
 
     // keep the curated DB row's notion of nothing here; log it.
     await db.activity

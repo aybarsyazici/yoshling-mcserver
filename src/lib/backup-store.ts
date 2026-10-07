@@ -50,7 +50,7 @@ export const BACKUP_DIRS: Record<GameId, string> = {
  * - `automatic` — written by the scheduler, which has no user to attribute. The archive
  *   itself is then able to say where it came from, which is the only place that answer
  *   survives being copied off the box.
- * - `members` — the top-level names in the tar, written by whoever wrote the tar. It
+ * - `members` — the restorable game directory names, written by whoever wrote the tar. It
  *   exists because Minecraft now has two shapes of archive: a routine backup is
  *   `["world"]` and the one `install-modpack` takes before it deletes every jar is
  *   `["world", "mods"]`, and the listing has to be able to say which an archive is
@@ -65,6 +65,8 @@ export interface BaseManifest {
   startedBy?: string;
   automatic?: boolean;
   members?: string[];
+  /** Actual configured server target captured before a pack replaces its jars. */
+  minecraftTarget?: { mcVersion: string; loader: string };
   /**
    * The `InstalledMod` rows as they were when the archive was written, for an archive whose
    * members include `mods`.
@@ -79,6 +81,7 @@ export interface BaseManifest {
    * routine backups, which are world-only and have nothing to say about mods.
    */
   installedMods?: {
+    id?: string;
     modrinthId: string;
     slug: string;
     name: string;
@@ -86,6 +89,11 @@ export interface BaseManifest {
     fileName: string;
     mcVersion: string;
     loader: string;
+    source?: string | null;
+    versionId?: string | null;
+    installedBy?: string;
+    installedAt?: string;
+    updatedAt?: string;
   }[];
 }
 

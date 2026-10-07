@@ -114,8 +114,8 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/operation-response", async () => {
   const { NextResponse } = await import("next/server");
   return {
-    fileLaneBusy: vi.fn(() =>
-      laneBusy ? NextResponse.json({ error: "Busy" }, { status: 409 }) : null
+    withGameFileWrite: vi.fn((_game: string, work: () => Promise<Response>) =>
+      laneBusy ? NextResponse.json({ error: "Busy" }, { status: 409 }) : work()
     ),
   };
 });

@@ -2,31 +2,33 @@
 
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+
+const subscribeHydration = () => () => {};
+const clientSnapshot = () => true;
+const serverSnapshot = () => false;
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => setMounted(true), []);
-
-  if (!mounted) return <div className="h-9 w-9" />;
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const mounted = useSyncExternalStore(subscribeHydration, clientSnapshot, serverSnapshot);
+  const mode = resolvedTheme ?? (theme === "dark" || theme === "light" ? theme : undefined);
+  if (!mounted || !mode) return <div className="h-9 w-9" />;
 
   // Icon-only, so the name has to be stated: axe reported `button-name` (critical, WCAG
   // 4.1.2) on every authenticated page, and the accessibility tree announced this as just
   // "button" — the only unnamed control in the header.
-  const label = theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme";
+  const label = mode === "dark" ? "Switch to the light theme" : "Switch to the dark theme";
 
   return (
     <Button
       variant="ghost"
       size="icon"
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      onClick={() => setTheme(mode === "dark" ? "light" : "dark")}
       aria-label={label}
       title={label}
       className="h-9 w-9"
     >
-      {theme === "dark" ? (
+      {mode === "dark" ? (
         <SunIcon className="h-4 w-4" />
       ) : (
         <MoonIcon className="h-4 w-4" />

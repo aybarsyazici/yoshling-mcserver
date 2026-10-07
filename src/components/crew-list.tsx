@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -13,7 +13,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { GameMark } from "@/components/glyphs";
-import { GAMES, GAME_LIST, type GameId } from "@/lib/games";
+import { gameAccess } from "@/lib/permissions";
+import { GAME_LIST, type GameId } from "@/lib/games";
 
 const ROLE_TINT: Record<string, string> = {
   ADMIN: "var(--primary)",
@@ -40,53 +41,72 @@ export function CrewList({
   selfId: string;
 }) {
   const [crew, setCrew] = useState(members);
+  const [permissionRefused, setPermissionRefused] = useState(false);
+  const manageAllowed = canManage && !permissionRefused;
+  const busyRows = useRef(new Set<string>());
+  const [pending, setPending] = useState<string[]>([]);
+  const [unconfirmed, setUnconfirmed] = useState<string[]>([]);
 
-  async function setRole(userId: string, role: string) {
-    const res = await fetch(`/api/users/${userId}/role`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role }),
-    });
-    if (res.ok) {
-      setCrew((prev) => prev.map((u) => (u.id === userId ? { ...u, role } : u)));
-      toast.success("Role updated");
-    } else {
-      const data = await res.json().catch(() => ({}));
-      toast.error(data.error || "Couldn't update the role");
+  function canonical(raw: unknown, id: string): Pick<CrewMember, "id" | "role" | "games"> {
+    const row = raw as Partial<CrewMember> | null;
+    if (!row || row.id !== id || !["ADMIN", "MOD", "MEMBER"].includes(row.role ?? "") ||
+        !Array.isArray(row.games) || !row.games.every((g) => GAME_LIST.some((known) => known.id === g))) {
+      throw new Error("The saved permissions could not be verified");
+    }
+    return { id, role: row.role!, games: row.games };
+  }
+
+  async function reconcile(id: string) {
+    const res = await fetch("/api/users", { cache: "no-store" });
+    if (!res.ok) throw new Error("Couldn't read current permissions");
+    const rows: unknown = await res.json();
+    if (!Array.isArray(rows)) throw new Error("Couldn't read current permissions");
+    const raw = rows.find((r) => r?.id === id);
+    const saved = canonical({ ...raw, games: gameAccess("MEMBER", raw?.games) }, id);
+    setCrew((prev) => prev.map((u) => u.id === id ? { ...u, ...saved } : u));
+    setUnconfirmed((prev) => prev.filter((u) => u !== id));
+  }
+
+  async function updateUser(id: string, suffix: "role" | "games", body: unknown) {
+    if (!manageAllowed || unconfirmed.includes(id) || busyRows.current.has(id)) return;
+    busyRows.current.add(id);
+    setPending((prev) => [...prev, id]);
+    try {
+      const res = await fetch(`/api/users/${id}/${suffix}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok && res.status >= 400 && res.status < 500) {
+        if (res.status === 401 || res.status === 403) setPermissionRefused(true);
+        toast.error(data.error || "The server refused this permission change");
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || "Couldn't save permissions");
+      const saved = canonical(data.user, id);
+      setCrew((prev) => prev.map((u) => u.id === id ? { ...u, ...saved } : u));
+      toast.success("Permissions saved and verified");
+    } catch {
+      toast.info("The permission change is unconfirmed. Reading the saved permissions before another change.");
+      try { await reconcile(id); } catch { setUnconfirmed((prev) => [...prev, id]); }
+    } finally {
+      busyRows.current.delete(id);
+      setPending((prev) => prev.filter((u) => u !== id));
     }
   }
 
+  async function setRole(userId: string, role: string) {
+    await updateUser(userId, "role", { role });
+  }
+
   async function toggleWorld(user: CrewMember, game: GameId) {
-    const next = user.games.includes(game)
-      ? user.games.filter((g) => g !== game)
-      : [...user.games, game];
-
-    // Optimistic: the chip should light up under the cursor, not half a second later.
-    setCrew((prev) => prev.map((u) => (u.id === user.id ? { ...u, games: next } : u)));
-
-    const res = await fetch(`/api/users/${user.id}/games`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ games: next }),
-    });
-    if (!res.ok) {
-      setCrew((prev) => prev.map((u) => (u.id === user.id ? { ...u, games: user.games } : u)));
-      const data = await res.json().catch(() => ({}));
-      toast.error(data.error || "Couldn't change world access");
-      return;
-    }
-    // One line, because this is the only action here that changes what *another*
-    // person can see, and an optimistic chip was the whole of the feedback.
-    const granted = next.length > user.games.length;
-    toast.success(
-      granted
-        ? `Granted ${GAMES[game].name} access to ${user.username}.`
-        : `Removed ${GAMES[game].name} access from ${user.username}.`
-    );
+    if (unconfirmed.includes(user.id)) return;
+    const games = user.games.includes(game) ? user.games.filter((g) => g !== game) : [...user.games, game];
+    await updateUser(user.id, "games", { games });
   }
 
   return (
     <div className="rounded-2xl bg-card/70 p-2 ring-1 ring-foreground/10 backdrop-blur">
+      {permissionRefused && <p role="alert" className="p-3 text-xs text-chart-5">This account cannot manage permissions. Reload after your role or sign-in changes.</p>}
       <div className="space-y-1">
         {crew.map((user, i) => {
           const isAdmin = user.role === "ADMIN";
@@ -124,11 +144,18 @@ export function CrewList({
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
+                {unconfirmed.includes(user.id) && <div role="alert" className="text-xs text-chart-5">
+                  Saved permissions are unknown. <button disabled={pending.includes(user.id)} onClick={async () => {
+                    setPending((prev) => [...prev, user.id]);
+                    try { await reconcile(user.id); } catch { toast.error("Couldn't read current permissions"); }
+                    finally { setPending((prev) => prev.filter((u) => u !== user.id)); }
+                  }}>Retry permissions</button>
+                </div>}
                 {/* World access — one chip per world, lit when granted */}
                 <div className="flex items-center gap-1">
                   {GAME_LIST.map((g) => {
                     const on = isAdmin || user.games.includes(g.id);
-                    const locked = isAdmin || !canManage;
+                    const locked = isAdmin || !manageAllowed || pending.includes(user.id) || unconfirmed.includes(user.id);
                     return (
                       <button
                         key={g.id}
@@ -169,9 +196,10 @@ export function CrewList({
                   })}
                 </div>
 
-                {canManage && user.id !== selfId ? (
+                {manageAllowed && user.id !== selfId ? (
                   <Select
                     value={user.role}
+                    disabled={pending.includes(user.id) || unconfirmed.includes(user.id)}
                     onValueChange={(role) => {
                       if (role) setRole(user.id, role);
                     }}

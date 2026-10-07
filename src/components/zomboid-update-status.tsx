@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
+import { useOperations } from "@/components/operations-provider";
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
@@ -35,15 +38,21 @@ interface UpdateStatus {
  * are indistinguishable without it.
  */
 export function ZomboidUpdateStatus({ tint }: { tint: string }) {
+  const { can } = useGames(CAPABILITY_POLL_MS);
+  const { refresh: refreshOperations } = useOperations();
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/zomboid/updates", { cache: "no-store" });
-      if (res.ok) setStatus(await res.json());
-    } catch {
-      /* keep last known */
+      if (!res.ok) throw new Error(`Couldn't read update status (HTTP ${res.status})`);
+      const data: unknown = await res.json();
+      if (!isUpdateStatus(data)) throw new Error("The update status response is incomplete");
+      setStatus(data); setLoadError(null);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Couldn't read update status");
     }
   }, []);
 
@@ -64,14 +73,16 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
   }, [status?.applyingSince, load]);
 
   async function checkNow() {
+    if (!can.settingsEdit || loadError || checking || status?.applyingSince) return;
     setChecking(true);
     try {
       const res = await fetch("/api/zomboid/updates", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
+      const data = await readOperationResponse(res) as { error?: string; operationId?: string; stale?: StaleMod[]; action?: string };
+      if (!res.ok && !data.operationId) {
         toast.error(data.error || "Couldn't check for updates");
         return;
       }
+      if (data.operationId) { await load(); return; }
       const n = data.stale?.length ?? 0;
       // Not "applied": that answer arrives through the operation's own completion
       // toast, whose text is the server's summary and therefore names how many mods
@@ -82,30 +93,26 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
       else if (data.action === "announced")
         toast.info(`${n} update${n === 1 ? "" : "s"} pending — waiting for the server to empty`);
       else if (data.action === "skipped") toast.info("A server operation is already running");
-      else toast.success("Checked just now — all mods are up to date");
+      else if (!data.operationId && data.action === "none" && Array.isArray(data.stale) && data.stale.length === 0) toast.success("Checked just now — all mods are up to date");
+      else if (!data.operationId && data.action !== "applied" && data.action !== "seeded") toast.info("The update check result is unconfirmed. Check the operation strip before retrying.");
       await load();
-    } catch {
-      // A real apply takes ~6 minutes (measured 18:30:25 → 18:36:23), so the response
-      // cannot arrive inside Cloudflare's ~100s window: this fired red on the
-      // *successful* path, which meant a working apply was only ever reported as a
-      // failure. The strip at the top of the page is what actually tracks it.
-      toast.info(
-        "Still checking. If an update was found the server is being restarted now — watch the " +
-          "strip at the top of the page; it survives a reload."
-      );
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage("Workshop update check", error));
     } finally {
+      void refreshOperations();
       setChecking(false);
     }
   }
 
+  if (!status && loadError) return <div role="alert"><p>{loadError}</p><Button onClick={load}>Retry update status</Button></div>;
   if (!status) return <div className="skeleton h-24 rounded-2xl" />;
 
   const stale = status.stale;
   // An apply in progress outranks everything else: the server is being restarted
   // right now, which is the one thing someone looking at this card needs told.
-  const applying = status.applyingSince;
+  const applying = loadError ? null : status.applyingSince;
   const pending = !applying && stale && stale.length > 0;
-  const failed = !applying && (stale === null || status.lastError !== "");
+  const failed = !!loadError || (!applying && (stale === null || status.lastError !== ""));
 
   return (
     <div
@@ -150,7 +157,7 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
                   up. Usually about 5 minutes. Started {relative(status.applyingSince)}.
                 </>
               ) : failed ? (
-                status.lastError || "The last check didn't complete."
+                loadError || status.lastError || "The last check didn't complete."
               ) : pending ? (
                 <>
                   The server restarts to apply {stale!.length === 1 ? "it" : "them"} once everyone has
@@ -163,12 +170,13 @@ export function ZomboidUpdateStatus({ tint }: { tint: string }) {
           </div>
         </div>
 
-        <Button variant="outline" size="sm" disabled={checking || !!applying} onClick={checkNow}>
+        {can.settingsEdit && <Button variant="outline" size="sm" disabled={!!loadError || checking || !!applying} onClick={checkNow}>
           <RefreshCw className={checking ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
           {checking ? "Checking…" : "Check now"}
-        </Button>
+        </Button>}
       </div>
 
+      {loadError && <div role="alert"><p>The values are from the last successful read.</p><Button onClick={load}>Retry update status</Button></div>}
       {applying && status.applyingTitles.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {status.applyingTitles.map((t) => (
@@ -217,4 +225,13 @@ function relative(ts: number | null): string {
   if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
   const days = Math.round(hours / 24);
   return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function isUpdateStatus(value: unknown): value is UpdateStatus {
+  if (!value || typeof value !== "object") return false;
+  const v = value as UpdateStatus;
+  return typeof v.lastError === "string" && typeof v.watching === "boolean" && Number.isFinite(v.pollMs) &&
+    [v.checkedAt, v.applyingSince, v.announcedAt, v.appliedAt].every((n) => n === null || Number.isFinite(n)) &&
+    Array.isArray(v.applyingTitles) && v.applyingTitles.every((s) => typeof s === "string") &&
+    (v.stale === null || (Array.isArray(v.stale) && v.stale.every((m) => m && typeof m.id === "string" && typeof m.title === "string" && Number.isFinite(m.installed) && Number.isFinite(m.published))));
 }

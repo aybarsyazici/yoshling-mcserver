@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { cn } from "@/lib/utils";
@@ -125,8 +126,8 @@ export function GameBackups({ game }: { game: GameId }) {
   // starts it back up, all inside one operation. So it has to know whether the server
   // is up (to say what will happen) and whether anything else already holds this
   // world's files (the request would come back 409).
-  const { games, refresh } = useGames();
-  const { operations, elapsedMs } = useOperations();
+  const { games, can, refresh } = useGames();
+  const { operations, elapsedMs, refresh: refreshOperations } = useOperations();
   const running = games?.[game]?.containerRunning ?? false;
   // The registry, not just the power lock: a create and a restore on the same world
   // both hold `files:{game}`, and two of them at once is how an archive gets torn.
@@ -138,6 +139,8 @@ export function GameBackups({ game }: { game: GameId }) {
       const res = await fetch(endpoint);
       const data = await res.json();
       if (Array.isArray(data)) setBackups(data);
+    } catch {
+      toast.error("Couldn't read the backup list");
     } finally {
       setLoading(false);
     }
@@ -162,19 +165,15 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   useEffect(() => {
-    fetchBackups();
-    // `react-hooks/set-state-in-effect` flags this line and not the one above it, which is
-    // a quirk of the analyzer rather than a difference in the code: both are async fetches
-    // on mount that settle state when they return. The same shape is already in
-    // `server-monitor.tsx`, `mod-detail-dialog.tsx`, `motion.tsx` and `theme-toggle.tsx`,
-    // all of which the rule also flags — so this is the house pattern, and contorting one
-    // call site would make this file the odd one out without changing what it does.
+    // Both readers update state only after awaited I/O.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchMeta();
+    void fetchBackups();
+    void fetchMeta();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function create() {
+    if (!can.settingsEdit || creating || locked) return;
     setCreating(true);
     try {
       const res = await fetch(endpoint, {
@@ -182,25 +181,18 @@ export function GameBackups({ game }: { game: GameId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "create" }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await readOperationResponse(res);
       if (res.ok && data.backup) {
-        setBackups((prev) => [data.backup, ...prev]);
+        setBackups((prev) => [data.backup as Backup, ...prev]);
         // No success toast: the operation's completion toast carries the archive's
         // read-back size, which is the only evidence that the file exists.
-      } else {
+      } else if (!data.operationId) {
         toast.error(data.error || "Backup failed");
       }
-    } catch {
-      // This whole function used to be `try { … } finally {}` with **no catch**. A
-      // Project Zomboid create measures 4 min 20 s, so Cloudflare answers 524 with an
-      // HTML body, `res.json()` throws, and the result was total *silence*: no toast at
-      // all, the spinner just stopped, no row appeared — for an operation that had in
-      // fact written a 198 MB archive.
-      toast.info(
-        `Still creating the backup. The connection timed out before it finished, which is normal ` +
-          `for a large world — watch the strip at the top of the page, and don't start another.`
-      );
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage("backup creation", error));
     } finally {
+      void refreshOperations();
       setCreating(false);
       void fetchBackups();
       // A create also applies the retention policy, so the journal (and possibly the list)
@@ -211,6 +203,7 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function restore(name: string) {
+    if (!can.settingsEdit || restoring || locked) return;
     setConfirmRestore(null);
     setRestoring(name);
     try {
@@ -219,27 +212,15 @@ export function GameBackups({ game }: { game: GameId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "restore", backupName: name }),
       });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) toast.error(d.error || "Restore failed");
+      const d = await readOperationResponse(res);
+      if (!d.operationId && !res.ok) toast.error(d.error || "Restore failed");
       // On success, say nothing here: the operation's completion toast carries the
       // server's own summary, which names the archive and whether the world came back
       // up. That sentence is derived from what was recorded, so it cannot overstate.
-    } catch {
-      // The request died, but the restore did not: it runs server-side under the
-      // control lock and carries on regardless. A Project Zomboid restore opens
-      // with `docker stop -t 300`, which outlasts Cloudflare's ~100s origin
-      // timeout, so the *successful* path routinely ends with a dead connection.
-      // Reporting that as "Restore failed" on a destructive operation is the worst
-      // available answer — it invites someone to run it a second time.
-      // "strip", not "bar". Ten other user-facing strings say strip, and both
-      // `operation-tape.tsx` and `operation-ledger.tsx` record that a progress *bar* was
-      // removed on purpose — so pointing someone at "the bar" sends them looking for a
-      // thing that does not exist, in the middle of a destructive operation.
-      toast.info(
-        `Still restoring "${name}". The connection timed out before it finished, which is normal ` +
-          `for a large ${noun} — watch the strip at the top of the page, and don't start it again.`
-      );
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage("backup restore", error));
     } finally {
+      void refreshOperations();
       setRestoring(null);
       refresh();
       // The journal now carries this restore — including, for the first time, a restore
@@ -249,6 +230,7 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function del(name: string) {
+    if (!can.settingsEdit || deleting || locked) return;
     setConfirmDelete(null);
     setDeleting(name);
     try {
@@ -272,7 +254,7 @@ export function GameBackups({ game }: { game: GameId }) {
         toast.error(d.error || "Delete failed");
       }
     } catch {
-      toast.error("Delete failed — the request did not reach the server.");
+      toast.info("The deletion result is unconfirmed. Refresh the backup list before retrying.");
     } finally {
       setDeleting(null);
       void fetchBackups();
@@ -288,7 +270,7 @@ export function GameBackups({ game }: { game: GameId }) {
         </p>
         <Button
           onClick={create}
-          disabled={creating || locked}
+          disabled={!can.settingsEdit || creating || locked}
           className="disabled:cursor-not-allowed"
           style={{ background: meta.tint, color: "var(--background)" }}
         >
@@ -296,6 +278,7 @@ export function GameBackups({ game }: { game: GameId }) {
         </Button>
       </div>
 
+      {!can.settingsEdit && <p className="text-xs text-muted-foreground">This account can read backup records but cannot create, restore or delete backups.</p>}
       <div className="flex items-start gap-2 rounded-xl bg-chart-5/10 p-3 ring-1 ring-chart-5/30">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-chart-5" />
         <p className="text-xs text-muted-foreground">
@@ -431,14 +414,14 @@ export function GameBackups({ game }: { game: GameId }) {
                     variant="outline"
                     className="disabled:cursor-not-allowed"
                     onClick={() => setConfirmRestore(b.name)}
-                    disabled={restoring !== null || locked}
+                    disabled={!can.settingsEdit || restoring !== null || locked}
                   >
                     <RotateCcw className={cn("h-3.5 w-3.5", restoring === b.name && "animate-spin")} />{" "}
                     {restoring === b.name ? "Restoring…" : "Restore"}
                   </Button>
                   {/* `disabled` and `aria-label` were both missing. Delete was the only
                       backup mutation with no gate at all, while Restore right next to it
-                      carried `disabled={restoring !== null || locked}` — so an archive
+                      carried `disabled={!can.settingsEdit || restoring !== null || locked}` — so an archive
                       could be removed out from under a restore that was reading it. And
                       the button is icon-only, so with no label a screen reader announced
                       it as "button" with no indication of what it deletes. */}
@@ -448,7 +431,7 @@ export function GameBackups({ game }: { game: GameId }) {
                     className="disabled:cursor-not-allowed"
                     aria-label={`Delete backup ${b.name}`}
                     onClick={() => setConfirmDelete(b.name)}
-                    disabled={deleting !== null || restoring !== null || locked}
+                    disabled={!can.settingsEdit || deleting !== null || restoring !== null || locked}
                   >
                     <Trash2 className={cn("h-3.5 w-3.5", deleting === b.name && "animate-pulse")} />
                   </Button>

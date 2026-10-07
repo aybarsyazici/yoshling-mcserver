@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
+import { StatusFreshness } from "@/components/status-freshness";
+import { JoinPanel } from "@/components/join-panel";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
@@ -64,6 +67,7 @@ export function MissionControl({
     maxGb,
     clockSkewMs,
     loading,
+    lastSuccessAt, pollError,
     refresh,
   } = useGames(localBusy ? 1500 : 5000);
   /**
@@ -84,7 +88,7 @@ export function MissionControl({
    * and fell back to "all stopped". The landing page, with the Power Core on it, was
    * the one screen in the app with no refresh-surviving progress at all.
    */
-  const { operations, elapsedMs } = useOperations();
+  const { operations, elapsedMs, refresh: refreshOperations } = useOperations();
   const worlds = GAME_LIST.filter((g) => access.includes(g.id));
   const layout = LAYOUT[worlds.length] ?? LAYOUT[3];
 
@@ -260,13 +264,13 @@ export function MissionControl({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ game, action }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await readOperationResponse(res);
 
-      if (res.status === 409) {
+      if (!data.operationId && res.status === 409) {
         toast.error(data.error || "A server operation is already in progress");
         return;
       }
-      if (!res.ok) {
+      if (!data.operationId && !res.ok) {
         toast.error(data.error || "Command failed");
         return;
       }
@@ -275,16 +279,10 @@ export function MissionControl({
       // text that cannot claim more than was observed. "Saved and stopped" here fired
       // before a 300s Project Zomboid stop had even reached the kill.
       await refresh();
-    } catch {
-      // A successful Project Zomboid stop takes a fixed 300s and ends in SIGKILL,
-      // which outlasts Cloudflare's ~100s origin read timeout — so the response
-      // routinely never arrives for an operation that worked. Reporting that as a red
-      // "Network error" was the app's most-hit lie.
-      toast.info(
-        `Still working on ${GAMES[game].name}. The connection timed out before it finished, ` +
-          `which is normal for a long stop — watch the strip at the top of the page.`
-      );
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage("power operation", error));
     } finally {
+      void refreshOperations();
       setLocalBusy(false);
       setPending(null);
     }
@@ -294,6 +292,7 @@ export function MissionControl({
 
   return (
     <div className="relative">
+      <StatusFreshness lastSuccessAt={lastSuccessAt} pollError={pollError} />
       {/* Intro */}
       <div className="mb-8 text-center">
         <motion.div
@@ -415,6 +414,8 @@ export function MissionControl({
             game={g.id}
             snapshot={games?.[g.id]}
             loading={loading}
+            lastSuccessAt={lastSuccessAt}
+            pollError={pollError}
             power={surfaceFor(g.id)}
             onPower={onPowerClick}
             delay={0.1 + i * 0.08}
@@ -470,7 +471,6 @@ export function MissionControl({
                */
               const slowest = others.filter((g) => GAMES[g].stopSeconds >= 120);
               const stopSecs = slowestStopSeconds(others);
-              const totalSecs = stopSecs + GAMES[confirmFor].stopSeconds;
               return (
             <>
               <DialogHeader>
@@ -729,6 +729,8 @@ function WorldCard({
   game,
   snapshot,
   loading,
+  lastSuccessAt,
+  pollError,
   power,
   onPower,
   delay,
@@ -736,6 +738,8 @@ function WorldCard({
   game: GameId;
   snapshot?: import("@/lib/use-games").GameSnapshot;
   loading: boolean;
+  lastSuccessAt?: number | null;
+  pollError?: string | null;
   /** Derived in `MissionControl` by the one shared `powerState`. */
   power: PowerSurface;
   onPower: (g: GameId, containerUp: boolean) => void;
@@ -868,14 +872,8 @@ function WorldCard({
           </Link>
         </div>
 
-        {/* Connect address(es) */}
-        <div className="relative mt-4 rounded-lg bg-background/50 px-3 py-2 font-mono text-[11px] text-muted-foreground ring-1 ring-foreground/10">
-          {meta.connect.map((addr, i) => (
-            <div key={addr} className={cn("flex items-center justify-between", i > 0 && "mt-1")}>
-              <span>{i === 0 ? "connect" : "or"}</span>
-              <span className="text-foreground">{addr}</span>
-            </div>
-          ))}
+        <div className="mt-4">
+          <JoinPanel game={game} snapshot={snapshot} lastSuccessAt={lastSuccessAt} pollError={pollError} busy={isBusyThis} compact />
         </div>
       </div>
     </motion.div>

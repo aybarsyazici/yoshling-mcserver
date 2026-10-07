@@ -30,10 +30,9 @@ vi.mock("@/lib/use-games", async (importOriginal) => ({
 }));
 
 /**
- * The surface mounts the two Modrinth searches as dialogs. Both reach `ModDetailDialog`,
- * which pulls in `html-react-parser` → the ESM-only `domhandler`, so on this project's
- * Node 20.12 collecting the file dies with `ERR_REQUIRE_ESM` before a test runs. Stubbed
- * for the same reason as in `tests/mods-surfaces.test.tsx`; it carries no write control.
+ * The former html-react-parser import required this stub on Node 20.12. The dialog
+ * now has independent rendered security coverage; this inventory suite keeps the
+ * stub so description requests do not interfere with reconciliation fixtures.
  */
 vi.mock("@/components/mod-detail-dialog", () => ({
   ModDetailDialog: ({ open }: { open: boolean }) => (open ? <div>mod detail</div> : null),

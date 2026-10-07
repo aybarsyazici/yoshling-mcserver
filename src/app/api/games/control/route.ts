@@ -6,6 +6,7 @@ import { powerOn, powerOff, restartGame } from "@/lib/game-manager";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
+import { CoResidencyError } from "@/lib/coresidency";
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -93,6 +94,9 @@ export async function POST(request: NextRequest) {
     // backups of the same world) is not a power-lock conflict and used to fall through
     // to a 500 with a message nobody could act on.
     if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof CoResidencyError) {
+      return NextResponse.json({ error: e.message, conflict: "coresidency", running: e.running }, { status: 409 });
+    }
     const msg = e instanceof Error ? e.message : "Server control failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

@@ -1,15 +1,17 @@
+import { errorCode, errorMessage } from "@/lib/error-details";
+import { readFileSnapshot, recordFileRevision, assertFileRevision } from "@/lib/file-revision";
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
-import path from "path";
+import { gameDataPath } from "@/lib/game-data-path";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-const OPS_FILE = path.join(MC_DIR, "ops.json");
 
 interface OpEntry {
   uuid: string;
@@ -80,13 +82,15 @@ export async function GET() {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  try {
-    const content = await readFile(OPS_FILE, "utf-8");
-    return NextResponse.json(JSON.parse(content));
-  } catch (e: any) {
-    if (e.code === "ENOENT") return NextResponse.json([]);
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  return revisionRead(() => gameDataPath(MC_DIR, "ops.json"), async () => {
+    try {
+      const content = await readFileSnapshot(await gameDataPath(MC_DIR, "ops.json"), "utf-8");
+      return NextResponse.json(JSON.parse(content));
+    } catch (e) {
+      if (errorCode(e) === "ENOENT") return NextResponse.json([]);
+      return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
+    }
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -105,51 +109,58 @@ export async function PUT(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  const laneBusy = fileLaneBusy("minecraft");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("minecraft", async () => {
 
-  const parsed = parseOps(await request.json());
-  if ("error" in parsed) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
-  }
+    const parsed = parseOps(await request.json());
+    if ("error" in parsed) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
 
-  // Operator is granted by UUID. An entry with a blank one is discarded by the game
-  // — verified: this route reported `count:3`, the game rewrote the file without the
-  // new entry on its next start, and `deop` said the player was not an operator. So
-  // resolve every missing UUID, and refuse the whole request rather than write a
-  // file that hands out operator to nobody while reporting success.
-  //
-  // Entries that already carry a valid UUID are untouched, so the two real operators
-  // keep the ids Minecraft itself wrote for them.
-  const withIds = await resolveEntryUuids(parsed.ops);
-  if (!withIds.ok) {
-    return NextResponse.json({ error: withIds.error }, { status: withIds.status });
-  }
+    // Operator is granted by UUID. An entry with a blank one is discarded by the game
+    // — verified: this route reported `count:3`, the game rewrote the file without the
+    // new entry on its next start, and `deop` said the player was not an operator. So
+    // resolve every missing UUID, and refuse the whole request rather than write a
+    // file that hands out operator to nobody while reporting success.
+    //
+    // Entries that already carry a valid UUID are untouched, so the two real operators
+    // keep the ids Minecraft itself wrote for them.
+    const withIds = await resolveEntryUuids(parsed.ops);
+    if (!withIds.ok) {
+      return NextResponse.json({ error: withIds.error }, { status: withIds.status });
+    }
 
-  try {
-    await writeFile(OPS_FILE, JSON.stringify(withIds.entries, null, 2), "utf-8");
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+    try {
+      const file = await gameDataPath(MC_DIR, "ops.json");
+      const written = JSON.stringify(withIds.entries, null, 2);
+      await assertFileRevision(file);
+      assertFileWriteActive();
+      await writeFile(file, written, "utf-8");
+      recordFileRevision(file, written);
+      if (await readFile(file, "utf-8") !== written) throw new Error("Minecraft player list readback failed");
+    } catch (e) {
+      return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
+    }
 
-  try {
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "edit_file",
-        details: JSON.stringify({
-          game: "minecraft",
-          file: "ops.json",
-          count: withIds.entries.length,
-        }),
-      },
-    });
-  } catch (e) {
-    // The write already landed; log rather than fail the request, but don't let a
-    // missing audit trail be silent — granting operator is exactly what forensics
-    // needs to be able to look up later.
-    console.error("[mc-ops] activity log failed", e);
-  }
+    try {
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: "edit_file",
+          details: JSON.stringify({
+            game: "minecraft",
+            file: "ops.json",
+            count: withIds.entries.length,
+          }),
+        },
+      });
+    } catch (e) {
+      // The write already landed; log rather than fail the request, but don't let a
+      // missing audit trail be silent — granting operator is exactly what forensics
+      // needs to be able to look up later.
+      console.error("[mc-ops] activity log failed", e);
+    }
 
-  return NextResponse.json({ success: true, count: withIds.entries.length });
+    return NextResponse.json({ success: true, count: withIds.entries.length });
+
+  }, { request, file: () => gameDataPath(MC_DIR, "ops.json") });
 }

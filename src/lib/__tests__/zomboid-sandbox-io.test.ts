@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,7 +130,7 @@ describe("updateSandbox", () => {
     // setting is in the file".
     const { setSandboxValues } = await import("@/lib/sandbox-lua");
     hooks.decoy = {
-      file,
+      file: realpathSync(file),
       text: setSandboxValues(readFileSync(FIXTURE, "utf-8"), { FoodLootNew: "2.0" }, { minOptions: 20 })
         .text,
     };

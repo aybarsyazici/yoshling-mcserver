@@ -1,6 +1,9 @@
 "use client";
 
+import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
+
 import { useEffect, useState } from "react";
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -54,6 +57,10 @@ interface MapsState {
  * generator.
  */
 export function ZomboidMaps({ tint }: { tint: string }) {
+  const { can } = useGames(CAPABILITY_POLL_MS);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [revision, setRevision] = useState<string | null>(null);
   const [state, setState] = useState<MapsState | null>(null);
   const [order, setOrder] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -62,10 +69,12 @@ export function ZomboidMaps({ tint }: { tint: string }) {
     try {
       const res = await fetch("/api/zomboid/maps");
       const data = await res.json();
-      setState(data);
-      setOrder(data.order ?? []);
-    } catch {
-      toast.error("Couldn't read the map list");
+      if (!res.ok) throw new Error(data?.error || `Couldn't read the map list (HTTP ${res.status})`);
+      if (!isMapsState(data)) throw new Error("The map list response is incomplete");
+      setRevision(fileRevision(res));
+      setState(data); setOrder(data.order); setLoadError(null); setLoadedAt(Date.now());
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Couldn't read the map list");
     }
   }
 
@@ -75,6 +84,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
   }, []);
 
   function move(name: string, delta: number) {
+    if (!can.settingsEdit || loadError) return;
     setOrder((prev) => {
       const i = prev.indexOf(name);
       const j = i + delta;
@@ -86,25 +96,30 @@ export function ZomboidMaps({ tint }: { tint: string }) {
   }
 
   async function save() {
+    if (!can.settingsEdit || !state || loadError || saving) return;
     setSaving(true);
     try {
       const res = await fetch("/api/zomboid/maps", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...revisionHeaders(revision) },
         body: JSON.stringify({ order }),
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.stale) setLoadError(data.error);
         toast.error(data.error || "Couldn't save the map order");
         return;
       }
       toast.success("Map order saved — it applies the next time Project Zomboid starts.");
       await load();
+    } catch {
+      setLoadError("The map save result is unconfirmed. Read the saved map order before retrying.");
     } finally {
       setSaving(false);
     }
   }
 
+  if (!state && loadError) return <div role="alert" className="rounded-2xl bg-card/70 p-5"><p>{loadError}</p><Button onClick={load}>Retry map list</Button></div>;
   if (!state) return <div className="skeleton h-48 rounded-2xl" />;
 
   const dirty = JSON.stringify(order) !== JSON.stringify(state.order);
@@ -140,6 +155,8 @@ export function ZomboidMaps({ tint }: { tint: string }) {
         </div>
       </div>
 
+      {loadError && <div role="alert"><p>{loadError}. Showing the last read from {new Date(loadedAt!).toLocaleTimeString()}.</p><Button onClick={load}>Retry map list</Button></div>}
+      {!can.settingsEdit && <p className="text-xs text-muted-foreground">This account can read maps but cannot change their order.</p>}
       {state.configMissing && (
         <p className="text-xs text-muted-foreground">
           No server config yet — start Project Zomboid once and the map list appears here.
@@ -235,7 +252,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={i === 0}
+                    disabled={!can.settingsEdit || !!loadError || i === 0}
                     onClick={() => move(name, -1)}
                     title="Higher priority"
                   >
@@ -244,7 +261,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={i === order.length - 1}
+                    disabled={!can.settingsEdit || !!loadError || i === order.length - 1}
                     onClick={() => move(name, 1)}
                     title="Lower priority"
                   >
@@ -269,7 +286,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
             {state.unlisted.map((name) => (
               <button
                 key={name}
-                onClick={() => setOrder((prev) => [...prev.filter((n) => n !== name), name])}
+                disabled={!can.settingsEdit || !!loadError} onClick={() => setOrder((prev) => [...prev.filter((n) => n !== name), name])}
                 className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] transition-colors hover:text-foreground"
                 title="Add to the load order"
               >
@@ -315,7 +332,7 @@ export function ZomboidMaps({ tint }: { tint: string }) {
         <div className="flex flex-wrap items-center gap-3 border-t border-border/50 pt-3">
           <Button
             onClick={save}
-            disabled={saving || !dirty}
+            disabled={!can.settingsEdit || !!loadError || saving || !dirty}
             style={{ background: tint, color: "var(--background)" }}
           >
             {saving ? "Saving…" : "Save map order"}
@@ -327,4 +344,13 @@ export function ZomboidMaps({ tint }: { tint: string }) {
       )}
     </div>
   );
+}
+
+function isMapsState(value: unknown): value is MapsState {
+  if (!value || typeof value !== "object") return false;
+  const v = value as MapsState;
+  const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((s) => typeof s === "string");
+  return typeof v.configMissing === "boolean" && [v.order, v.unlisted, v.missing, v.stock].every(strings) &&
+    Array.isArray(v.maps) && v.maps.every((m) => m && [m.name, m.workshopId, m.modId, m.title, m.mapTitle, m.parent].every((s) => typeof s === "string") && Number.isFinite(m.cellCount) && Number.isFinite(m.order)) &&
+    Array.isArray(v.conflicts) && v.conflicts.every((c) => c && strings(c.maps) && c.maps.length === 2 && strings(c.cells));
 }

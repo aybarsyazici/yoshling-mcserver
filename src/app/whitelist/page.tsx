@@ -1,206 +1,190 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
+import { discordIdList, discordUserId } from "@/lib/discord-identity";
+import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { SectionHeading } from "@/components/ui-bits";
 
+interface WhitelistSnapshot {
+  users: string[];
+  source: "file" | "env";
+  labels: Record<string, string>;
+  selfId: string;
+  revision: string;
+}
+interface SaveIntent { users: string[]; revision: string }
+interface Confirmation { kind: "empty" | "self"; intent: SaveIntent }
+
+function strongRevision(response: Response): string | null {
+  const revision = fileRevision(response);
+  return revision && /^"[^"\r\n]+"$/.test(revision) ? revision : null;
+}
+function sameUsers(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+function readSnapshot(data: unknown, revision: string | null): WhitelistSnapshot {
+  if (!data || typeof data !== "object") throw new Error("The sign-in list response is incomplete.");
+  const row = data as Record<string, unknown>;
+  const users = discordIdList(row.users);
+  const selfId = discordUserId(row.selfId);
+  if (!users || (row.source !== "file" && row.source !== "env") || !selfId ||
+      !row.labels || typeof row.labels !== "object" || Array.isArray(row.labels) ||
+      !Object.entries(row.labels).every(([id, label]) => users.includes(id) && typeof label === "string")) {
+    throw new Error("The sign-in list response is incomplete. Discord IDs and your own identity must be verified before editing.");
+  }
+  if (!revision) throw new Error("The sign-in list revision could not be verified. Retry before editing.");
+  return { users, selfId, source: row.source as "file" | "env", labels: row.labels as Record<string, string>, revision };
+}
+
 export default function WhitelistPage() {
+  const [snapshot, setSnapshot] = useState<WhitelistSnapshot | null>(null);
   const [users, setUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  /**
-   * "Loaded, and it's empty" and "never loaded" have to be separate states. While
-   * they were the same one, a failed GET left `users` at `[]` and the page said
-   * "No restrictions — anyone can sign in" about a list it had never seen, and a
-   * Save on top of that would have made the claim true by wiping the file.
-   */
   const [loadError, setLoadError] = useState<string | null>(null);
-  /** Nothing saved yet — these names come from `ALLOWED_DISCORD_USERS`. */
-  const [fromEnvSeed, setFromEnvSeed] = useState(false);
   const [newUser, setNewUser] = useState("");
   const [saving, setSaving] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [selfRemoved, setSelfRemoved] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/whitelist")
-      .then(async (r) => {
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        if (!Array.isArray(data.users)) throw new Error("the response had no list in it");
-        setUsers(data.users);
-        setFromEnvSeed(data.source === "env");
-      })
-      .catch((e: Error) => setLoadError(e.message))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    try {
+      const response = await fetch("/api/whitelist", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(typeof data?.error === "string" ? data.error : `Couldn't read the sign-in list (HTTP ${response.status}).`);
+      const loaded = readSnapshot(data, strongRevision(response));
+      setSnapshot(loaded); setUsers(loaded.users); setLoadError(null); setConfirmation(null); setSelfRemoved(false);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Couldn't read the sign-in list.");
+    } finally { setLoading(false); }
   }, []);
+  useEffect(() => {
+    // State updates in load follow the awaited read.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load]);
 
+  const ready = snapshot !== null && !loading && !loadError && !saving && !selfRemoved;
+  const editable = ready && confirmation === null;
   function addUser() {
-    const username = newUser.trim().toLowerCase();
-    if (!username) return;
-    if (users.includes(username)) {
-      toast.info("User already in whitelist");
-      return;
-    }
-    setUsers((prev) => [...prev, username]);
-    setNewUser("");
+    if (!editable) return;
+    const id = discordUserId(newUser);
+    if (!id) { toast.error("Enter the exact decimal Discord user ID. Usernames and display names cannot identify an invited account."); return; }
+    if (users.includes(id)) { toast.info("That Discord ID is already allowed."); return; }
+    setUsers((previous) => [...previous, id]); setNewUser("");
+  }
+  function removeUser(id: string) {
+    if (editable) setUsers((previous) => previous.filter((user) => user !== id));
+  }
+  function requestSave() {
+    if (!editable || !snapshot) return;
+    const intent = { users: [...users], revision: snapshot.revision };
+    if (users.length === 0) setConfirmation({ kind: "empty", intent });
+    else if (!users.includes(snapshot.selfId)) setConfirmation({ kind: "self", intent });
+    else void save(intent);
   }
 
-  function removeUser(username: string) {
-    setUsers((prev) => prev.filter((u) => u !== username));
-  }
-
-  async function save(confirmEmpty = false) {
+  async function save(intent: SaveIntent, confirmed?: "empty" | "self") {
+    if (!ready || !snapshot || intent.revision !== snapshot.revision) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/whitelist", {
+      const response = await fetch("/api/whitelist", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(confirmEmpty ? { users, confirmEmpty: true } : { users }),
+        headers: { "Content-Type": "application/json", ...revisionHeaders(intent.revision) },
+        body: JSON.stringify({ users: intent.users,
+          ...(confirmed === "empty" ? { confirmEmpty: true } : {}),
+          ...(confirmed === "self" ? { confirmSelfRemoval: true } : {}),
+        }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        toast.success("Whitelist saved");
-        setConfirmClear(false);
-        setFromEnvSeed(false);
-      } else {
-        // Say what the server said. A bare "Failed to save" is how the route's own
-        // explanation — e.g. that it refused to clear a populated list — was lost.
-        toast.error(data.error || `Couldn't save the whitelist (HTTP ${res.status})`);
+      const data = await response.json();
+      if (!response.ok) {
+        if (response.status >= 500) throw new Error("The save result could not be confirmed.");
+        if (response.status === 409 && data?.code === "confirm_empty") setConfirmation({ kind: "empty", intent });
+        else if (response.status === 409 && data?.code === "confirm_self_removal") setConfirmation({ kind: "self", intent });
+        else {
+          const message = typeof data?.error === "string" ? data.error : `Couldn't save the sign-in list (HTTP ${response.status}).`;
+          if (data?.stale || response.status === 401 || response.status === 403) { setLoadError(message); setConfirmation(null); }
+          toast.error(message);
+        }
+        return;
       }
-    } catch (e) {
-      toast.error(`Couldn't save the whitelist: ${(e as Error).message}`);
-    } finally {
-      setSaving(false);
-    }
+      const savedUsers = discordIdList(data?.users);
+      const revision = strongRevision(response);
+      if (data?.success !== true || !savedUsers || !sameUsers(savedUsers, intent.users) || !revision) {
+        throw new Error("The saved sign-in list could not be verified.");
+      }
+      const removingSelf = savedUsers.length > 0 && !savedUsers.includes(snapshot.selfId);
+      if (removingSelf && confirmed !== "self") throw new Error("Your removal was not confirmed before the save.");
+      setSnapshot({ ...snapshot, users: savedUsers, source: "file", revision }); setUsers(savedUsers); setConfirmation(null);
+      toast.success("Sign-in list saved and verified.");
+      if (removingSelf) {
+        setSelfRemoved(true);
+        try { await signOut({ callbackUrl: "/login" }); }
+        catch { setLoadError("Your Discord ID was removed from the saved list. The sign-out request was not confirmed; reload to finish signing out."); }
+      }
+    } catch {
+      setLoadError("The save result is unconfirmed. Reload the sign-in list before retrying."); setConfirmation(null);
+      toast.info("The sign-in list save result is unconfirmed. Reload it before retrying.");
+    } finally { setSaving(false); }
   }
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: "var(--primary)" }}>
-      <SectionHeading
-        eyebrow="Shared · Access"
-        title="App whitelist"
-        sub="Who can sign in at all. Granting someone a server is a separate step on the Crew page."
-        tint="var(--primary)"
-      />
-
+      <SectionHeading eyebrow="Shared · Access" title="App whitelist"
+        sub="Who can sign in at all. Granting someone a server is a separate step on the Crew page." tint="var(--primary)" />
       <Card className="bg-card/70 backdrop-blur">
-        <CardHeader>
-          <CardTitle>Allowed Discord users</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle>Allowed Discord IDs</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Only these Discord users can sign in. Use their Discord username (the @handle) or
-            their display name — either works. If the list is empty, anyone with Discord can sign
-            in.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Being on this list doesn&rsquo;t give anyone a server. After they sign in once they
-            appear on the{" "}
-            <Link href="/users" className="text-primary hover:underline">
-              Crew page
-            </Link>
-            , where you pick which worlds they can see.
-          </p>
-
-          {loading ? (
-            <div className="h-20 bg-muted animate-pulse rounded" />
-          ) : loadError ? (
-            <div className="flex items-start gap-2 rounded-xl bg-destructive/10 p-3 ring-1 ring-destructive/30">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
-              <div className="space-y-1 text-sm">
-                <p className="font-medium">Couldn&rsquo;t load the whitelist</p>
-                <p className="text-muted-foreground">{loadError}</p>
-                <p className="text-muted-foreground">
-                  Editing is off until it loads — the list is still whatever it was, and saving from
-                  here would replace it with an empty one. Reload the page.
-                </p>
-              </div>
+          <p className="text-sm text-muted-foreground">Use the exact decimal Discord user ID. Names below are display labels only; usernames and display names cannot grant sign-in access.</p>
+          <p className="text-sm text-muted-foreground">An empty list lets anyone with a Discord account sign in. Being allowed here gives no server access; grant worlds on the <Link href="/users" className="text-primary hover:underline">Crew page</Link>.</p>
+          {loading ? <div aria-label="Loading sign-in list" className="h-20 animate-pulse rounded bg-muted" /> : loadError ? (
+            <div role="alert" className="space-y-2 rounded-xl bg-destructive/10 p-3 ring-1 ring-destructive/30">
+              <p className="flex items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4" />Editing is unavailable</p>
+              <p>{loadError}</p>
+              <Button variant="outline" disabled={saving || selfRemoved} onClick={() => { setLoading(true); void load(); }}>Retry sign-in list</Button>
             </div>
-          ) : (
+          ) : snapshot && (
             <>
-              {fromEnvSeed && (
-                <p className="text-sm text-muted-foreground">
-                  Nothing has been saved here yet, so these names come from{" "}
-                  <code className="text-xs">ALLOWED_DISCORD_USERS</code>. Saving writes them to the
-                  whitelist file, which then takes over.
-                </p>
-              )}
-
+              {snapshot.source === "env" && <p className="text-sm text-muted-foreground">These IDs come from the deployment sign-in seed. Saving makes this list the active policy.</p>}
               <div className="flex flex-wrap gap-2">
-                {users.map((user) => (
-                  <Badge key={user} variant="secondary" className="gap-1.5 py-1.5 px-3">
-                    {user}
-                    <button
-                      onClick={() => removeUser(user)}
-                      className="text-muted-foreground hover:text-destructive ml-1"
-                    >
-                      x
-                    </button>
-                  </Badge>
-                ))}
-                {users.length === 0 && (
-                  <p className="text-sm text-muted-foreground italic">
-                    The list is empty, so anyone with a Discord account can sign in
-                  </p>
-                )}
+                {users.map((id) => <Badge key={id} variant="secondary" className="gap-1.5 px-3 py-1.5">
+                  <span className="font-mono">{id}</span>{snapshot.labels[id] && <span>· {snapshot.labels[id]}</span>}
+                  {id === snapshot.selfId && <span>(you)</span>}
+                  <button type="button" aria-label={`Remove Discord ID ${id}`} disabled={!editable} onClick={() => removeUser(id)} className="ml-1 text-muted-foreground hover:text-destructive">×</button>
+                </Badge>)}
+                {users.length === 0 && <p className="text-sm italic text-muted-foreground">The draft is empty. Saving it allows anyone with a Discord account to sign in.</p>}
               </div>
-
               <div className="flex gap-2">
-                <Input
-                  placeholder="Discord username (e.g. jamma010)"
-                  value={newUser}
-                  onChange={(e) => setNewUser(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addUser()}
-                />
-                <Button variant="outline" onClick={addUser}>
-                  Add
-                </Button>
+                <Input aria-label="Discord user ID" placeholder="Discord user ID (exact digits)" inputMode="numeric" type="text" value={newUser} disabled={!editable}
+                  onChange={(event) => setNewUser(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addUser(); } }} />
+                <Button variant="outline" onClick={addUser} disabled={!editable || !newUser.trim()}>Add ID</Button>
               </div>
-
-              {/* Saving an empty list switches the sign-in check off, so it asks first. */}
-              <Button
-                onClick={() => (users.length === 0 ? setConfirmClear(true) : save())}
-                disabled={saving}
-              >
-                {saving ? "Saving..." : "Save Whitelist"}
-              </Button>
+              <Button onClick={requestSave} disabled={!editable}>{saving ? "Saving…" : "Save Whitelist"}</Button>
+              {selfRemoved && <p role="status">Your ID was removed from the saved list. Signing out…</p>}
             </>
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
-        <DialogContent>
+      <Dialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !saving) setConfirmation(null); }}>
+        <DialogContent showCloseButton={!saving}>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-destructive" /> Save an empty whitelist?
-            </DialogTitle>
-            <DialogDescription>
-              An empty list turns the sign-in check off:{" "}
-              <strong>anyone with a Discord account can sign in.</strong> They arrive with no server
-              access until you grant one on the Crew page, but they do get an account. If you only
-              meant to remove someone, add at least one name back first.
-            </DialogDescription>
+            <DialogTitle>{confirmation?.kind === "empty" ? "Allow anyone to sign in?" : "Remove your own Discord ID?"}</DialogTitle>
+            <DialogDescription>{confirmation?.kind === "empty"
+              ? "Saving an empty list opens sign-in to anyone with Discord. New accounts still need world grants from an admin. Add at least one Discord ID if you want to keep sign-in restricted."
+              : "This saves the list without your Discord ID and then signs you out. Confirm that another allowed admin can manage access before continuing."}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmClear(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => save(true)} disabled={saving}>
-              {saving ? "Saving..." : "Save empty list"}
+            <Button variant="outline" disabled={saving} onClick={() => setConfirmation(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={!ready} onClick={() => confirmation && void save(confirmation.intent, confirmation.kind)}>
+              {saving ? "Saving…" : confirmation?.kind === "empty" ? "Save empty list" : "Save and sign out"}
             </Button>
           </DialogFooter>
         </DialogContent>

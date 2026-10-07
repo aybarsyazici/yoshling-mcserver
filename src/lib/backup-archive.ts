@@ -58,7 +58,7 @@ export class BadArchiveError extends Error {
 }
 
 /**
- * Refuse a backup a power operation was admitted over, **before** any of it is written.
+ * Refuse interrupted work before the next mutable/publication step begins.
  *
  * `refuseIfPreempted` in `lib/operations.ts` is the post-`tar` guard, and its message
  * ends "It has been deleted" — true there, because the route's `catch` does the `rm`.
@@ -70,15 +70,14 @@ export class BadArchiveError extends Error {
  * operation that had already condemned the result, then handed the user nothing.
  * Two of three PZ attempts that afternoon were preempted.
  *
- * Deliberately lives here rather than in `lib/operations.ts`: only these three
- * routes have a "nothing written yet" phase to refuse in.
+ * Single-mod installation also calls this immediately before publishing a jar.
+ * The message must not imply an archive exists or that earlier steps did nothing.
  */
 export function refuseIfPreemptedEarly(op: OpHandle, what: string): void {
   if (!op.preempted) return;
   throw new Error(
-    `A power operation started while ${what} was being taken, so it was stopped ` +
-      `before the archive was written. Nothing was changed — try again once the ` +
-      `server has settled.`
+    `A power operation interrupted ${what}, so this step was not continued. ` +
+      `Try again once the server has settled.`
   );
 }
 

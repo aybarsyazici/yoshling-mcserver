@@ -4,7 +4,10 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
 import { installMod, removeMod, serverSideFor } from "@/lib/mod-manager";
-import { getProjectVersions } from "@/lib/modrinth";
+import { getProjectVersions, getVersion } from "@/lib/modrinth";
+import { modFilePath } from "@/lib/mod-path";
+import { activeModJars, verifyModReplacement, type ExpectedModJar } from "@/lib/mc-mod-replacement";
+import type { InstalledMod } from "@/generated/prisma/client";
 import {
   applyReport,
   checkIntegrity,
@@ -17,16 +20,20 @@ import {
 import { modsDirRefusal, planModpackInstall, type PackMod } from "@/lib/mod-plan";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { mkdir, rm } from "fs/promises";
+import { mkdir, readFile, rm, unlink, writeFile } from "fs/promises";
 import path from "path";
-import { RUNTIME } from "@/lib/game-manager";
+import { gameContainerState, getMinecraftTarget, RUNTIME, startGameForOperation, stopGameForOperation } from "@/lib/game-manager";
+import { otherGames, type GameId } from "@/lib/games";
+import { CoResidencyError } from "@/lib/coresidency";
+import { GAMES } from "@/lib/games";
 import { formatBytes } from "@/lib/format";
-import { runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
+import { claimOperationPower, runOperation, type OpHandle, type OpSuccess } from "@/lib/operations";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { sealArchive, type McManifest } from "@/lib/backup-create";
 import { recordBackupEvent } from "@/lib/backup-log";
 import { removeManifestSidecar } from "@/lib/backup-archive";
-import { archiveMembersPresent, describeMembers } from "@/lib/mc-archive";
+import { BACKUP_DIRS } from "@/lib/backup-store";
+import { archiveMembersPresent, describeMembers, prepareMinecraftArchive } from "@/lib/mc-archive";
 import { APPLY_MODPACK_ACTION, appliedPackDetails } from "@/lib/modpack-applied";
 
 /**
@@ -43,10 +50,30 @@ const execFileAsync = promisify(execFile);
 
 /**
  * Same directory `/api/server/backups` lists and restores from, so the archive written
- * here really is offerable as a restore point. (Still two definitions of the constant —
- * the shared `src/lib/backups.ts` extraction is deliberately out of scope for this pass.)
+ * here really is offerable as a restore point.
  */
-const BACKUP_DIR = "/app/data/backups";
+const BACKUP_DIR = BACKUP_DIRS.minecraft;
+
+const stoppedStates = new Set(["exited", "created", "missing"]);
+
+function refusePreemptedApply(op: OpHandle): void {
+  if (op.preempted) {
+    throw new Error("The modpack apply was interrupted. No further changes were made; check Minecraft's power and installed mods before retrying.");
+  }
+}
+
+async function refuseOtherRunningWorlds(): Promise<void> {
+  const running: GameId[] = [];
+  for (const other of otherGames("minecraft")) {
+    if (!stoppedStates.has(await gameContainerState(other))) running.push(other);
+  }
+  if (running.length) {
+    throw new CoResidencyError(
+      `${running.map((game) => GAMES[game].name).join(" and ")} ${running.length > 1 ? "are" : "is"} already running, so this modpack apply cannot start Minecraft. Use Power on to switch servers.`,
+      running
+    );
+  }
+}
 
 /**
  * Was 60_000 here while the sibling backup path had already raised its near-identical
@@ -109,7 +136,7 @@ export async function POST(request: NextRequest) {
   // it here (write compose, don't recreate) would just be the "looks applied and
   // silently isn't" trap again, with mods downloaded for a version that is not
   // running.
-  if (finalMcVersion !== serverConfig.mcVersion || finalLoader !== serverConfig.modLoader) {
+  if (finalMcVersion !== serverConfig.mcVersion || finalLoader.toLowerCase() !== serverConfig.modLoader.toLowerCase()) {
     return NextResponse.json(
       {
         error:
@@ -131,26 +158,58 @@ export async function POST(request: NextRequest) {
       {
         kind: "mods.apply",
         game: "minecraft",
+        resources: ["files:minecraft"],
         title: "Installing a modpack",
         startedBy: session.user.name ? { name: session.user.name } : null,
       },
-      (op) =>
-        applyModpack(op, {
-          modpack,
-          serverConfig,
-          userId: session.user.id,
-          // The pre-apply archive's journal line and manifest attribution. `?? ""` matches
-          // what every backup route builds its actor from; `recordBackupEvent` collapses an
-          // empty name to `null` rather than journalling `actor: ""`, which the backups page
-          // renders as "the scheduler".
-          actorName: session.user.name ?? "",
-          errors,
-          warnings,
-          skipped,
-        })
+      async (op) => {
+        let result: (OpSuccess<NextResponse> & { expectedRunning?: boolean }) | undefined;
+        try {
+          result = await applyModpack(op, {
+            modpack,
+            serverConfig,
+            userId: session.user.id,
+            // The pre-apply archive's journal line and manifest attribution. `?? ""` matches
+            // what every backup route builds its actor from; `recordBackupEvent` collapses an
+            // empty name to `null` rather than journalling `actor: ""`, which the backups page
+            // renders as "the scheduler".
+            actorName: session.user.name ?? "",
+            errors,
+            warnings,
+            skipped,
+          });
+          return result;
+        } finally {
+          const state = await gameContainerState("minecraft").catch(() => "unknown");
+          const expected = result?.expectedRunning;
+          const contradicted = expected !== undefined &&
+            (expected ? state !== "running" : !stoppedStates.has(state));
+          op.fact({
+            label: "Power",
+            value: state === "running" ? "still running" : stoppedStates.has(state) ? "powered off" : "in an unknown state",
+            ...(contradicted ? { verdict: "bad" as const } :
+              !stoppedStates.has(state) && state !== "running" ? { verdict: "warn" as const } : {}),
+          });
+          // Only a returned lifecycle result is checked here, so an earlier thrown
+          // failure keeps its own error. Server facts follow this final observation.
+          if (contradicted) {
+            throw new Error(stoppedStates.has(state)
+              ? "Minecraft was observed powered off at the end of the modpack apply. The mods were written, but the restart did not remain running; check the container."
+              : state === "running"
+              ? "Minecraft was observed running unexpectedly after the modpack apply. It was expected to remain stopped; check the container."
+              : "The final power state of Minecraft could not be verified after the modpack apply. Check the container before relying on it.");
+          }
+          if (expected !== undefined) {
+            op.fact({ label: "Server", value: expected ? "starting again" : "left powered off" });
+          }
+        }
+      }
     );
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof CoResidencyError) {
+      return NextResponse.json({ error: e.message, conflict: "coresidency", running: e.running }, { status: 409 });
+    }
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Modpack install failed" },
       { status: 500 }
@@ -164,7 +223,7 @@ export async function POST(request: NextRequest) {
  * Up to 166 sequential Modrinth fetches, and it *deletes every installed jar first* —
  * so the window where the mods directory is empty used to be open to a Power on, a
  * restore, or a second apply, with nothing refusing any of them. It holds
- * `files:minecraft` now, and `count` progress is genuine: the loop already iterates
+ * `power` and `files:minecraft` now, and `count` progress is genuine: the loop already iterates
  * one mod at a time, so the number is observed rather than interpolated.
  */
 async function applyModpack(
@@ -186,7 +245,11 @@ async function applyModpack(
     warnings: string[];
     skipped: SkippedMod[];
   }
-): Promise<OpSuccess<NextResponse>> {
+): Promise<OpSuccess<NextResponse> & { expectedRunning?: boolean }> {
+  const verifiedTarget = await getMinecraftTarget();
+  if (verifiedTarget.mcVersion !== serverConfig.mcVersion || verifiedTarget.loader !== serverConfig.modLoader.toLowerCase()) {
+    throw new Error("The server settings mirror differs from the verified Minecraft target. No jars were replaced; verify the settings first.");
+  }
   // Refuse before taking a backup, and before deleting anything, if this pack cannot
   // actually be installed.
   //
@@ -276,9 +339,11 @@ async function applyModpack(
   op.step("Checking which mods run on a server");
   const plan = await planModpackInstall({
     mods: modpack.mods,
+    resolvePinnedVersion: getVersion,
+    target: { mcVersion: serverConfig.mcVersion, loader: serverConfig.modLoader },
     resolveVersions: (modrinthId) =>
       getProjectVersions(modrinthId, {
-        loaders: [serverConfig.modLoader],
+        loaders: [serverConfig.modLoader.toLowerCase()],
         game_versions: [serverConfig.mcVersion],
       }),
     sideFor: serverSideFor,
@@ -397,6 +462,40 @@ async function applyModpack(
   // claim; see `ApplyReport.warnings`. They are recorded as an operation fact below, which
   // is plain-toned and outlives the HTTP response.
 
+  refusePreemptedApply(op);
+  const plannedNames = plan.items.map(item => item.kind === "direct"
+    ? `${item.mod.slug}.jar` : (item.version.files.find(file => file.primary) || item.version.files[0])?.filename);
+  if (plannedNames.some(name => !name || path.basename(name) !== name || name.includes("\\") || !/\.jar$/i.test(name))) {
+    throw new Error("The pack contains an invalid or non-jar download filename. No jars were replaced.");
+  }
+  if (new Set(plannedNames).size !== plannedNames.length) {
+    throw new Error("The pack has colliding jar filenames. No jars were replaced.");
+  }
+  const modsDirectory = path.join(RUNTIME.minecraft.dir, "mods");
+  const existingJars = await activeModJars(modsDirectory, RUNTIME.minecraft.dir);
+  op.fact({ label: "Active jars to replace", value: existingJars.join(", ") || "none" });
+  // Planning is read-only. Acquire power only once the plan can actually apply,
+  // so a client-only refusal cannot preempt somebody else's backup or block power.
+  claimOperationPower(op);
+  const admittedTarget = await getMinecraftTarget();
+  if (admittedTarget.mcVersion !== verifiedTarget.mcVersion || admittedTarget.loader !== verifiedTarget.loader) {
+    throw new Error("The verified Minecraft target changed during pack preflight. No jars were replaced.");
+  }
+  const initialState = await gameContainerState("minecraft");
+  const wasRunning = initialState === "running";
+  if (!wasRunning && !stoppedStates.has(initialState)) {
+    throw new Error(`Minecraft's container is ${initialState}; its files cannot be safely replaced.`);
+  }
+  if (wasRunning) {
+    // Applying a pack never grants permission to stop another world's players.
+    await refuseOtherRunningWorlds();
+    await stopGameForOperation(op, "minecraft");
+  }
+  if (!stoppedStates.has(await gameContainerState("minecraft"))) {
+    throw new Error("Minecraft is still running, so the modpack was not applied and its files are untouched.");
+  }
+  refusePreemptedApply(op);
+
   // Auto-backup the world before touching mods.
   //
   // Four things were wrong with this block, and they compounded into the worst
@@ -428,7 +527,10 @@ async function applyModpack(
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `auto-before-modpack-${stamp}.tar.gz`;
   const archive = path.join(BACKUP_DIR, filename);
-  const members = await archiveMembersPresent(MC_DIR);
+  let members = await archiveMembersPresent(MC_DIR);
+  const archiveWork = path.join(BACKUP_DIR, `.work-before-modpack-${stamp}`);
+  const metadataWork = path.join(BACKUP_DIR, `.metadata-before-modpack-${stamp}`);
+  let stagedArchive = false;
   // Read **before** the archive is written, not before the delete loop where it used to be:
   // the manifest has to carry the inventory, and by the time the loop runs the archive is
   // already sealed. `removeMod` deletes each row with its file, so this is the only moment
@@ -462,7 +564,26 @@ async function applyModpack(
   } else {
     try {
       await mkdir(BACKUP_DIR, { recursive: true });
-      await execFileAsync("tar", ["-czf", archive, "-C", MC_DIR, ...members], {
+      const prepared = await prepareMinecraftArchive(MC_DIR, archiveWork);
+      stagedArchive = prepared.staged;
+      members = prepared.members;
+      const snapshot: McManifest = {
+        createdAt: new Date().toISOString(), flushed: false, members,
+        minecraftTarget: verifiedTarget,
+        ...(members.includes("mods") ? { installedMods: installedMods.map((m: InstalledMod) => ({
+          id: m.id, modrinthId: m.modrinthId, slug: m.slug, name: m.name, version: m.version,
+          fileName: m.fileName, mcVersion: m.mcVersion, loader: m.loader,
+          source: m.source ?? null, versionId: m.versionId ?? null,
+          installedBy: m.installedBy, installedAt: m.installedAt?.toISOString(), updatedAt: m.updatedAt?.toISOString(),
+        })) } : {}),
+        ...(actorName ? { startedBy: actorName } : {}),
+      };
+      await mkdir(metadataWork, { recursive: true });
+      const metadata = JSON.stringify(snapshot);
+      const metadataFile = path.join(metadataWork, "manifest.json");
+      await writeFile(metadataFile, metadata, { encoding: "utf-8", flag: "wx" });
+      if (await readFile(metadataFile, "utf-8") !== metadata) throw new Error("Rollback metadata readback failed");
+      await execFileAsync("tar", ["-czf", archive, "-C", prepared.root, ...members, "-C", metadataWork, "manifest.json"], {
         timeout: TAR_TIMEOUT_MS,
       });
       // Sealed exactly the way `createBackup` seals a real one, rather than left as a raw
@@ -482,35 +603,7 @@ async function applyModpack(
         game: "minecraft",
         target: archive,
         filename,
-        manifest: {
-          createdAt: new Date().toISOString(),
-          // Recorded so the listing can say which archives a restore would bring the jars
-          // back from — `GET /api/server/backups` reads this, it does not open the tar.
-          members,
-          // **The inventory, captured before anything is deleted.** `removeMod` drops the
-          // `InstalledMod` row along with the file, and a filename cannot be mapped back to a
-          // Modrinth project, so without this a rollback restores the jars and leaves the
-          // Mods page disagreeing with the directory. Only written when `mods` is in the
-          // archive, so routine world-only backups say nothing about mods.
-          ...(members.includes("mods") && installedMods.length > 0
-            ? {
-                installedMods: installedMods.map((m: (typeof installedMods)[number]) => ({
-                  modrinthId: m.modrinthId,
-                  slug: m.slug,
-                  name: m.name,
-                  version: m.version,
-                  fileName: m.fileName,
-                  mcVersion: m.mcVersion,
-                  loader: m.loader,
-                })),
-              }
-            : {}),
-          ...(actorName ? { startedBy: actorName } : {}),
-          // No `flushed`. This route does not ask Minecraft to save first, and
-          // `BaseManifest` documents `false` as the specific claim "the server was stopped,
-          // so its files were already at rest" — which is not something checked here.
-          // Absent reads as unknown, which is what it is.
-        } satisfies McManifest,
+        manifest: snapshot,
       });
       op.fact({
         label: "Rollback point",
@@ -549,24 +642,40 @@ async function applyModpack(
           { status: 500 }
         ),
       };
+    } finally {
+      if (stagedArchive) await rm(archiveWork, { recursive: true, force: true }).catch(() => {});
+      await rm(metadataWork, { recursive: true, force: true }).catch(() => {});
     }
   }
 
   // Remove all currently installed mods. A jar that survives this loads alongside
   // the new pack, so a failed removal has to be said out loud.
+  refusePreemptedApply(op);
   op.step("Removing the current mods");
   let removed = 0;
+  const trackedNames = new Set(installedMods.map((mod: InstalledMod) => mod.fileName));
+  // Admit all final unlink paths before deleting targets that a contained jar alias
+  // may reference. The operation's own deletions must not turn later alias admission
+  // into a false dangling-link refusal.
+  const untrackedRemovals = await Promise.all(existingJars.filter(name => !trackedNames.has(name)).map(fileName =>
+    modFilePath(modsDirectory, fileName, { boundaryRoot: MC_DIR, followFinalSymlink: false })));
   for (const mod of installedMods) {
+    refusePreemptedApply(op);
     try {
       await removeMod(mod.id, userId);
       removed++;
-    } catch (e: any) {
-      errors.push(`${mod.name}: could not be removed (${e.message || "failed"})`);
+    } catch (e) {
+      errors.push(`${mod.name}: could not be removed (${e instanceof Error ? e.message : "failed"})`);
     }
   }
+  for (const file of untrackedRemovals) {
+    refusePreemptedApply(op);
+    await unlink(file);
+    removed++;
+  }
   op.settle(`Removed the current mods`, {
-    kind: removed === installedMods.length ? "done" : "noop",
-    count: { done: removed, total: installedMods.length, noun: "mods" },
+    kind: removed === installedMods.length + untrackedRemovals.length ? "done" : "noop",
+    count: { done: removed, total: installedMods.length + untrackedRemovals.length, noun: "entries" },
   });
 
   // Install the planned mods. Version resolution and the client/server decision already
@@ -575,8 +684,10 @@ async function applyModpack(
   /** Mods that are now on disk with nothing published to check them against. Named so
    * the report can say "installed but not verified" instead of implying it checked. */
   const unverified: string[] = [];
+  const expectedJars: ExpectedModJar[] = [];
   op.step("Downloading mods");
   for (const item of plan.items) {
+    refusePreemptedApply(op);
     const mod = item.mod;
     // Real counts only: the loop genuinely handles one mod at a time, so this is
     // observed rather than interpolated. A count that only jumps 0 → n would be a fake.
@@ -596,8 +707,7 @@ async function applyModpack(
         // said it was "unreachable today, live tomorrow". It was unreachable permanently,
         // on the one path with no hashes at all. `Content-Length` is the real declaration
         // that was available the whole time.
-        const { writeFile } = await import("fs/promises");
-        const path = await import("path");
+        const { readFile, writeFile } = await import("fs/promises");
         const { getModsDir } = await import("@/lib/server-manager");
 
         const response = await fetch(item.url);
@@ -620,7 +730,13 @@ async function applyModpack(
         if (check.checked === null) unverified.push(mod.name);
 
         const fileName = `${mod.slug}.jar`;
-        await writeFile(path.join(getModsDir(), fileName), buffer);
+        const filePath = await modFilePath(getModsDir(), fileName);
+        refusePreemptedApply(op);
+        await writeFile(filePath, buffer);
+        const written = await readFile(filePath);
+        if (!written.equals(buffer)) {
+          throw new Error("The published mod jar does not match the downloaded bytes. Check the installed files before restarting.");
+        }
 
         await db.installedMod.create({
           data: {
@@ -639,6 +755,7 @@ async function applyModpack(
           },
         });
         installed++;
+        expectedJars.push({ name: mod.name, file: { filename: fileName, url: item.url, hashes: {}, primary: true, size: buffer.length }, sha512: digestsOf(buffer).sha512 });
       } else {
         // `installMod` hashes the download and compares it to the sha512 Modrinth
         // published *before* it writes anything, and throws `ModIntegrityError` if they
@@ -656,12 +773,15 @@ async function applyModpack(
         });
         if (check.checked === null) unverified.push(mod.name);
         installed++;
+        const file = item.version.files.find(file => file.primary) || item.version.files[0];
+        if (file) expectedJars.push({ name: mod.name, file });
       }
-    } catch (e: any) {
-      errors.push(`${mod.name}: ${e.message || "failed"}`);
+    } catch (e) {
+      errors.push(`${mod.name}: ${e instanceof Error ? e.message : "failed"}`);
     }
   }
 
+  errors.push(...await verifyModReplacement(modsDirectory, MC_DIR, expectedJars));
   // Anything short of every mod that belongs on this server is an error, not a success.
   // This used to answer 200 {success:true} whatever happened, so a pack whose rows all
   // lack a download source reported "Installed 0/166 mods" in a green toast.
@@ -688,6 +808,7 @@ async function applyModpack(
   // from a row count would quietly report a different number from the one the apply
   // reported.
   try {
+    refusePreemptedApply(op);
     await db.activity.create({
       data: {
         userId,
@@ -703,13 +824,13 @@ async function applyModpack(
         }),
       },
     });
-  } catch (e: any) {
+  } catch (e) {
     // The jars are already replaced, so this must not throw the apply away — but it must
     // not be silent either: with no row, the mods page will head itself "a pack was
     // applied, but not from here", and nobody should have to work out why.
     warnings.push(
       `The mods were installed, but recording which pack was applied failed ` +
-        `(${e?.message || "unknown error"}), so the mods page will not name this pack.`
+        `(${e instanceof Error ? e.message : "unknown error"}), so the mods page will not name this pack.`
     );
   }
 
@@ -721,7 +842,7 @@ async function applyModpack(
     warnings,
     unverified,
   });
-  const { complete } = report;
+  const complete = report.complete && errors.length === 0;
 
   // The count IS the verdict. `concludeOperation` reads this step: 0-of-a-real-total
   // is `nothing`, short-of-total is `partial`, and neither can render green however
@@ -732,7 +853,17 @@ async function applyModpack(
   });
   op.progress({ kind: "count", done: installed, total, noun: "mods" });
 
+  refusePreemptedApply(op);
+  if (complete && wasRunning) {
+    await refuseOtherRunningWorlds();
+    await startGameForOperation(op, "minecraft");
+    if (await gameContainerState("minecraft") !== "running") {
+      throw new Error("The mods were applied, but Minecraft did not start. It remains powered off; check the container before retrying.");
+    }
+  }
+
   return {
+    expectedRunning: complete && wasRunning,
     facts: [
       { label: "Installed", value: `${installed} of ${total}`, verdict: complete ? undefined : "warn" },
       // Recorded as a plain fact, with NO `verdict: "warn"`.
@@ -794,7 +925,9 @@ async function applyModpack(
         // who cannot see *which* mods were held back cannot tell a correct filter from a
         // broken one — and the reason string says which signal decided.
         skipped: report.skipped,
-        ...(report.error ? { error: report.error } : {}),
+        ...(report.error ? { error: report.error } : !complete ? {
+          error: "The mod set could not be completely replaced. Minecraft was left powered off; review the named errors before starting it.",
+        } : {}),
       },
       { status: complete ? 200 : 500 }
     ),

@@ -226,7 +226,7 @@ const removeMod = vi.fn(async (id: string) => {
 });
 
 vi.mock("@/lib/mod-manager", () => ({ installMod, removeMod, serverSideFor }));
-vi.mock("@/lib/modrinth", () => ({ getProjectVersions }));
+vi.mock("@/lib/modrinth", () => ({ getProjectVersions, getVersion: vi.fn(async () => { throw new Error("no pins in this fixture"); }) }));
 
 const mkdir = vi.fn(async (dir: string) => {
   mkdirRuns.push(String(dir));
@@ -271,18 +271,30 @@ const readdir = vi.fn(async (dir: string) => {
   if (String(dir) !== "/app/data/backups") throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
   return existingArchives.map((a) => a.name);
 });
+const metadataFiles = new Map<string, string>();
 const writeFile = vi.fn(async (target: string, bytes: Buffer | string) => {
   // The manifest sidecar is kept out of `directWrites`, which several tests assert is
   // empty on a request that installed nothing. They are two different acts: one is a jar
   // landing in the mods directory, the other is `sealArchive` describing the archive it
   // just wrote.
+  if (String(target).endsWith("/manifest.json")) { metadataFiles.set(String(target), String(bytes)); return; }
   if (String(target).endsWith(".manifest.json")) {
     sidecarWrites.push({ path: String(target), json: String(bytes) });
     return;
   }
   directWrites.push({ path: String(target), bytes: (bytes as Buffer).byteLength });
 });
-vi.mock("fs/promises", () => ({ mkdir, readdir, rm, stat, writeFile }));
+const readFile = vi.fn(async (target?: string, encoding?: string) => {
+  const text = metadataFiles.get(String(target));
+  return text === undefined ? directBody : encoding === "utf-8" ? text : Buffer.from(text);
+});
+vi.mock("@/lib/mc-mod-replacement", () => ({ activeModJars: async () => [], verifyModReplacement: async () => [] }));
+const realpath = vi.fn(async (target: string) => target);
+const lstat = vi.fn(async (target: string) => ({ ...(await stat(target)), isSymbolicLink: () => false }));
+vi.mock("fs/promises", () => ({ mkdir, readdir, rm, stat, lstat, realpath, readFile, writeFile }));
+// This judgment suite fakes the box. Real direct-write admission/readback cases
+// run through the pack route in modpack-lifecycle-route.test.ts.
+vi.mock("@/lib/mod-path", () => ({ modFilePath: async (dir: string, name: string) => path.join(dir, name) }));
 
 /**
  * The journal, mocked at the module rather than through `appendFile`.
@@ -395,18 +407,21 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-// The live directories are all `game-manager` is read for here, and importing the real one
-// pulls in the Docker CLI layer this suite is forbidden to touch. All three are supplied
-// because the route reaches `backup-create` for `sealArchive`, and that module re-exports
-// `SDTD_DIR` and the Project Zomboid paths off the same table at import time — one entry
-// would make this suite fail to collect rather than fail an assertion.
+// Keep lifecycle fixed at stopped in this report/side-filter suite. The real manager's
+// save/stop/start and admission paths are driven by modpack-lifecycle-route.test.ts.
+// All three directories remain necessary because backup-create re-exports its other
+// game paths from RUNTIME at import time.
 vi.mock("@/lib/game-manager", () => ({
+  getMinecraftTarget: async () => ({ mcVersion: config?.mcVersion || "26.1.2", loader: config?.modLoader.toLowerCase() || "fabric" }),
   RUNTIME: {
     minecraft: { dir: "/mc" },
     "7dtd": { dir: "/sevendtd" },
     zomboid: { dir: "/zomboid" },
   },
   containerIsRunning: vi.fn(async () => false),
+  gameContainerState: vi.fn(async () => "exited"),
+  stopGameForOperation: vi.fn(async () => true),
+  startGameForOperation: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/server-manager", () => ({ getModsDir: () => "/mods" }));
 
@@ -452,6 +467,7 @@ beforeEach(() => {
   installedNames = [];
   directWrites = [];
   sidecarWrites = [];
+  metadataFiles.clear();
   journalled.length = 0;
   activityRows.length = 0;
   dbRows = [];
@@ -852,12 +868,8 @@ describe("a mod that did not land is counted and named", () => {
    * A jar that survives the wipe loads alongside the new pack, so a failed removal has to
    * be said out loud.
    *
-   * Pinned as it behaves today, including the part that is arguable: the HTTP response is
-   * **200 `success: true`**, because every mod that belongs on this server is on it and the
-   * leftover is reported in `errors` rather than counted. The ledger does not round it off —
-   * the removal step settles `noop` and the operation concludes `partial` — so the two
-   * readers of this apply disagree by design, and the honest one is the one that outlives
-   * the response.
+   * Every new mod landing does not make a surviving old jar safe. The HTTP response
+   * and the ledger must both report the incomplete replacement; it cannot be restarted.
    */
   it("names a jar it could not delete, and the ledger calls the apply partial", async () => {
     specs = [LITHIUM];
@@ -869,8 +881,8 @@ describe("a mod that did not land is counted and named", () => {
     const res = await apply();
     expect(removedIds).toEqual(["m2"]);
     expect(res.body.errors?.[0]).toMatch(/^Stuck: could not be removed/);
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
     expect(ledger().outcome).toBe("partial");
     expect(fact("Failed")?.value).toContain("Stuck");
   });
@@ -1005,7 +1017,7 @@ describe("the pre-install backup", () => {
     // `mods` is the member that matters here. Dropping it is the mutation this test exists
     // for: the apply is about to `removeMod` every installed jar, so without it the
     // archive preserves nothing of what is destroyed.
-    expect(args.slice(2)).toEqual(["-C", "/mc", "world", "mods"]);
+    expect(args.slice(2, args.lastIndexOf("-C"))).toEqual(["-C", "/mc", "world", "mods"]);
     expect(args[1]).toMatch(/^\/app\/data\/backups\/auto-before-modpack-.*\.tar\.gz$/);
     expect(tarTimeouts).toEqual([300_000]);
   });
@@ -1042,6 +1054,7 @@ describe("the pre-install backup", () => {
     // that drops this block from the route left the whole suite green until this assertion.
     expect(manifest.installedMods).toEqual([
       {
+        id: "m1",
         modrinthId: "old-id",
         slug: "old",
         name: "Old",
@@ -1049,6 +1062,7 @@ describe("the pre-install backup", () => {
         fileName: "old.jar",
         mcVersion: "26.1.2",
         loader: "fabric",
+        source: null, versionId: null,
       },
     ]);
     // Written raw this archive had no checksum, so the listing marked it
@@ -1058,12 +1072,11 @@ describe("the pre-install backup", () => {
     expect(manifest.archiveBytes).toBe(173_283_913);
     // The same list that went to `tar`, so the archive cannot claim to hold something it
     // does not.
-    expect(manifest.members).toEqual(tarRuns[0].slice(5));
+    expect(manifest.members).toEqual(tarRuns[0].slice(5, tarRuns[0].lastIndexOf("-C")));
     expect(manifest.startedBy).toBe("Tester");
-    // Deliberately absent: this route does not ask Minecraft to save first, and
-    // `BaseManifest` documents `flushed: false` as the specific claim "the server was
-    // stopped, so its files were already at rest".
-    expect("flushed" in manifest).toBe(false);
+    // Previously omitted because this route could archive a running world. It now
+    // verifies the container stopped before it archives these bytes.
+    expect(manifest.flushed).toBe(false);
   });
 
   it("states both members in the Rollback point fact, with the size read back off disk", async () => {
@@ -1121,7 +1134,7 @@ describe("the pre-install backup", () => {
 
     // Seven archives were there and seven are there afterwards. Nothing was deleted at all —
     // not the oldest, not the archive this run wrote, nothing.
-    expect(rmRuns.filter((p) => p.includes("/app/data/backups/"))).toEqual([]);
+    expect(rmRuns.filter((p) => p.includes("/app/data/backups/") && !p.includes("/.metadata-"))).toEqual([]);
     expect(fact("Retention")).toBeUndefined();
   });
 
@@ -1139,7 +1152,7 @@ describe("the pre-install backup", () => {
     // Dropped FIRST, so nothing can list it as a restore point even if nobody reads the
     // response — and the sidecar goes with it, or a manifest written by a `sealArchive`
     // that then threw outlives its archive and is adopted by the next file on that name.
-    expect(rmRuns).toEqual([
+    expect(rmRuns.filter(p => !p.includes("/.metadata-"))).toEqual([
       expect.stringMatching(/auto-before-modpack-.*\.tar\.gz$/),
       expect.stringMatching(/auto-before-modpack-.*\.tar\.gz\.manifest\.json$/),
     ]);
@@ -1175,7 +1188,7 @@ describe("the pre-install backup", () => {
     const res = await apply();
     expect(res.status).toBe(200);
     expect(tarRuns).toHaveLength(1);
-    expect(tarRuns[0].slice(3)).toEqual(["-C", "/mc", "mods"]);
+    expect(tarRuns[0].slice(3, tarRuns[0].lastIndexOf("-C"))).toEqual(["-C", "/mc", "mods"]);
     expect(JSON.parse(sidecarWrites[0].json).members).toEqual(["mods"]);
     expect(fact("Rollback point")?.value).toMatch(/— the mods directory$/);
   });
@@ -1191,7 +1204,7 @@ describe("the pre-install backup", () => {
     modsOnDisk = false;
     const res = await apply();
     expect(res.status).toBe(200);
-    expect(tarRuns[0].slice(3)).toEqual(["-C", "/mc", "world"]);
+    expect(tarRuns[0].slice(3, tarRuns[0].lastIndexOf("-C"))).toEqual(["-C", "/mc", "world"]);
     expect(JSON.parse(sidecarWrites[0].json).members).toEqual(["world"]);
     expect(fact("Rollback point")?.value).toMatch(/— the world folder$/);
     expect(installedNames).toEqual(["Lithium"]);

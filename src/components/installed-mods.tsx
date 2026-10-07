@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { ModListFilters } from "@/components/mod-list-filters";
+import { filterMinecraftMods, MINECRAFT_MOD_STATES, MINECRAFT_MOD_ORIGINS, type MinecraftModStateFilter, type MinecraftModOriginFilter } from "@/lib/mod-list-filters";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -125,59 +127,50 @@ export function InstalledMods() {
   const [withHashes, setWithHashes] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [changePackOpen, setChangePackOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [stateFilter, setStateFilter] = useState<MinecraftModStateFilter>("all");
+  const [originFilter, setOriginFilter] = useState<MinecraftModOriginFilter>("all");
+  const resetFilters = () => { setQuery(""); setStateFilter("all"); setOriginFilter("all"); };
 
-  /**
-   * `spinner` separates the two readings this does. The mount read does not touch
-   * `loading` — it starts `true`, and setting it again from inside the effect is a
-   * cascading render for no effect on screen. A re-read asked for by a button does set it,
-   * so Re-check visibly becomes "Re-reading…".
-   *
-   * (It does **not** silence `react-hooks/set-state-in-effect`; that rule flags the direct
-   * call in the effect body regardless, and it fires in five other components here. Only a
-   * deferral dodges it, which is a worse trade than the warning.)
-   */
+  const readInstalled = useCallback(async (hash: boolean): Promise<State> => {
+    const response = await fetch(`/api/mods/installed${hash ? "?hash=1" : ""}`);
+    const data = (await response.json()) as InstalledReading & { error?: string };
+    if (!response.ok || !Array.isArray(data.mods)) throw new Error(data.error || "Couldn't read what is installed.");
+    return { ...data, readAt: Date.now() };
+  }, []);
   const load = useCallback(async (hash: boolean, opts: { spinner?: boolean } = {}) => {
     if (opts.spinner) setLoading(true);
-    try {
-      const res = await fetch(`/api/mods/installed${hash ? "?hash=1" : ""}`);
-      const data = (await res.json()) as InstalledReading & { error?: string };
-      if (!res.ok || !Array.isArray(data.mods)) {
-        toast.error(data.error || "Couldn't read what is installed.");
-        return;
-      }
-      setState({ ...data, readAt: Date.now() });
-    } catch {
-      toast.error("Couldn't reach the server to read what is installed.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    try { setState(await readInstalled(hash)); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Couldn't read what is installed."); }
+    finally { setLoading(false); }
+  }, [readInstalled]);
 
   useEffect(() => {
-    void load(false);
-  }, [load]);
+    let current = true;
+    void readInstalled(false).then((reading) => { if (current) setState(reading); })
+      .catch((error) => { if (current) toast.error(error instanceof Error ? error.message : "Couldn't read what is installed."); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [readInstalled]);
 
   async function handleRemove(mod: InventoryEntry) {
-    if (!mod.id) return;
+    if (!mod.id || !can.modsRemove) return;
     setRemoving(mod.id);
     try {
-      const res = await fetch(`/api/mods/${mod.id}`, { method: "DELETE" });
-      if (res.ok) {
+      const response = await fetch(`/api/mods/${mod.id}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) {
+        toast.error(typeof data?.error === "string" ? data.error : `Couldn't remove ${mod.name}`);
+      } else if (data?.success === true) {
         toast.success(`${mod.name} removed. Restart server to apply.`);
-        // Re-read rather than splice the row out locally. The row and the jar are two
-        // things and the point of this page is that it does not assume they agree: a
-        // `removeMod` whose `unlink` hit ENOENT leaves the jar, which the next reconcile
-        // reports as untracked. Dropping the row from local state would hide exactly that.
-        await load(withHashes);
       } else {
-        // Both of these were `toast.error("Failed to remove mod")` with the body never
-        // read, so `/api/mods/[id]`'s own message — which says *why* — was discarded.
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.error || `Couldn't remove ${mod.name}`);
+        toast.info(`${mod.name}'s removal result is unconfirmed. Reading the current inventory before another attempt.`);
       }
     } catch {
-      toast.error(`Couldn't reach the server to remove ${mod.name}. Nothing was changed.`);
+      toast.info(`${mod.name}'s removal result is unconfirmed. Reading the current inventory before another attempt.`);
     } finally {
+      // Reconcile after every receipt or lost reply; do not infer the row/jar state or retry DELETE.
+      await load(withHashes);
       setRemoving(null);
     }
   }
@@ -210,7 +203,9 @@ export function InstalledMods() {
   const versionNote = packVersionNote(state.pack, state.server);
   // Problems first — the whole reason this list is a reconcile and not a listing. The
   // groups are walked in order and every entry lands in exactly one of them.
-  const grouped = GROUPS.map((g) => ({ group: g, mods: mods.filter(g.match) })).filter(
+  const visibleMods = filterMinecraftMods(mods, query, stateFilter, originFilter);
+  const filtersActive = query.trim().length > 0 || stateFilter !== "all" || originFilter !== "all";
+  const grouped = GROUPS.map((g) => ({ group: g, mods: visibleMods.filter(g.match) })).filter(
     (g) => g.mods.length > 0
   );
 
@@ -406,6 +401,15 @@ export function InstalledMods() {
         </Band>
       )}
 
+      <ModListFilters searchLabel="Search Minecraft mods" placeholder="Name, project ID or jar filename"
+        query={query} onQueryChange={setQuery} active={filtersActive} onReset={resetFilters}
+        filters={[
+          { label: "File state", value: stateFilter, options: MINECRAFT_MOD_STATES, onChange: (value) => setStateFilter(value as MinecraftModStateFilter) },
+          { label: "Recorded origin", value: originFilter, options: MINECRAFT_MOD_ORIGINS, onChange: (value) => setOriginFilter(value as MinecraftModOriginFilter) },
+        ]}
+        count={`Showing ${visibleMods.length} of ${mods.length} mod entries`}
+        note="Filters change the rows below. The server summary, warnings and pack actions cover the full inventory." />
+
       {/* ── the list, grouped by where each jar came from ───────────────────── */}
       {mods.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
@@ -416,8 +420,13 @@ export function InstalledMods() {
               : "Nothing is in the server's mods folder."}
           </p>
         </div>
+      ) : visibleMods.length === 0 ? (
+        <div className="rounded-2xl bg-card/50 p-6 text-center">
+          <p className="text-sm text-muted-foreground">No Minecraft mods match these filters.</p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={resetFilters}>Show all mods</Button>
+        </div>
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-5" data-mod-list="minecraft">
           {grouped.map(({ group, mods: rows }) => (
             <section key={group.kind} data-group={group.kind}>
               <div className="mb-2 flex flex-wrap items-baseline gap-x-2 px-1">

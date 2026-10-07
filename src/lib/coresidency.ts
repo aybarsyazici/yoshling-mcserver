@@ -257,11 +257,14 @@ export interface Ceiling {
  */
 export function perWorldCeiling({
   maxGb,
+  serviceMaxGb,
   forGame,
   running,
   memoryGb,
 }: {
   maxGb: number | null;
+  /** Optional per-service heap cap after its current/configured container limits. */
+  serviceMaxGb?: number;
   forGame: GameId;
   running: GameId[];
   memoryGb: Partial<Record<GameId, number | null>>;
@@ -277,10 +280,10 @@ export function perWorldCeiling({
     maxGb == null
       ? null
       : otherRunning.length === 0
-      ? maxGb
+      ? Math.min(maxGb, serviceMaxGb ?? maxGb)
       : unknown.length > 0
       ? null
-      : Math.max(0, Math.round((maxGb - taken) * 10) / 10);
+      : Math.max(0, Math.min(serviceMaxGb ?? maxGb, Math.round((maxGb - taken) * 10) / 10));
 
   // No note without a number: a sentence about a ceiling we could not read is noise.
   if (maxGb == null) return { maxGb, otherRunning, honestGb, note: null };
@@ -300,13 +303,13 @@ export function perWorldCeiling({
       otherRunning,
       honestGb,
       note:
-        `Any one server can be given up to ${gb(maxGb)} GB — the box total less a reserve for ` +
-        `the OS and this dashboard. That ceiling assumes it is the only server running; it ` +
+        `The host budget for one server is ${gb(maxGb)} GB before each service's container limits. ` +
+        `That budget assumes it is the only server running; it ` +
         `does not subtract anything else that is up.`,
     };
   }
 
-  const opening = `Any one server can be given up to ${gb(maxGb)} GB, and that assumes it is the only one running.`;
+  const opening = `The host budget for one server is ${gb(maxGb)} GB before each service's container limits, and that assumes it is the only one running.`;
   // When every running neighbour is the unmetered one, "7 Days to Die is up, and 7 Days to
   // Die has no heap setting" — so say it once.
   const gap =

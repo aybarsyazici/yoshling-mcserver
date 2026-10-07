@@ -1,5 +1,6 @@
 "use client";
 
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { useState } from "react";
 import { SectionHeading } from "@/components/ui-bits";
 import { TabBar } from "@/components/tab-bar";
@@ -19,19 +20,21 @@ const TABS = [
 
 export default function MinecraftServerPage() {
   const [tab, setTab] = useState("controls");
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const tint = GAMES.minecraft.tint;
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: tint }}>
       <SectionHeading eyebrow="Minecraft · Server" title="Server control" sub="Power, monitor, browse files, and run console commands." tint={tint} />
 
-      <TabBar tabs={TABS} value={tab} onChange={setTab} tint={tint} />
+      <TabBar tabs={TABS.filter((t) => t.value !== "files" || can.settings)} value={tab} onChange={setTab} tint={tint} />
 
+      {!can.settings && <p className="text-xs text-muted-foreground">Raw server files require settings access.</p>}
       <div className="min-h-[300px]">
         {tab === "controls" && <GameControls game="minecraft" />}
         {tab === "monitor" && <ServerMonitor game="minecraft" />}
         {tab === "console" && <GameConsole game="minecraft" />}
-        {tab === "files" && <FileBrowser tint={tint} rootLabel="minecraft" />}
+        {tab === "files" && can.settings && <FileBrowser tint={tint} rootLabel="minecraft" />}
       </div>
 
       <PhotoFooter src="/cat.jpg" />

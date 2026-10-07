@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
-import { getProjectVersions, getProject } from "@/lib/modrinth";
+import { getProjectVersions, getProject, getVersion } from "@/lib/modrinth";
 import { chooseModpackVersion, modDepsOf, packNeeds } from "@/lib/modpack-resolve";
 
 // Creating a modpack needs a capability, not just world access — see the note in
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
 
   const { modrinthId, name } = await request.json();
 
-  if (!modrinthId) {
+  if (typeof modrinthId !== "string" || !modrinthId.trim()) {
     return NextResponse.json({ error: "modrinthId required" }, { status: 400 });
   }
 
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     // not the comparison that was applied.
     const cfg = await db.serverConfig.findUnique({ where: { id: "main" } });
     const want = cfg?.mcVersion ?? null;
-    const { version, matchedServerVersion } = chooseModpackVersion(versions, want);
+    const { version, matchedServerVersion } = chooseModpackVersion(versions, want, cfg?.modLoader);
     if (!version) {
       return NextResponse.json(
         { error: "No versions found for this modpack" },
@@ -58,34 +58,58 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { mcVersion: targetMcVersion, loader: targetLoader } = packNeeds(version);
+    const { mcVersion: targetMcVersion, loader: targetLoader } = packNeeds(version, {
+      mcVersion: want, loader: cfg?.modLoader,
+    });
 
     // Modpack versions list their included mods as dependencies (embedded or required);
     // `modDepsOf` applies that rule, shared with the preview so the count the preview
     // promises is the count this creates.
     const modDeps = modDepsOf(version);
 
-    // Fetch project info for each dependency
-    const mods = await Promise.all(
+    // A version-only content requirement is not an optional mod. The current
+    // importer cannot resolve it to a project; refuse rather than silently
+    // shortening the saved set and letting a later apply call it complete.
+    const unresolved = (version.dependencies ?? []).filter(dep =>
+      (dep.dependency_type === "required" || dep.dependency_type === "embedded") && !dep.project_id
+    );
+    if (unresolved.length > 0) {
+      return NextResponse.json({
+        error: `${unresolved.length} required pack entries have no project identity. No set was saved.`,
+        unresolvedVersions: unresolved.map(dep => dep.version_id ?? "unknown"),
+      }, { status: 502 });
+    }
+
+    // Resolve every content entry before the single database create. Upstream
+    // failures must not become omissions from the pack's completeness count.
+    const mods = await Promise.allSettled(
       modDeps.map(async (dep) => {
-        try {
-          const project = await getProject(dep.projectId);
-          return {
-            modrinthId: (project as any).id || project.project_id || dep.projectId,
-            slug: project.slug,
-            name: project.title,
-          };
-        } catch {
-          return null;
+        const project = await getProject(dep.projectId);
+        const id = project.id ?? project.project_id;
+        if (id !== dep.projectId || typeof project.slug !== "string" || !project.slug.trim() ||
+            typeof project.title !== "string" || !project.title.trim()) {
+          throw new Error(`Unusable project metadata for ${dep.projectId}`);
         }
+        if (dep.versionId) {
+          const pin = await getVersion(dep.versionId);
+          if (pin.id !== dep.versionId || pin.project_id !== id ||
+              !pin.game_versions.includes(targetMcVersion) ||
+              !pin.loaders.some(loader => loader.toLowerCase() === targetLoader.toLowerCase())) {
+            throw new Error(`Incompatible pinned build for ${dep.projectId}`);
+          }
+        }
+        return { modrinthId: id, slug: project.slug, name: project.title, versionId: dep.versionId };
       })
     );
 
-    const validMods = mods.filter(Boolean) as {
-      modrinthId: string;
-      slug: string;
-      name: string;
-    }[];
+    const missingProjects = mods.flatMap((result, index) => result.status === "rejected" ? [modDeps[index].projectId] : []);
+    if (missingProjects.length > 0) {
+      return NextResponse.json({
+        error: `Could not resolve ${missingProjects.length} of ${modDeps.length} pack entries (${missingProjects.join(", ")}). No set was saved. Try the import again.`,
+        missingProjects,
+      }, { status: 502 });
+    }
+    const validMods = mods.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
 
     const modpack = await db.modpack.create({
       data: {
@@ -99,6 +123,7 @@ export async function POST(request: NextRequest) {
             modrinthId: m.modrinthId,
             slug: m.slug,
             name: m.name,
+            versionId: m.versionId,
           })),
         },
       },
@@ -114,9 +139,9 @@ export async function POST(request: NextRequest) {
       targetMcVersion,
       targetLoader,
     });
-  } catch (e: any) {
+  } catch (e) {
     return NextResponse.json(
-      { error: e.message || "Failed to import modpack" },
+      { error: e instanceof Error ? e.message : "Failed to import modpack" },
       { status: 500 }
     );
   }

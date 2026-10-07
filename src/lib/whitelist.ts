@@ -1,36 +1,58 @@
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, rename, rm, lstat, realpath, stat } from "fs/promises";
 import path from "path";
+import { randomUUID } from "node:crypto";
+import { discordIdList, discordUserId } from "./discord-identity";
+import { assertFileWriteActive } from "./operations";
+import { assertFileRevision, readFileSnapshot, recordFileRevision } from "./file-revision";
 
 /**
  * Who is allowed to sign in at all — the single source of truth for both the
  * Whitelist page and the sign-in gate in `auth.ts`.
  *
- * These used to be two disconnected stores: the page wrote this file while
- * `signIn` only ever read `ALLOWED_DISCORD_USERS`, so adding someone in the UI
- * silently did nothing and they were refused at the Discord callback. The file
- * now wins, and the env var is only the seed for a fresh install.
+ * The file wins over an operator ID seed. Only genuine absence can use the
+ * seed; unreadable, invalid or broken policy refuses access.
  *
  * This is about *sign-in*, not about which worlds someone can see — that's
  * `User.games`, granted on the Crew page.
  */
-const WHITELIST_FILE = process.env.WHITELIST_FILE || "/app/data/whitelist.json";
+export const WHITELIST_FILE = process.env.WHITELIST_FILE || "/app/data/whitelist.json";
 
 function fromEnv(): string[] {
-  return (process.env.ALLOWED_DISCORD_USERS || "")
+  return (process.env.ALLOWED_DISCORD_IDS ?? process.env.ALLOWED_DISCORD_USERS ?? "")
     .split(",")
     .map((u) => u.trim())
     .filter(Boolean);
 }
 
+/** A broken configured link is unknown policy, not a fresh missing file. */
+async function policyIsAbsent(): Promise<boolean> {
+  const file = path.resolve(WHITELIST_FILE);
+  let ancestor = file;
+  for (;;) {
+    try {
+      await lstat(ancestor);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) return false;
+      ancestor = parent;
+      continue;
+    }
+    if (ancestor === file) return false;
+    try {
+      await realpath(ancestor);
+      return (await stat(ancestor)).isDirectory();
+    } catch { return false; }
+  }
+}
+
 export type WhitelistRead = {
   users: string[];
-  /** Where `users` came from — the file, or the `ALLOWED_DISCORD_USERS` seed. */
+  /** Where ID strings came from — the file, or an operator env seed. */
   source: "file" | "env";
   /**
-   * Set when the file exists but couldn't be read or parsed, so `users` is the
-   * env seed standing in for a list we don't actually know. The sign-in gate can
-   * live with the stand-in; the Whitelist page must not, because it PUTs back
-   * whatever it was shown and would overwrite the real file with it.
+   * Unknown policy must refuse sign-in and editing. It is never an empty list
+   * or permission to substitute the broader fresh-install seed.
    */
   error?: string;
 };
@@ -44,41 +66,55 @@ export type WhitelistRead = {
 export async function readWhitelist(): Promise<WhitelistRead> {
   let raw: string;
   try {
-    raw = await readFile(WHITELIST_FILE, "utf-8");
+    raw = await readFileSnapshot(WHITELIST_FILE, "utf-8");
   } catch (e) {
     // No file at all is the normal state of a fresh install, not a failure:
     // nothing has been saved yet, so the env var is the list.
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { users: fromEnv(), source: "env" };
+    if ((e as NodeJS.ErrnoException).code === "ENOENT" && await policyIsAbsent()) {
+      const seed = discordIdList(fromEnv());
+      return seed ? { users: seed, source: "env" } : {
+        users: [], source: "env", error: "The sign-in seed must contain Discord user ID strings. Convert legacy names before deploying.",
+      };
+    }
     return {
-      users: fromEnv(),
-      source: "env",
-      error: `couldn't read ${WHITELIST_FILE}: ${(e as Error).message}`,
+      users: [], source: "file", error: "The sign-in whitelist could not be read.",
     };
   }
 
   try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error("not a JSON array");
-    return { users: parsed.map((u) => String(u).trim()).filter(Boolean), source: "file" };
-  } catch (e) {
-    // A hand-mangled file shouldn't lock everyone out — fall back to the env
-    // seed, but flag it, because that seed is a guess and not the list.
+    const users = discordIdList(JSON.parse(raw));
+    if (!users) throw new Error("invalid IDs");
+    return { users, source: "file" };
+  } catch {
+    // Do not echo parser snippets: an incorrectly configured path may contain secrets.
     return {
-      users: fromEnv(),
-      source: "env",
-      error: `${WHITELIST_FILE} isn't a usable whitelist (${(e as Error).message})`,
+      users: [], source: "file", error: "The sign-in whitelist must be a JSON array of Discord user ID strings. Convert legacy names before deploying.",
     };
   }
 }
 
 export async function saveWhitelist(users: string[]): Promise<void> {
+  const ids = discordIdList(users);
+  if (!ids) throw new Error("Every whitelist entry must be a Discord user ID string");
   await mkdir(path.dirname(WHITELIST_FILE), { recursive: true });
-  await writeFile(WHITELIST_FILE, JSON.stringify(users, null, 2), "utf-8");
+  const text = JSON.stringify(ids, null, 2);
+  const temporary = path.join(path.dirname(WHITELIST_FILE), `.whitelist-${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, text, { encoding: "utf-8", mode: 0o600 });
+    await assertFileRevision(WHITELIST_FILE);
+    assertFileWriteActive();
+    await rename(temporary, WHITELIST_FILE);
+    if (await readFile(WHITELIST_FILE, "utf-8") !== text) {
+      throw new Error("The whitelist write could not be verified; reload it before trying again");
+    }
+    recordFileRevision(WHITELIST_FILE, text);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 /**
- * Discord hands us a `username` (the @handle) and often a `global_name` (the
- * display name). People whitelist whichever one they see, so match either.
+ * Sign-in authority is the immutable Discord ID; names are display labels.
  *
  * **An empty list fails open** — anyone with a Discord account may sign in. That
  * is the behaviour this has always had and it stays, on purpose: a fresh install
@@ -89,21 +125,21 @@ export async function saveWhitelist(users: string[]): Promise<void> {
  * one — and it can now only be reached deliberately, because `/api/whitelist`
  * refuses to clear a populated list without an explicit confirmation.
  *
- * What is emphatically *not* fail-open is "we couldn't read the list". Unknown is
- * not empty: if the file exists but can't be parsed and the env seed is empty
- * too, nobody gets in, loudly. Otherwise one unreadable file would quietly turn
- * an invite-only dashboard into a public one.
+ * Unknown policy is never empty and never permission to use a broader seed.
  */
-export async function isWhitelisted(names: (string | null | undefined)[]): Promise<boolean> {
+export async function isWhitelisted(value: unknown): Promise<boolean> {
+  const id = discordUserId(value);
+  if (!id) return false;
   const { users, error } = await readWhitelist();
-  if (error) console.error(`[whitelist] ${error}`);
+  if (error) {
+    console.error(`[whitelist] ${error}`);
+    return false;
+  }
 
   if (users.length === 0) {
-    if (error) return false;
     console.warn("[whitelist] the list is empty — anyone with a Discord account can sign in");
     return true;
   }
 
-  const allowed = users.map((u) => u.toLowerCase());
-  return names.some((n) => n && allowed.includes(String(n).trim().toLowerCase()));
+  return users.includes(id);
 }

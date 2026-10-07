@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,13 +18,18 @@ import { useOperations } from "@/components/operations-provider";
 import { blockedReason, powerBlocker } from "@/lib/operation-ui";
 
 interface UpdateInfo {
-  branch: string;
+  branch: string | null;
   installedBuildId: string | null;
   latestBuildId: string | null;
-  updateAvailable: boolean;
+  updateAvailable: boolean | null;
+  lookupStatus: "checked" | "unknown";
+  resolvedBranch: string | null;
+  checkError: string | null;
 }
 
 export function SdtdMaintenance({ tint }: { tint: string }) {
+  const { can } = useGames(CAPABILITY_POLL_MS);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -38,14 +45,22 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
   async function check() {
     setChecking(true);
     try {
-      const [u, r] = await Promise.all([
-        fetch("/api/7dtd/update").then((x) => x.json()),
-        fetch("/api/7dtd/reset").then((x) => x.json()),
+      const [u, r] = await Promise.allSettled([
+        fetch("/api/7dtd/update").then(async (res) => {
+          const data = await res.json();
+          if (!res.ok || !isUpdateInfo(data)) throw new Error(data?.error || "The update comparison could not be read");
+          return data;
+        }),
+        fetch("/api/7dtd/reset").then(async (res) => {
+          const data = await res.json();
+          if (!res.ok || !data || ![data.world, data.gameName, data.nextGameName].every((v) => typeof v === "string")) throw new Error("The reset details could not be read");
+          return data;
+        }),
       ]);
-      if (!u.error) setInfo(u);
-      if (!r.error) setResetInfo(r);
-    } catch {
-      toast.error("Couldn't check server status");
+      if (u.status === "fulfilled") { setInfo(u.value); setCheckError(u.value.checkError); }
+      else { setInfo(null); setCheckError(u.reason instanceof Error ? u.reason.message : "Couldn't check the game build"); }
+      if (r.status === "fulfilled") setResetInfo(r.value);
+      else setResetInfo(null);
     } finally {
       setChecking(false);
     }
@@ -57,11 +72,12 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
   }, []);
 
   async function doUpdate() {
+    if (!can.settingsEdit || !info || info.lookupStatus !== "checked" || info.updateAvailable !== true || updating || blocker) return;
     setUpdating(true);
     try {
       const res = await fetch("/api/7dtd/update", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      const data = await readOperationResponse(res);
+      if (!data.operationId && !res.ok) {
         toast.error(data.error || "Update failed");
         return;
       }
@@ -74,33 +90,30 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
       // Nor is the build id re-polled here: it cannot change for twenty minutes, so
       // `setTimeout(check, 8000)` confidently redisplayed the OLD build and "update
       // available" for the whole download.
-      await refreshOperations();
-    } catch {
-      toast.error("Update failed");
+
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage("game update", error));
     } finally {
+      void refreshOperations();
       setUpdating(false);
     }
   }
 
   async function doReset() {
+    if (!can.settingsEdit || !resetInfo || resetting || blocker) return;
     setResetting(true);
     setConfirmReset(false);
     try {
       const res = await fetch("/api/7dtd/reset", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) toast.error(data.error || "Reset failed");
+      const data = await readOperationResponse(res);
+      if (!data.operationId && !res.ok) toast.error(data.error || "Reset failed");
       // Success is the operation's own completion toast, which names the new save and
       // whether the server came back up.
-      await refreshOperations();
-    } catch {
-      // A reset stops the server, wipes the save and starts it again, which outlasts
-      // Cloudflare's ~100s origin read timeout. Reporting that as "Reset failed" would
-      // invite someone to run a destructive operation a second time.
-      toast.info(
-        "Still resetting. The connection timed out before it finished — watch the strip at the " +
-          "top of the page, and don't run it again."
-      );
+
+    } catch (error) {
+      toast.info(unconfirmedOperationMessage("world reset", error));
     } finally {
+      void refreshOperations();
       setResetting(false);
     }
   }
@@ -124,16 +137,17 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
               <>
                 branch <span className="text-foreground">{info.branch}</span> · build{" "}
                 <span className="text-foreground">{info.installedBuildId ?? "?"}</span>
-                {info.updateAvailable ? (
+                {info.lookupStatus === "unknown" ? <span className="text-chart-5"> · comparison unknown</span> : info.updateAvailable ? (
                   <span style={{ color: tint }}> → {info.latestBuildId} available</span>
-                ) : info.installedBuildId ? (
+                ) : info.lookupStatus === "checked" && info.installedBuildId && info.latestBuildId ? (
                   <span className="text-[color:var(--mc)]"> · up to date</span>
                 ) : null}
               </>
             ) : (
-              "checking…"
+              checking ? "checking…" : "comparison unknown"
             )}
           </p>
+          {checkError && <p role="alert" className="mt-1 text-xs text-chart-5">{checkError}</p>}
           <p className="mt-1 text-[11px] text-muted-foreground">
             Keep this matched to your Steam client&rsquo;s build — a mismatch stops players joining (stuck at &ldquo;Starting game&rdquo;).
           </p>
@@ -146,10 +160,10 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
             size="sm"
             onClick={doUpdate}
             className="disabled:cursor-not-allowed"
-            disabled={updating || !info?.updateAvailable || blocker !== undefined}
+            disabled={!can.settingsEdit || updating || info?.lookupStatus !== "checked" || info?.updateAvailable !== true || blocker !== undefined}
             style={info?.updateAvailable ? { background: tint, color: "var(--background)" } : undefined}
           >
-            {updating ? "Updating…" : info?.updateAvailable ? "Update now" : info?.installedBuildId ? <><CheckCircle2 className="h-3.5 w-3.5" /> Up to date</> : "Update"}
+            {updating ? "Updating…" : info?.updateAvailable ? "Update now" : info?.lookupStatus === "checked" && info?.installedBuildId && info.latestBuildId ? <><CheckCircle2 className="h-3.5 w-3.5" /> Up to date</> : "Update"}
           </Button>
         </div>
       </div>
@@ -170,7 +184,7 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
           size="sm"
           variant="destructive"
           onClick={() => setConfirmReset(true)}
-          disabled={resetting || blocker !== undefined}
+          disabled={!can.settingsEdit || !resetInfo || resetting || blocker !== undefined}
           className="flex-shrink-0 disabled:cursor-not-allowed"
         >
           {resetting ? "Resetting…" : "Reset world"}
@@ -198,4 +212,14 @@ export function SdtdMaintenance({ tint }: { tint: string }) {
       </Dialog>
     </div>
   );
+}
+
+function isUpdateInfo(value: unknown): value is UpdateInfo {
+  if (!value || typeof value !== "object") return false;
+  const v = value as UpdateInfo;
+  return (v.branch === null || typeof v.branch === "string") && (v.resolvedBranch === null || typeof v.resolvedBranch === "string") &&
+    [v.installedBuildId, v.latestBuildId, v.checkError].every((s) => s === null || typeof s === "string") &&
+    ((v.lookupStatus === "unknown" && v.updateAvailable === null) ||
+      (v.lookupStatus === "checked" && typeof v.updateAvailable === "boolean" && !!v.installedBuildId && !!v.latestBuildId &&
+        v.updateAvailable === (v.installedBuildId !== v.latestBuildId)));
 }

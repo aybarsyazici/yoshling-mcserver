@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
+import { categoryTags } from "@/lib/modrinth-tags";
 
 export async function GET() {
   const session = await auth();
@@ -21,13 +22,14 @@ export async function GET() {
     return NextResponse.json({ error: "Failed to fetch categories" }, { status: 502 });
   }
 
-  const allCategories = await res.json();
+  const allCategories = categoryTags(await res.json());
+  if (!allCategories) return NextResponse.json({ error: "Invalid category response" }, { status: 502 });
 
   // Only return categories relevant to mods (not resource packs, shaders, etc.)
   const modCategories = allCategories
-    .filter((c: any) => c.project_type === "mod")
-    .map((c: any) => ({ name: c.name, icon: c.icon }))
-    .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    .filter(c => c.project_type === "mod")
+    .map(c => ({ name: c.name, icon: c.icon }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   return NextResponse.json(modCategories);
 }

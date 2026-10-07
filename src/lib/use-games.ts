@@ -102,6 +102,10 @@ export interface GamesState {
      */
     modsInstall: boolean;
     modsRemove: boolean;
+    settingsEdit?: boolean;
+    consoleExecute?: boolean;
+    filesDelete?: boolean;
+    usersManage?: boolean;
   };
   /** Configured heap per world, from the compose file. null = no heap setting. */
   memoryGb: Partial<Record<GameId, number | null>>;
@@ -122,6 +126,8 @@ export interface GamesState {
    */
   clockSkewMs: number;
   loading: boolean;
+  lastSuccessAt?: number | null;
+  pollError?: string | null;
   refresh: () => Promise<void>;
 }
 
@@ -169,12 +175,9 @@ export async function fetchLiveSettings(
 /**
  * The interval for a surface that reads `can` and nothing else.
  *
- * The four Minecraft mods components call `useGames(CAPABILITY_POLL_MS)`. None of them reads a
- * world's run state — only `can.modsInstall` / `can.modsRemove` — and those change when an
- * admin edits a role on the Crew page, which is rare. The 5 s default would put a status poll
- * behind every open mods tab for a pair of booleans; polling at all is what makes a demotion
- * land without a reload. The route is the enforcement either way, so the cost of being 30 s
- * stale is a control that 403s with an explanation.
+ * Mod controls and the shared settings editor use this cadence for capabilities/world
+ * access, rather than a run-state display. Polling makes role/grant changes reach an open
+ * page; routes still enforce the current policy if a stale control is pressed.
  *
  * One exported constant rather than a literal per file, because four copies of a number are
  * four things to notice when one of them is wrong.
@@ -188,29 +191,18 @@ export function useGames(interval = 5000): GamesState {
   const [running, setRunning] = useState<GameId[]>([]);
   const [busy, setBusy] = useState<ControlLock | null>(null);
   const [access, setAccess] = useState<GameId[]>([]);
-  /**
-   * The three power flags start **false** and `settings` starts **true**, and the asymmetry
-   * is deliberate.
-   *
-   * For a power button, showing it enabled and then disabling it is the defect the flags
-   * exist to remove — someone presses it in the gap and gets an unexplained 403. For a
-   * navigation link the cost runs the other way: every account on this box is ADMIN, so a
-   * Settings link that vanishes on load and reappears a second later reads as broken for
-   * every real user, while the worst case of guessing `true` is one link that 403s with an
-   * explanation. The route is the enforcement either way; these flags only decide what is
-   * worth offering.
-   *
-   * The two mods flags start **false**, with the power buttons: they guard writes that
-   * delete a pack or replace every jar on the server, so a control that is live for a
-   * moment and then dead is the defect, not the cure.
-   */
+  // Privileged controls and navigation require a successful capability read.
   const [can, setCan] = useState({
     start: false,
     stop: false,
     restart: false,
-    settings: true,
+    settings: false,
     modsInstall: false,
     modsRemove: false,
+    settingsEdit: false,
+    consoleExecute: false,
+    filesDelete: false,
+    usersManage: false,
   });
   const [memoryGb, setMemoryGb] = useState<Partial<Record<GameId, number | null>>>({});
   const [hostGb, setHostGb] = useState<number | null>(null);
@@ -218,14 +210,24 @@ export function useGames(interval = 5000): GamesState {
   const [clockSkewMs, setClockSkewMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
+  const requestGeneration = useRef(0);
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     try {
       const receivedAt = Date.now();
       const res = await fetch("/api/games/status", { cache: "no-store" });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`Status refresh failed (HTTP ${res.status})`);
       const data = await res.json();
-      if (!alive.current) return;
+      if (!data?.games || !["minecraft", "7dtd", "zomboid"].every((g) => {
+        const snap = data.games[g];
+        return snap && ["online", "offline", "starting", "stopping", "installing"].includes(snap.status) && snap.players &&
+          typeof snap.players.online === "number" && typeof snap.players.max === "number" && Array.isArray(snap.players.players);
+      })) throw new Error("Status response is incomplete");
+      if (!alive.current || generation !== requestGeneration.current) return;
+      setLastSuccessAt(Date.now()); setPollError(null);
       if (typeof data.serverNow === "number") setClockSkewMs(data.serverNow - receivedAt);
       setGames(data.games);
       setActiveGame(data.activeGame ?? null);
@@ -237,29 +239,23 @@ export function useGames(interval = 5000): GamesState {
       setRunning(Array.isArray(data.running) ? data.running : runningWorlds(data.games));
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
-      // `settings` defaulted rather than assumed present: a tab held across a deploy from
-      // an older build receives a `can` with three keys, and `undefined` would render as
-      // "no Settings link" for an admin. `?? true` is the safe direction here — the route
-      // still refuses, so the worst case is a link that 403s, whereas the worst case of
-      // `?? false` is an admin who cannot find the settings page.
-      //
-      // The two mods flags default the other way for the same reason they *start* false:
-      // an older build's `can` carries neither, and `undefined` spread into state would
-      // leave the type lying about a boolean it does not have. `?? false` hides a write
-      // control the response did not vouch for, which costs a reload; the other direction
-      // offers a Delete that 403s.
+      // A response from an older build cannot vouch for newly added capabilities.
       if (data.can)
         setCan({
           ...data.can,
-          settings: data.can.settings ?? true,
+          settings: data.can.settings ?? false,
           modsInstall: data.can.modsInstall ?? false,
           modsRemove: data.can.modsRemove ?? false,
+          settingsEdit: data.can.settingsEdit ?? false,
+          consoleExecute: data.can.consoleExecute ?? false,
+          filesDelete: data.can.filesDelete ?? false,
+          usersManage: data.can.usersManage ?? false,
         });
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
       setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);
-    } catch {
-      /* keep last known */
+    } catch (error) {
+      if (alive.current && generation === requestGeneration.current) setPollError(error instanceof Error ? error.message : "Couldn't refresh server status");
     } finally {
       if (alive.current) setLoading(false);
     }
@@ -293,6 +289,7 @@ export function useGames(interval = 5000): GamesState {
     maxGb,
     clockSkewMs,
     loading,
+    lastSuccessAt, pollError,
     refresh,
   };
 }

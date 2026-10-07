@@ -1,32 +1,9 @@
+import { readOperationResponse, unconfirmedOperationMessage, UnconfirmedOperationResult } from "@/lib/operation-client";
 /**
- * **Applying a pack to the server, from the browser — one copy.**
- *
- * There are two places a pack gets applied now: **Change pack** at the top of
- * `/minecraft/mods` (search Modrinth, review, apply) and **Install to Server** on a saved
- * set. The decision about what the response *means* is subtle enough that two copies of it
- * would drift, and this repo's standing example of that is the power control, which reached
- * three copies and two of them missed a fix.
- *
- * Three things the response handling has to get right, each of which was wrong once:
- *
- * - **`res.ok` is not the verdict.** The route answers non-2xx when it could not install
- *   every mod, so the counts have to be read on both paths. Trusting `res.ok` is what
- *   reported *"Installed 0/166 mods"* in a **green** toast for every pack whose rows carry
- *   no download source.
- * - **A body with no counts is not an apply report.** A 403, or a 500 raised outside the
- *   operation, has no `installed`/`total` — and opening the report on it renders
- *   "Installed undefined of undefined mods".
- * - **A request that gave up is not a failed apply.** Up to 166 sequential Modrinth
- *   fetches runs far past Cloudflare's ~100 s origin timeout, so a perfectly successful
- *   166-mod apply ends with the browser's `fetch` rejecting while the work continues on the
- *   server. `modpacks.tsx` substituted `{installed: 0, total: 0}` there, which the report
- *   dialog rendered as a **destructive-red "Installed 0 of 0 mods"** — a failure headline
- *   for an apply that had not failed, on the longest and most expensive runs. That is this
- *   project's named defect class with the sign flipped: reporting a failure that did not
- *   happen costs the same to chase as a real one.
- *
- * So the outcome is a discriminated union and `still-running` is its own case, with no
- * counts in it to render.
+ * Shared pack apply handling. Counts come only from readable origin receipts, on
+ * either HTTP path. Gateway/network ambiguity carries no invented counts or
+ * execution claim. The legacy `still-running` tag now means result unconfirmed.
+ * Known operation IDs stay attached; the shared ledger owns completion feedback.
  */
 
 /** One mod the installer declined to put on a server, with the signal that decided. */
@@ -53,7 +30,7 @@ export interface ApplyReportView {
   error?: string;
 }
 
-export type ApplyOutcome =
+export type ApplyOutcome = (
   /** Counts came back and there is something worth showing. */
   | { kind: "report"; report: ApplyReportView }
   /**
@@ -66,10 +43,10 @@ export type ApplyOutcome =
   /** The response was not an apply report. The message is the route's, never a paraphrase. */
   | { kind: "error"; message: string }
   /**
-   * The request gave up before the apply did. **Not a failure, and not reportable as
-   * counts** — nothing here knows how far it got.
+   * No usable apply receipt arrived. Execution and outcome are unknown.
    */
-  | { kind: "still-running"; packName: string };
+  | { kind: "still-running"; packName: string; operationId?: string }
+  | { kind: "unconfirmed-import"; message: string }) & { operationId?: string };
 
 /**
  * What the route's body means. Pure, so the arithmetic and the shape check are pinned by
@@ -79,10 +56,8 @@ export function applyOutcomeOf(packName: string, body: unknown): ApplyOutcome {
   const data = (body ?? {}) as Record<string, unknown>;
 
   if (typeof data.installed !== "number" || typeof data.total !== "number") {
-    return {
-      kind: "error",
-      message: typeof data.error === "string" ? data.error : "Failed to install modpack",
-    };
+    if (typeof data.operationId === "string" && data.operationId) return { kind: "quiet" };
+    return { kind: "error", message: typeof data.error === "string" ? data.error : "Failed to install modpack" };
   }
 
   const errors = stringList(data.errors);
@@ -111,13 +86,7 @@ export function applyOutcomeOf(packName: string, body: unknown): ApplyOutcome {
   return { kind: "quiet" };
 }
 
-/**
- * POST the apply and say what came back.
- *
- * The `catch` is the whole reason this is a function and not an inline `fetch`: a rejected
- * request on this endpoint overwhelmingly means the apply outlived the proxy, not that it
- * failed, and the one thing that must not happen is inventing counts to fill a report with.
- */
+/** POST the apply, retaining origin evidence or an explicitly uncertain result. */
 export async function applyModpackToServer(args: {
   modpackId: string;
   packName: string;
@@ -128,10 +97,10 @@ export async function applyModpackToServer(args: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ modpackId: args.modpackId }),
     });
-    const body = await res.json().catch(() => ({}));
-    return applyOutcomeOf(args.packName, body);
-  } catch {
-    return { kind: "still-running", packName: args.packName };
+    const body = await readOperationResponse(res);
+    return { ...applyOutcomeOf(args.packName, body), ...(body.operationId ? { operationId: body.operationId } : {}) };
+  } catch (error) {
+    return { kind: "still-running", packName: args.packName, ...(error instanceof UnconfirmedOperationResult && error.operationId ? { operationId: error.operationId } : {}) };
   }
 }
 
@@ -141,8 +110,8 @@ export async function applyModpackToServer(args: {
  * `/api/mods/install-modpack` takes a `modpackId`, so applying something found on Modrinth
  * is genuinely two writes: create the saved set, then apply it. Kept here beside the apply
  * rather than in the dialog so there is one definition of the order, and so the dialog's
- * copy can honestly say that applying also saves the pack — which it does, and which is why
- * production has nine `Modpack` rows.
+ * copy can say that applying first saves a set. A lost import reply may leave that set
+ * persisted; no apply is requested without its saved ID.
  */
 export async function importAndApply(args: {
   modrinthId: string;
@@ -155,25 +124,24 @@ export async function importAndApply(args: {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ modrinthId: args.modrinthId, name: args.packName }),
     });
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok || typeof body.id !== "string") {
+    const body = await readOperationResponse(res);
+    if (res.ok && (typeof body.id !== "string" || !body.id)) return {
+      kind: "unconfirmed-import", message: `The saved import receipt for "${args.packName}" is incomplete. No apply was requested; check Saved sets before importing again.`,
+    };
+    if (!res.ok) {
       return {
         kind: "error",
         message:
           typeof body.error === "string"
             ? body.error
-            : `Couldn't read "${args.packName}" from Modrinth, so nothing was changed.`,
+            : `Couldn't confirm the import of "${args.packName}". No apply was requested.`,
       };
     }
-    modpackId = body.id;
-  } catch {
-    // Nothing has been applied — the import is the first write and it never landed. Said
-    // explicitly, because "nothing was changed" is the fact that decides whether to retry.
-    return {
-      kind: "error",
-      message: `Couldn't reach the server to read "${args.packName}". Nothing was changed.`,
-    };
+    modpackId = body.id as string;
+  } catch (error) {
+    return { kind: "unconfirmed-import", message: unconfirmedOperationMessage(`import of "${args.packName}"`, error) + " No apply was requested; check Saved sets before importing again." };
   }
+
   return applyModpackToServer({ modpackId, packName: args.packName });
 }
 

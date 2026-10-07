@@ -122,4 +122,35 @@ describe("countTree / copyTreeCounting", () => {
   it("counts nothing for a directory it cannot read, rather than throwing", async () => {
     expect(await countTree(path.join(root, "does-not-exist"))).toBe(0);
   });
+
+  it("refuses an escaping top-level source before counting or creating a copy", async () => {
+    const external = path.join(root, "outside");
+    await mkdir(external);
+    await writeFile(path.join(external, "fixture.txt"), "outside fixture");
+    const alias = path.join(src, "escaping");
+    await symlink(external, alias);
+    await expect(countTree(alias, src)).rejects.toThrow("outside the configured game volume");
+    await expect(copyTreeCounting(alias, dest, () => {}, { sourceRoot: src })).rejects.toThrow("outside the configured game volume");
+    await expect(readdir(dest)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses escaping nested aliases and leaves their fixture untouched", async () => {
+    const external = path.join(root, "outside");
+    await mkdir(external);
+    const file = path.join(external, "fixture.txt");
+    await writeFile(file, "outside fixture");
+    await symlink(external, path.join(src, "escaping"));
+    await expect(countTree(src)).rejects.toThrow("outside the configured game volume");
+    await expect(copyTreeCounting(src, dest, () => {})).rejects.toThrow("outside the configured game volume");
+    expect(await readFile(file, "utf-8")).toBe("outside fixture");
+  });
+
+  it("copies a contained source alias under the configured volume", async () => {
+    const alias = path.join(src, "map-alias");
+    await symlink("map", alias);
+    expect(await countTree(alias, src)).toBe(21);
+    const copied = await copyTreeCounting(alias, dest, () => {}, { sourceRoot: src });
+    expect(copied.files).toBe(21);
+    expect(await readFile(path.join(dest, "chunks", "chunk_19.bin"), "utf-8")).toBe("c19");
+  });
 });

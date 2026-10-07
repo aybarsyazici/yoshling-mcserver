@@ -1,3 +1,4 @@
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
@@ -7,7 +8,7 @@ import { readdir, stat, rm, mkdir, cp } from "fs/promises";
 import path from "path";
 import { PZ_DIR, savePaths } from "@/lib/zomboid";
 import { withGameStopped } from "@/lib/game-manager";
-import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
+import { conflictResponse, withGameFileWrite, isConflict } from "@/lib/operation-response";
 import { BadArchiveError, removeManifestSidecar, safeBackupName } from "@/lib/backup-archive";
 import {
   archiveResponse,
@@ -233,30 +234,32 @@ export async function POST(request: NextRequest) {
     // `runOperation` record — a strip row and a completion toast for it would be noise.
     // A `backup.restore` declares every `files:` lane, which is what makes "never delete
     // the archive a restore is reading" enforced rather than assumed.
-    const laneBusy = fileLaneBusy("zomboid");
-    if (laneBusy) return laneBusy;
+    return withGameFileWrite("zomboid", async () => {
 
-    const target = path.join(BACKUP_DIR, name);
-    try {
-      await stat(target);
-    } catch {
-      return NextResponse.json({ error: "No such backup" }, { status: 404 });
-    }
+      const target = path.join(BACKUP_DIR, name);
+      try {
+        await stat(target);
+      } catch {
+        return NextResponse.json({ error: "No such backup" }, { status: 404 });
+      }
 
-    try {
-      await rm(target);
-      await removeManifestSidecar(target);
-      await recordBackupEvent(
-        "zomboid",
-        "delete",
-        actor,
-        { outcome: "ok", name },
-        { action: "backup_delete", details: { name } }
-      );
-      return NextResponse.json({ success: true });
-    } catch (e) {
-      return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
-    }
+      try {
+        assertFileWriteActive();
+        await rm(target);
+        await removeManifestSidecar(target);
+        await recordBackupEvent(
+          "zomboid",
+          "delete",
+          actor,
+          { outcome: "ok", name },
+          { action: "backup_delete", details: { name } }
+        );
+        return NextResponse.json({ success: true });
+      } catch (e) {
+        return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
+      }
+
+    });
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
@@ -284,6 +287,7 @@ async function restoreBundle(
   const own = (p: string) => execFileAsync("chown", ["-R", `${uid}:${gid}`, p]);
 
   const work = path.join(BACKUP_DIR, `.restore-${Date.now()}`);
+  assertFileWriteActive();
   await rm(work, { recursive: true, force: true });
   await mkdir(work, { recursive: true });
   try {
@@ -294,6 +298,7 @@ async function restoreBundle(
     if (await exists(worldSrc)) {
       const worldDest = path.join(PZ_DIR, "Saves", "Multiplayer", serverName);
       await mkdir(path.dirname(worldDest), { recursive: true });
+      assertFileWriteActive();
       await rm(worldDest, { recursive: true, force: true });
       await cp(worldSrc, worldDest, { recursive: true });
       await own(worldDest);
@@ -335,6 +340,7 @@ async function restoreBundle(
       await own(cfgDest);
     }
   } finally {
+    assertFileWriteActive();
     await rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }

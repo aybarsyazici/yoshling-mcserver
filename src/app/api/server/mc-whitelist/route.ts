@@ -1,15 +1,17 @@
+import { errorCode, errorMessage } from "@/lib/error-details";
+import { readFileSnapshot, recordFileRevision, assertFileRevision } from "@/lib/file-revision";
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
-import path from "path";
+import { gameDataPath } from "@/lib/game-data-path";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-const WHITELIST_FILE = path.join(MC_DIR, "whitelist.json");
 
 interface WhitelistEntry {
   uuid: string;
@@ -60,13 +62,15 @@ export async function GET() {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  try {
-    const content = await readFile(WHITELIST_FILE, "utf-8");
-    return NextResponse.json(JSON.parse(content));
-  } catch (e: any) {
-    if (e.code === "ENOENT") return NextResponse.json([]);
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  return revisionRead(() => gameDataPath(MC_DIR, "whitelist.json"), async () => {
+    try {
+      const content = await readFileSnapshot(await gameDataPath(MC_DIR, "whitelist.json"), "utf-8");
+      return NextResponse.json(JSON.parse(content));
+    } catch (e) {
+      if (errorCode(e) === "ENOENT") return NextResponse.json([]);
+      return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
+    }
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -85,53 +89,60 @@ export async function PUT(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  const laneBusy = fileLaneBusy("minecraft");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("minecraft", async () => {
 
-  const parsed = parseWhitelist(await request.json());
-  if ("error" in parsed) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
-  }
+    const parsed = parseWhitelist(await request.json());
+    if ("error" in parsed) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
 
-  // Minecraft matches whitelist entries by UUID and discards any entry whose UUID
-  // it cannot resolve. Verified on the box: this route answered
-  // `{"success":true,"count":1}` for `{"uuid":"","name":"ZZUuidProbe"}` — which is
-  // byte-for-byte what the settings page used to send — and the game then said
-  // "There are no whitelisted players". So a blank UUID is a successful write of a
-  // file that grants nobody anything, and enabling `white-list` after using this
-  // page would have locked everyone out.
-  //
-  // Refuse the whole request rather than persist a blank for the one name that
-  // wouldn't resolve: a partial write is the same silent-nothing failure, just
-  // harder to notice.
-  const withIds = await resolveEntryUuids(parsed.entries);
-  if (!withIds.ok) {
-    return NextResponse.json({ error: withIds.error }, { status: withIds.status });
-  }
+    // Minecraft matches whitelist entries by UUID and discards any entry whose UUID
+    // it cannot resolve. Verified on the box: this route answered
+    // `{"success":true,"count":1}` for `{"uuid":"","name":"ZZUuidProbe"}` — which is
+    // byte-for-byte what the settings page used to send — and the game then said
+    // "There are no whitelisted players". So a blank UUID is a successful write of a
+    // file that grants nobody anything, and enabling `white-list` after using this
+    // page would have locked everyone out.
+    //
+    // Refuse the whole request rather than persist a blank for the one name that
+    // wouldn't resolve: a partial write is the same silent-nothing failure, just
+    // harder to notice.
+    const withIds = await resolveEntryUuids(parsed.entries);
+    if (!withIds.ok) {
+      return NextResponse.json({ error: withIds.error }, { status: withIds.status });
+    }
 
-  try {
-    await writeFile(WHITELIST_FILE, JSON.stringify(withIds.entries, null, 2), "utf-8");
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+    try {
+      const file = await gameDataPath(MC_DIR, "whitelist.json");
+      const written = JSON.stringify(withIds.entries, null, 2);
+      await assertFileRevision(file);
+      assertFileWriteActive();
+      await writeFile(file, written, "utf-8");
+      recordFileRevision(file, written);
+      if (await readFile(file, "utf-8") !== written) throw new Error("Minecraft player list readback failed");
+    } catch (e) {
+      return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
+    }
 
-  try {
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "edit_file",
-        details: JSON.stringify({
-          game: "minecraft",
-          file: "whitelist.json",
-          count: withIds.entries.length,
-        }),
-      },
-    });
-  } catch (e) {
-    // The write already landed; log rather than fail, but don't swallow — "who
-    // removed me from the whitelist" is a question this log has to answer.
-    console.error("[mc-whitelist] activity log failed", e);
-  }
+    try {
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: "edit_file",
+          details: JSON.stringify({
+            game: "minecraft",
+            file: "whitelist.json",
+            count: withIds.entries.length,
+          }),
+        },
+      });
+    } catch (e) {
+      // The write already landed; log rather than fail, but don't swallow — "who
+      // removed me from the whitelist" is a question this log has to answer.
+      console.error("[mc-whitelist] activity log failed", e);
+    }
 
-  return NextResponse.json({ success: true, count: withIds.entries.length });
+    return NextResponse.json({ success: true, count: withIds.entries.length });
+
+  }, { request, file: () => gameDataPath(MC_DIR, "whitelist.json") });
 }

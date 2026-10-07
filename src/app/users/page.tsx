@@ -28,7 +28,7 @@ export default async function UsersPage() {
       username: u.username,
       avatar: u.avatar,
       role: u.role,
-      games: gameAccess(u.role as "ADMIN" | "MOD" | "MEMBER", u.games),
+      games: gameAccess("MEMBER", u.games),
       createdAt: u.createdAt.toISOString(),
     })
   );

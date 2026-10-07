@@ -1,3 +1,4 @@
+import { assertFileWriteActive } from "@/lib/operations";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
@@ -7,7 +8,7 @@ import { promisify } from "util";
 import { stat, rm, readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { withGameStopped } from "@/lib/game-manager";
-import { conflictResponse, fileLaneBusy, isConflict } from "@/lib/operation-response";
+import { conflictResponse, withGameFileWrite, isConflict } from "@/lib/operation-response";
 import { BadArchiveError, removeManifestSidecar, safeBackupName } from "@/lib/backup-archive";
 import {
   archiveResponse,
@@ -25,6 +26,10 @@ import { integrityFact, verifyArchive } from "@/lib/backup-integrity";
 import { describePolicy, policyFor } from "@/lib/backup-retention";
 import { readJournal, recordBackupEvent } from "@/lib/backup-log";
 import { intervalMsFor, scheduleEnabled } from "@/lib/backup-schedule";
+import { assertSdtdXmlValues, parseSdtdXmlProperties, setSdtdXmlProperties } from "@/lib/sdtd-xml";
+import { LOCKED_SDTD_PROPERTIES, PINNED_BY_DEPLOYMENT } from "@/lib/sdtd-settings";
+import { gameDataPath } from "@/lib/game-data-path";
+import { countTree } from "@/lib/backup-copy";
 
 export const maxDuration = 300;
 
@@ -187,12 +192,18 @@ export async function POST(request: NextRequest) {
         async (op) => {
           op.step("Restoring the saves from backup");
           op.detail(name);
-          await restoreBundle(backupPath, m);
+          const restored = await restoreBundle(backupPath, m);
           op.settle(
             m?.includesWorldMap ? "Replaced the saves and the world map" : "Replaced the saves"
           );
           op.fact({ label: "Archive", value: name });
           op.fact(integrityFact(integrity));
+          op.fact({
+            label: "Server config",
+            value: restored.xmlRestored
+              ? "Restored and read back; current deployment control settings preserved"
+              : "The archive has no XML; current server config was not replaced",
+          });
           if (m?.gameWorld) op.fact({ label: "World", value: m.gameWorld });
         },
         {
@@ -253,34 +264,36 @@ export async function POST(request: NextRequest) {
     // `runOperation` record — a strip row and a completion toast for it would be noise.
     // `backup.restore` declares every `files:` lane, so this is also what makes "never
     // delete the archive a restore is reading" true rather than hoped for.
-    const laneBusy = fileLaneBusy("7dtd");
-    if (laneBusy) return laneBusy;
+    return withGameFileWrite("7dtd", async () => {
 
-    // `stat` first, for the same reason the `restore` branch above does it: deleting a
-    // name that isn't there answered **500** with the raw
-    // `ENOENT: … lstat '/app/data/backups-7dtd/does-not-exist.tar.gz'`, which both
-    // claims the server broke and prints a container path into the browser.
-    const target = path.join(BACKUP_DIR, name);
-    try {
-      await stat(target);
-    } catch {
-      return NextResponse.json({ error: "No such backup" }, { status: 404 });
-    }
+      // `stat` first, for the same reason the `restore` branch above does it: deleting a
+      // name that isn't there answered **500** with the raw
+      // `ENOENT: … lstat '/app/data/backups-7dtd/does-not-exist.tar.gz'`, which both
+      // claims the server broke and prints a container path into the browser.
+      const target = path.join(BACKUP_DIR, name);
+      try {
+        await stat(target);
+      } catch {
+        return NextResponse.json({ error: "No such backup" }, { status: 404 });
+      }
 
-    try {
-      await rm(target);
-      await removeManifestSidecar(target);
-      await recordBackupEvent(
-        "7dtd",
-        "delete",
-        actor,
-        { outcome: "ok", name },
-        { action: "backup_delete", details: { name } }
-      );
-      return NextResponse.json({ success: true });
-    } catch (e) {
-      return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
-    }
+      try {
+        assertFileWriteActive();
+        await rm(target);
+        await removeManifestSidecar(target);
+        await recordBackupEvent(
+          "7dtd",
+          "delete",
+          actor,
+          { outcome: "ok", name },
+          { action: "backup_delete", details: { name } }
+        );
+        return NextResponse.json({ success: true });
+      } catch (e) {
+        return NextResponse.json({ error: (e as Error).message || "Delete failed" }, { status: 500 });
+      }
+
+    });
   }
 
   return NextResponse.json({ error: "Invalid action" }, { status: 400 });
@@ -292,20 +305,19 @@ export async function POST(request: NextRequest) {
  * with the whole block wrapped in a swallow, so a bundle missing its `Saves/`
  * deleted the save, copied nothing, and answered `{success:true}`.
  */
-async function restoreBundle(backupPath: string, m: SevenDaysManifest | null): Promise<void> {
+async function restoreBundle(backupPath: string, m: SevenDaysManifest | null): Promise<{ xmlRestored: boolean }> {
   const work = path.join(BACKUP_DIR, `.restore-${Date.now()}`);
+  assertFileWriteActive();
   await rm(work, { recursive: true, force: true });
   await mkdir(work, { recursive: true });
   try {
     await execFileAsync("tar", ["-xzf", backupPath, "-C", work], { timeout: TAR_TIMEOUT_MS });
 
     // Saves/ (replace) — assert it exists BEFORE removing the live one.
-    const savesSrc = path.join(work, "Saves");
+    const savesSrc = await gameDataPath(work, "Saves", { allowRoot: false });
     if (!(await isDir(savesSrc))) {
-      throw new BadArchiveError("This backup has no Saves folder in it — nothing was changed.");
+      throw new BadArchiveError("This backup has no Saves folder in it — live save files were not replaced.");
     }
-    await rm(path.join(SDTD_DIR, "Saves"), { recursive: true, force: true });
-    await execFileAsync("cp", ["-a", savesSrc, SDTD_DIR]);
 
     // The custom world map, if the bundle carries one.
     //
@@ -314,32 +326,114 @@ async function restoreBundle(backupPath: string, m: SevenDaysManifest | null): P
     // Two lines below it reaches `rm(..., {recursive: true, force: true})` running
     // as root, where `"../.."` would climb out of GeneratedWorlds. Require it to be
     // a single path segment and nothing else.
-    if (m?.includesWorldMap && m.gameWorld) {
-      if (m.gameWorld !== path.basename(m.gameWorld) || m.gameWorld.startsWith(".")) {
+    let mapSrc: string | null = null;
+    if (m?.includesWorldMap) {
+      if (typeof m.gameWorld !== "string" || !m.gameWorld || m.gameWorld !== path.basename(m.gameWorld) || m.gameWorld.startsWith(".") || m.gameWorld.includes("\\")) {
         throw new BadArchiveError(
-          `This backup's manifest names an unusable world ("${m.gameWorld}") — ` +
-            `the saves were restored, the map was left alone.`
+          "This backup's manifest names an unusable world — live save files were not replaced."
         );
       }
-      const mapSrc = path.join(work, "GeneratedWorlds", m.gameWorld);
+      mapSrc = await gameDataPath(work, path.join("GeneratedWorlds", m.gameWorld), { allowRoot: false });
       if (!(await isDir(mapSrc))) {
         throw new BadArchiveError(
           `This backup says it carries the world map for "${m.gameWorld}" but does not — ` +
-            `the saves were restored, the map was left alone.`
+            `live save files were not replaced.`
         );
       }
-      const dest = path.join(SDTD_DIR, "GeneratedWorlds");
-      await mkdir(dest, { recursive: true });
-      await rm(path.join(dest, m.gameWorld), { recursive: true, force: true });
-      await execFileAsync("cp", ["-a", mapSrc, dest]);
     }
 
-    // sdtdserver.xml. Older bundles predate it, so absence is fine — a failed
-    // write is not, and used to be swallowed.
-    const xmlSrc = path.join(work, "sdtdserver.xml");
-    const savedXml = await readFile(xmlSrc, "utf-8").catch(() => null);
-    if (savedXml !== null) await writeFile(SDTD_XML_PATH, savedXml, "utf-8");
+    // Validate every archived component before replacing any live saves. An XML
+    // restore intentionally brings back gameplay settings and the join password;
+    // control credentials, ports and deployment paths belong to the current box.
+    const xmlSrc = await gameDataPath(work, "sdtdserver.xml");
+    const xmlPath = await gameDataPath(path.dirname(SDTD_XML_PATH), "sdtdserver.xml");
+    const savesDest = await gameDataPath(SDTD_DIR, "Saves", { allowRoot: false });
+    const mapDest = mapSrc && m?.gameWorld
+      ? await gameDataPath(SDTD_DIR, path.join("GeneratedWorlds", m.gameWorld), { allowRoot: false })
+      : null;
+    await countTree(savesSrc, work);
+    if (mapSrc) await countTree(mapSrc, work);
+    let savedXml: string | null;
+    try {
+      savedXml = await readFile(xmlSrc, "utf-8");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      savedXml = null;
+    }
+    let restoredXml: string | null = null;
+    let protectedValues: Record<string, string> = {};
+    if (savedXml !== null) {
+      let archived: Map<string, string>;
+      try {
+        archived = parseSdtdXmlProperties(savedXml);
+      } catch {
+        throw new BadArchiveError("This backup's sdtdserver.xml is malformed or has duplicate settings — live save files were not replaced.");
+      }
+      for (const name of ["GameWorld", "GameName"]) {
+        const value = archived.get(name);
+        if (!value || value === "." || value === ".." || /[/\\]/.test(value) || value.trim() !== value) {
+          throw new BadArchiveError(`This backup's sdtdserver.xml has an unusable ${name} — live save files were not replaced.`);
+        }
+      }
+      if (m?.gameWorld && archived.get("GameWorld") !== m.gameWorld) {
+        throw new BadArchiveError("This backup's XML and manifest name different worlds — live save files were not replaced.");
+      }
+      let current: Map<string, string>;
+      try {
+        current = parseSdtdXmlProperties(await readFile(xmlPath, "utf-8"));
+      } catch {
+        throw new Error("Cannot preserve deployment settings: the current sdtdserver.xml is missing or invalid. Live save files were not replaced.");
+      }
+      const expectedPassword = process.env.SDTD_TELNET_PASSWORD;
+      if (!expectedPassword || !current.get("TelnetPassword") || current.get("TelnetPassword") !== expectedPassword) {
+        throw new Error("Cannot preserve telnet control: current TelnetPassword does not match the configured web credential. Live save files were not replaced.");
+      }
+      const expectedPort = process.env.SDTD_TELNET_PORT || "8081"; // same default as lib/telnet.ts
+      const port = current.get("TelnetPort");
+      if (!port || !/^\d+$/.test(port) || !/^\d+$/.test(expectedPort) || Number(port) < 1 || Number(port) > 65535 || Number(port) !== Number(expectedPort)) {
+        throw new Error("Cannot preserve telnet control: current TelnetPort does not match the web control port. Live save files were not replaced.");
+      }
+      if (current.get("TelnetEnabled")?.toLowerCase() !== "true") {
+        throw new Error("Cannot preserve telnet control: TelnetEnabled is not true in the current XML. Live save files were not replaced.");
+      }
+      protectedValues = {};
+      for (const name of [...LOCKED_SDTD_PROPERTIES, ...Object.keys(PINNED_BY_DEPLOYMENT)]) {
+        const value = current.get(name);
+        if (value === undefined) {
+          if (archived.has(name)) throw new Error(`Cannot preserve deployment setting "${name}": it is missing from the current XML. Live save files were not replaced.`);
+          continue;
+        }
+        if (name.endsWith("Port") && (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535)) {
+          throw new Error(`Cannot preserve deployment setting "${name}": the current port is invalid. Live save files were not replaced.`);
+        }
+        protectedValues[name] = value;
+      }
+      restoredXml = setSdtdXmlProperties(savedXml, protectedValues, { addMissing: true }).xml;
+    }
+
+    assertFileWriteActive();
+
+    await rm(savesDest, { recursive: true, force: true });
+    await execFileAsync("cp", ["-a", savesSrc, savesDest]);
+    if (mapSrc && mapDest) {
+      await mkdir(path.dirname(mapDest), { recursive: true });
+      assertFileWriteActive();
+      await rm(mapDest, { recursive: true, force: true });
+      await execFileAsync("cp", ["-a", mapSrc, mapDest]);
+    }
+
+    // Older bundles predate XML and keep their existing restore behavior. For a
+    // bundled XML, compare the actual file before the wrapper may restart 7DTD.
+    if (restoredXml !== null) {
+      assertFileWriteActive();
+      await writeFile(xmlPath, restoredXml, "utf-8");
+      const written = await readFile(xmlPath, "utf-8");
+      if (written !== restoredXml) throw new Error("Restored server config did not match the completed write; the server remains stopped.");
+      assertSdtdXmlValues(written, protectedValues);
+    }
+    return { xmlRestored: restoredXml !== null };
   } finally {
+    assertFileWriteActive();
     await rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }

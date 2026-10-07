@@ -7,6 +7,10 @@ import { GAME_LIST, isGameId, type GameId } from "@/lib/games";
  */
 export type Role = "ADMIN" | "MOD" | "MEMBER";
 
+export function isRole(value: unknown): value is Role {
+  return value === "ADMIN" || value === "MOD" || value === "MEMBER";
+}
+
 /**
  * MOD can do everything ADMIN can — the difference is *scope*, not capability.
  * A MOD only ever acts on the worlds they've been granted (`User.games`), while

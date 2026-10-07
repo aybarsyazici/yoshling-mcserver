@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite } from "@/lib/operation-response";
+import { assertFileWriteActive } from "@/lib/operations";
 import { containerIsRunning } from "@/lib/game-manager";
 import { classifyRconFailure, rconFailureMessage } from "@/lib/rcon-failure";
 import { db } from "@/lib/db";
@@ -260,187 +261,189 @@ export async function PUT(request: NextRequest) {
    * declares every file lane, so this refuses with a 409 that explains itself instead of
    * an RCON error about a world that was shutting down.
    */
-  const laneBusy = fileLaneBusy("minecraft");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("minecraft", async () => {
 
-  const body = await request.json().catch(() => null);
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    return NextResponse.json({ error: "Expected { rule, value }" }, { status: 400 });
-  }
-  const { rule, value } = body as { rule?: unknown; value?: unknown };
-  if (typeof rule !== "string" || rule.trim() === "") {
-    return NextResponse.json({ error: "Which game rule?" }, { status: 400 });
-  }
-  const id = rule.trim();
-
-  const { sendCommand, sendCommandLong } = await import("@/lib/rcon");
-
-  // 1. The rule has to be one this build has. This is both the correctness check (a rule
-  //    26.1 renamed does not exist under its old name, and writing it would be a green
-  //    toast over an `Incorrect argument`) and the injection guard: nothing reaches
-  //    `gameRuleCommand` that the server did not itself print.
-  let listReply: string;
-  try {
-    listReply = await sendCommandLong(MC_GAME_RULE_LIST_COMMAND, LIST_TIMEOUT_MS);
-  } catch (e) {
-    const { status, error } = await rconFailure(e);
-    return NextResponse.json({ error }, { status });
-  }
-  const known = parseGameRuleList(listReply);
-
-  // The list is the only evidence for "this build has no such rule", so a list that cannot
-  // be trusted cannot support that conclusion. Checked BEFORE `known.includes(id)`: the
-  // earlier version skipped this and answered 400 "this build has no game rule called
-  // fall_damage" for a rule the server had listed 116 times, because the parser had read one
-  // id out of the reply. Refusing here means the worst case is "we could not read the list",
-  // which is true, instead of a confident claim about the rule.
-  const verdict = assessGameRuleList(known, listReply);
-  if (!verdict.ok) {
-    return NextResponse.json(
-      {
-        error:
-          `Nothing was written. ${verdict.error} Until that list reads correctly this ` +
-          `dashboard can't tell whether ${id} is a rule on this build.`,
-        discovered: known.length,
-        replyLength: listReply.length,
-      },
-      { status: 502 }
-    );
-  }
-
-  if (!known.includes(id)) {
-    // Says what was read and names no cause. This used to add "Reload the page — 26.1
-    // renamed the rules, so a tab opened before a version change lists the old names",
-    // which is a specific explanation the route has no evidence for: the same 400 is what a
-    // typo, a datapack that unloaded, and a misread list all produce. The list read above is
-    // now verified, so the one fact this can state — the rule is not in the N the server just
-    // listed — is true.
-    return NextResponse.json(
-      {
-        error:
-          `${id} is not one of the ${known.length} game rules this server just listed, so ` +
-          `nothing was sent. Re-read the panel to see the list this build actually has.`,
-        discovered: known.length,
-      },
-      { status: 400 }
-    );
-  }
-
-  // 2. Read it first, to learn its type from the live value rather than from a table that
-  //    could disagree with the running build.
-  let before: { id: string; value: string } | null;
-  try {
-    before = parseGameRuleReply(await sendCommand(gameRuleCommand(id), RCON_TIMEOUT_MS));
-  } catch (e) {
-    const { status, error } = await rconFailure(e);
-    return NextResponse.json({ error }, { status });
-  }
-  if (!before) {
-    return NextResponse.json(
-      { error: `${id} is listed by this server but would not report its current value.` },
-      { status: 502 }
-    );
-  }
-
-  const checked = checkGameRuleValue(value, inferGameRuleType(before.value));
-  if (!checked.ok) {
-    return NextResponse.json({ error: checked.error, value: before.value }, { status: 400 });
-  }
-
-  // 3. Write, then **re-read**. The write's own reply ("… is now set to: x") is the server
-  //    echoing the command back and is not evidence that anything stuck, which is this
-  //    project's whole recurring defect. A separate query is, so the value this route
-  //    reports is always the one the fresh read produced — never the one that was typed.
-  try {
-    await sendCommand(gameRuleCommand(id, checked.value), RCON_TIMEOUT_MS);
-  } catch (e) {
-    const { status, error } = await rconFailure(e);
-    return NextResponse.json({ error }, { status });
-  }
-
-  let after: { id: string; value: string } | null;
-  try {
-    after = parseGameRuleReply(await sendCommand(gameRuleCommand(id), RCON_TIMEOUT_MS));
-  } catch (e) {
-    // The write went out and the confirmation did not come back. `docs/OPERATIONS.md` has a
-    // name for this state — `unverified` — and the point of having one is that "I did it and
-    // could not check" is sayable instead of being rounded to success or to failure.
-    const { status } = await rconFailure(e);
-    return NextResponse.json(
-      {
-        error:
-          `Sent ${id} = ${checked.value}, but couldn't read the value back to confirm it. ` +
-          `Reload the page to see what the rule is actually set to.`,
-        requested: checked.value,
-      },
-      { status }
-    );
-  }
-
-  if (!after) {
-    return NextResponse.json(
-      {
-        error:
-          `Sent ${id} = ${checked.value}, but the server's reply to the follow-up query was ` +
-          `unreadable, so this is unconfirmed. Check it in the console.`,
-        requested: checked.value,
-      },
-      { status: 502 }
-    );
-  }
-
-  if (after.value !== checked.value) {
-    // The game accepted the command and the rule is not what was asked for. Reported as a
-    // failure with both values rather than a 200 carrying `applied: false`, so a caller that
-    // only checks `res.ok` still cannot read this as success.
-    return NextResponse.json(
-      {
-        error: `${id} is still ${after.value} — the server did not take ${checked.value}.`,
-        rule: id,
-        requested: checked.value,
-        value: after.value,
-      },
-      { status: 502 }
-    );
-  }
-
-  const changed = before.value !== after.value;
-
-  // Only when something changed. A row saying somebody "set the game rule X to false" when
-  // it was already false is a false entry in the one log that is supposed to say what was
-  // done to this box — and the toggles are idempotent, so re-pressing one was writing
-  // history. The write still happened and the response still reports it; the log records
-  // changes.
-  if (changed) {
-    try {
-      await db.activity.create({
-        data: {
-          userId: gate.session.user.id,
-          action: "set_gamerule",
-          details: JSON.stringify({
-            game: "minecraft",
-            rule: id,
-            value: after.value,
-            from: before.value,
-          }),
-        },
-      });
-    } catch (e) {
-      // The rule is already set; failing the response would invite a retry that changes
-      // nothing. Same call as the properties route makes, for the same reason.
-      console.error("[mc-gamerules] activity log failed", e);
+    const body = await request.json().catch(() => null);
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return NextResponse.json({ error: "Expected { rule, value }" }, { status: 400 });
     }
-  }
+    const { rule, value } = body as { rule?: unknown; value?: unknown };
+    if (typeof rule !== "string" || rule.trim() === "") {
+      return NextResponse.json({ error: "Which game rule?" }, { status: 400 });
+    }
+    const id = rule.trim();
 
-  return NextResponse.json({
-    success: true,
-    rule: id,
-    requested: checked.value,
-    // The read-back, which is what the UI renders. `changed` distinguishes a real edit from
-    // pressing a toggle that was already in that position, the way the version card's
-    // `savedConfig` comparison does.
-    value: after.value,
-    previous: before.value,
-    changed,
+    const { sendCommand, sendCommandLong } = await import("@/lib/rcon");
+
+    // 1. The rule has to be one this build has. This is both the correctness check (a rule
+    //    26.1 renamed does not exist under its old name, and writing it would be a green
+    //    toast over an `Incorrect argument`) and the injection guard: nothing reaches
+    //    `gameRuleCommand` that the server did not itself print.
+    let listReply: string;
+    try {
+      listReply = await sendCommandLong(MC_GAME_RULE_LIST_COMMAND, LIST_TIMEOUT_MS);
+    } catch (e) {
+      const { status, error } = await rconFailure(e);
+      return NextResponse.json({ error }, { status });
+    }
+    const known = parseGameRuleList(listReply);
+
+    // The list is the only evidence for "this build has no such rule", so a list that cannot
+    // be trusted cannot support that conclusion. Checked BEFORE `known.includes(id)`: the
+    // earlier version skipped this and answered 400 "this build has no game rule called
+    // fall_damage" for a rule the server had listed 116 times, because the parser had read one
+    // id out of the reply. Refusing here means the worst case is "we could not read the list",
+    // which is true, instead of a confident claim about the rule.
+    const verdict = assessGameRuleList(known, listReply);
+    if (!verdict.ok) {
+      return NextResponse.json(
+        {
+          error:
+            `Nothing was written. ${verdict.error} Until that list reads correctly this ` +
+            `dashboard can't tell whether ${id} is a rule on this build.`,
+          discovered: known.length,
+          replyLength: listReply.length,
+        },
+        { status: 502 }
+      );
+    }
+
+    if (!known.includes(id)) {
+      // Says what was read and names no cause. This used to add "Reload the page — 26.1
+      // renamed the rules, so a tab opened before a version change lists the old names",
+      // which is a specific explanation the route has no evidence for: the same 400 is what a
+      // typo, a datapack that unloaded, and a misread list all produce. The list read above is
+      // now verified, so the one fact this can state — the rule is not in the N the server just
+      // listed — is true.
+      return NextResponse.json(
+        {
+          error:
+            `${id} is not one of the ${known.length} game rules this server just listed, so ` +
+            `nothing was sent. Re-read the panel to see the list this build actually has.`,
+          discovered: known.length,
+        },
+        { status: 400 }
+      );
+    }
+
+    // 2. Read it first, to learn its type from the live value rather than from a table that
+    //    could disagree with the running build.
+    let before: { id: string; value: string } | null;
+    try {
+      before = parseGameRuleReply(await sendCommand(gameRuleCommand(id), RCON_TIMEOUT_MS));
+    } catch (e) {
+      const { status, error } = await rconFailure(e);
+      return NextResponse.json({ error }, { status });
+    }
+    if (!before) {
+      return NextResponse.json(
+        { error: `${id} is listed by this server but would not report its current value.` },
+        { status: 502 }
+      );
+    }
+
+    const checked = checkGameRuleValue(value, inferGameRuleType(before.value));
+    if (!checked.ok) {
+      return NextResponse.json({ error: checked.error, value: before.value }, { status: 400 });
+    }
+
+    // 3. Write, then **re-read**. The write's own reply ("… is now set to: x") is the server
+    //    echoing the command back and is not evidence that anything stuck, which is this
+    //    project's whole recurring defect. A separate query is, so the value this route
+    //    reports is always the one the fresh read produced — never the one that was typed.
+    try {
+      assertFileWriteActive();
+      await sendCommand(gameRuleCommand(id, checked.value), RCON_TIMEOUT_MS);
+    } catch (e) {
+      const { status, error } = await rconFailure(e);
+      return NextResponse.json({ error }, { status });
+    }
+
+    let after: { id: string; value: string } | null;
+    try {
+      after = parseGameRuleReply(await sendCommand(gameRuleCommand(id), RCON_TIMEOUT_MS));
+    } catch (e) {
+      // The write went out and the confirmation did not come back. `docs/OPERATIONS.md` has a
+      // name for this state — `unverified` — and the point of having one is that "I did it and
+      // could not check" is sayable instead of being rounded to success or to failure.
+      const { status } = await rconFailure(e);
+      return NextResponse.json(
+        {
+          error:
+            `Sent ${id} = ${checked.value}, but couldn't read the value back to confirm it. ` +
+            `Reload the page to see what the rule is actually set to.`,
+          requested: checked.value,
+        },
+        { status }
+      );
+    }
+
+    if (!after) {
+      return NextResponse.json(
+        {
+          error:
+            `Sent ${id} = ${checked.value}, but the server's reply to the follow-up query was ` +
+            `unreadable, so this is unconfirmed. Check it in the console.`,
+          requested: checked.value,
+        },
+        { status: 502 }
+      );
+    }
+
+    if (after.value !== checked.value) {
+      // The game accepted the command and the rule is not what was asked for. Reported as a
+      // failure with both values rather than a 200 carrying `applied: false`, so a caller that
+      // only checks `res.ok` still cannot read this as success.
+      return NextResponse.json(
+        {
+          error: `${id} is still ${after.value} — the server did not take ${checked.value}.`,
+          rule: id,
+          requested: checked.value,
+          value: after.value,
+        },
+        { status: 502 }
+      );
+    }
+
+    const changed = before.value !== after.value;
+
+    // Only when something changed. A row saying somebody "set the game rule X to false" when
+    // it was already false is a false entry in the one log that is supposed to say what was
+    // done to this box — and the toggles are idempotent, so re-pressing one was writing
+    // history. The write still happened and the response still reports it; the log records
+    // changes.
+    if (changed) {
+      try {
+        await db.activity.create({
+          data: {
+            userId: gate.session.user.id,
+            action: "set_gamerule",
+            details: JSON.stringify({
+              game: "minecraft",
+              rule: id,
+              value: after.value,
+              from: before.value,
+            }),
+          },
+        });
+      } catch (e) {
+        // The rule is already set; failing the response would invite a retry that changes
+        // nothing. Same call as the properties route makes, for the same reason.
+        console.error("[mc-gamerules] activity log failed", e);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      rule: id,
+      requested: checked.value,
+      // The read-back, which is what the UI renders. `changed` distinguishes a real edit from
+      // pressing a toggle that was already in that position, the way the version card's
+      // `savedConfig` comparison does.
+      value: after.value,
+      previous: before.value,
+      changed,
+    });
+
   });
 }

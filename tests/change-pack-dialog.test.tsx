@@ -38,10 +38,9 @@ vi.mock("@/lib/use-games", async (importOriginal) => ({
 }));
 
 /**
- * `ModDetailDialog` cannot be loaded here: it pulls in `html-react-parser`, which
- * `require()`s the ESM-only `domhandler`, so on this project's Node 20.12 collecting the
- * file dies with `ERR_REQUIRE_ESM` before a single test runs. It carries no write control
- * — same stub and same reason as `tests/mods-surfaces.test.tsx`.
+ * The former html-react-parser import required this stub on Node 20.12. The dialog
+ * now loads in its own security suite; this stub isolates pack changes from the
+ * independent description fetch and rendering flow.
  */
 vi.mock("@/components/mod-detail-dialog", () => ({
   ModDetailDialog: ({ open }: { open: boolean }) => (open ? <div>mod detail</div> : null),
@@ -479,12 +478,12 @@ describe("applying", () => {
     applyReply = "throw";
     await review();
     fireEvent.click(button("Apply this pack")!);
-    await waitFor(() => expect(text()).toMatch(/Still installing/), WAIT);
-    expect(text()).toContain("Still installing Fabulously Optimized");
+    await waitFor(() => expect(text()).toMatch(/Install result unconfirmed/), WAIT);
+    expect(text()).toContain("Install result unconfirmed · Fabulously Optimized");
     expect(text()).not.toMatch(/Installed 0 of 0 mods/);
     expect(text()).not.toMatch(/Installed \d+ of \d+ mods/);
     // And it says what to do, which is the actionable half: the work is still going.
-    expect(text()).toMatch(/still running on the server/);
+    expect(text()).toMatch(/may still be running on the server/);
     expect(text()).toMatch(/don’t start it again|don't start it again/);
   });
 });

@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
+
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -36,6 +39,7 @@ export function FileBrowser({
   rootLabel?: string;
   tint?: string;
 } = {}) {
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const [root, setRoot] = useState(roots?.[0]?.key ?? "");
   const [items, setItems] = useState<FileEntry[]>([]);
   const [currentPath, setCurrentPath] = useState("");
@@ -44,16 +48,23 @@ export function FileBrowser({
   const [viewingFile, setViewingFile] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
+  const [writeError, setWriteError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Whether what's on screen is really the file, or a message about why it
   // couldn't be read. Saving is only allowed in the first case — see viewFile.
   const [readOk, setReadOk] = useState(false);
+  const [fileIdentity, setFileIdentity] = useState<{ endpoint: string; root: string; path: string; revision: string | null } | null>(null);
+  const requestGeneration = useRef(0);
+  const invalidateRequests = useCallback(() => { requestGeneration.current++; }, []);
 
   const rootQuery = root ? `&root=${encodeURIComponent(root)}` : "";
 
   const navigate = useCallback(
     async (dirPath: string) => {
+      const generation = ++requestGeneration.current;
       setLoading(true);
+      setItems([]);
+      setFileIdentity(null); setWriteError(null);
       setFileContent(null);
       setViewingFile(null);
       setEditing(false);
@@ -62,16 +73,18 @@ export function FileBrowser({
       try {
         const res = await fetch(`${endpoint}?path=${encodeURIComponent(dirPath)}${rootQuery}`);
         const data = await res.json();
-        if (data.items) {
+        if (generation !== requestGeneration.current) return;
+        if (res.ok && Array.isArray(data.items)) {
           setItems(data.items);
           setCurrentPath(dirPath);
         } else if (data.error) {
           toast.error(data.error);
         }
       } catch {
+        if (generation !== requestGeneration.current) return;
         toast.error("Failed to load directory");
       }
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     },
     [endpoint, rootQuery]
   );
@@ -85,14 +98,16 @@ export function FileBrowser({
    * literal "Error: …" string into the buffer.
    */
   async function viewFile(filePath: string) {
+    const generation = ++requestGeneration.current;
+    const identity = { endpoint, root, path: filePath, revision: null as string | null };
     let content: string;
     let ok = false;
     try {
       const res = await fetch(`${endpoint}?path=${encodeURIComponent(filePath)}&action=read${rootQuery}`);
       const data = await res.json();
-      if (data.content !== undefined) {
+      if (res.ok && typeof data.content === "string") {
         content = data.content;
-        ok = true;
+        ok = true; identity.revision = fileRevision(res);
       } else {
         content = `Error: ${data.error || "Failed to read file"}`;
       }
@@ -101,6 +116,8 @@ export function FileBrowser({
     }
     // All four together, from this call's `filePath`, so the save buffer can never
     // belong to a different file than the one named in `viewingFile`.
+    if (generation !== requestGeneration.current) return;
+    setFileIdentity(identity); setWriteError(null); setEditing(false);
     setViewingFile(filePath);
     setFileContent(content);
     setEditContent(ok ? content : "");
@@ -109,30 +126,38 @@ export function FileBrowser({
 
   async function saveFile() {
     // readOk, not just viewingFile: never write a buffer that isn't this file's.
-    if (!viewingFile || !readOk) return;
+    if (!can.settingsEdit || !fileIdentity || !readOk || saving) return;
     setSaving(true);
     try {
-      const res = await fetch(endpoint, {
+      const identity = fileIdentity;
+      const generation = requestGeneration.current;
+      const content = editContent;
+      const res = await fetch(identity.endpoint, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: viewingFile, content: editContent, root: root || undefined }),
+        headers: { "Content-Type": "application/json", ...revisionHeaders(identity.revision) },
+        body: JSON.stringify({ path: identity.path, content, root: identity.root || undefined }),
       });
+      if (generation !== requestGeneration.current) return;
       if (res.ok) {
-        setFileContent(editContent);
+        setFileIdentity({ ...identity, revision: fileRevision(res) ?? identity.revision });
+        setFileContent(content);
         setEditing(false);
         toast.success("File saved. Restart the server to apply if needed.");
       } else {
         const data = await res.json();
+        if (data.stale) { setWriteError(data.error); setReadOk(false); }
         toast.error(data.error || "Failed to save");
       }
     } catch {
-      toast.error("Failed to save file");
+      setWriteError("The save result is unconfirmed. Reload this file before retrying."); setReadOk(false);
+      toast.info("The file save result is unconfirmed. Reload this file before retrying.");
     } finally {
       setSaving(false);
     }
   }
 
   async function deleteItem(item: FileEntry) {
+    if (!can.filesDelete) return;
     const what = item.isDirectory ? "folder" : "file";
     if (!confirm(`Delete ${what} "${item.name}"? This cannot be undone.`)) return;
     const res = await fetch(`${endpoint}?path=${encodeURIComponent(item.path)}${rootQuery}`, {
@@ -149,9 +174,10 @@ export function FileBrowser({
 
   // reset to root when the selected root changes
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
-    navigate("");
-  }, [root]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void navigate("");
+    return invalidateRequests;
+  }, [navigate, invalidateRequests]);
 
   function goUp() {
     const parts = currentPath.split("/").filter(Boolean);
@@ -180,7 +206,8 @@ export function FileBrowser({
             return (
               <button
                 key={r.key}
-                onClick={() => setRoot(r.key)}
+                onClick={() => { requestGeneration.current++; setFileIdentity(null); setViewingFile(null); setEditing(false); setRoot(r.key); }}
+                disabled={saving}
                 className={cn(
                   "relative rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
                   active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
@@ -223,7 +250,7 @@ export function FileBrowser({
           )}
         </div>
         <div className="flex flex-shrink-0 gap-2">
-          {viewingFile && !editing && isEditable && (
+          {can.settingsEdit && viewingFile && !editing && isEditable && (
             <Button size="sm" onClick={() => setEditing(true)}>
               <Pencil className="h-3.5 w-3.5" /> Edit
             </Button>
@@ -233,19 +260,20 @@ export function FileBrowser({
               <Button size="sm" variant="outline" onClick={() => { setEditing(false); setEditContent(fileContent || ""); }}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={saveFile} disabled={saving}>
+              <Button size="sm" onClick={saveFile} disabled={saving || !readOk}>
                 {saving ? "Saving…" : "Save"}
               </Button>
             </>
           )}
           {viewingFile && (
-            <Button size="sm" variant="outline" onClick={() => { setFileContent(null); setViewingFile(null); setEditing(false); setEditContent(""); setReadOk(false); }}>
+            <Button size="sm" variant="outline" onClick={() => { requestGeneration.current++; setFileIdentity(null); setFileContent(null); setViewingFile(null); setEditing(false); setEditContent(""); setReadOk(false); }}>
               <X className="h-3.5 w-3.5" /> Close
             </Button>
           )}
         </div>
       </div>
 
+      {writeError && <div role="alert"><p>{writeError}</p><Button onClick={() => fileIdentity && viewFile(fileIdentity.path)} disabled={saving}>Reload file</Button></div>}
       {/* Body */}
       {viewingFile && fileContent !== null ? (
         editing ? (
@@ -289,13 +317,13 @@ export function FileBrowser({
               </button>
               <div className="flex flex-shrink-0 items-center gap-3">
                 {!item.isDirectory && <span className="font-mono text-xs text-muted-foreground">{formatSize(item.size)}</span>}
-                <button
+                {can.filesDelete && <button
                   onClick={() => deleteItem(item)}
                   className="text-muted-foreground opacity-0 transition-all hover:text-destructive group-hover:opacity-100"
                   title="Delete"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                </button>}
               </div>
             </div>
           ))}

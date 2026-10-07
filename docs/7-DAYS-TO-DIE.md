@@ -15,27 +15,36 @@ Control is **telnet on 8081**, which 7DTD only binds if a `TelnetPassword` is se
 `sdtdserver.xml` — **the `TELNET_PASSWORD` env var does not set it.** The service is
 `restart: "no"` so it never auto-starts. A **fresh install wipes `sdtdserver.xml` back
 to defaults, and a host migration counts as fresh**; the app's `SevenDaysConfig` DB row
-survives that and is the recovery source. The live save is `GameWorld="Reveo Valley"` +
-`GameName="Fresh2"`, with `ServerVisibility=2` — **re-read off
-`/sevendtd-config/sdtdserver.xml` (13,726 bytes) on 2026-10-06.** Client↔server build
+survives that and can recover its four quick fields. A restore can change XML without
+changing that mirror, so compare it with a known archive before using it for recovery.
+Read the selected world and save from current `GameWorld`/`GameName` XML values. Client↔server build
 mismatch is the number one cause of "stuck at Starting game".
 
-> ### 7DTD is STOPPED in production (as of 2026-10-06)
->
-> Only `yoshling-pz` and `yoshling-web-1` are up; Minecraft is stopped too. **This changes
-> what you can do here on day one**, and none of it is a fault to debug:
->
-> - Every telnet read reports the world unreachable — the status probe, the console, the
->   configured-vs-live comparison on Settings, `getgamepref`.
-> - **The Update button 409s**, by design, because Project Zomboid holds the box (below).
-> - Exercising anything live means a **Power on, which stops Project Zomboid** — and
->   people play on that daily. It is a decision, not a step.
-> - The 2026-10-06 `TelnetPassword` rotation is unverified end to end for the same reason:
->   the xml is read only at server start. The first start after that rotation is the moment
->   to check the dashboard still sees the world.
->
-> Confirm before assuming, since this is the fact most likely to have moved:
-> `ssh -i ~/.ssh/mc_yoshling_netcup root@89.58.50.155 'docker ps --format "{{.Names}}\t{{.Status}}"'`.
+Home/overview join guidance copies the configured public hostname/IP and port, and asks
+players to confirm the exact game build/Steam branch with the world owner. This surface
+does not verify that build or a client join; see [`FRONTEND.md`](FRONTEND.md).
+
+## Before a live action
+
+Read current container state; do not infer it from a previous session. A stopped 7DTD
+cannot answer telnet, and Update refuses a live peer. Power on switches worlds and
+can stop an actively played PZ save. Post-rotation telnet verification belongs in
+`CLAUDE.md`'s current verification gaps; dated state and XML measurements are in
+[`MEMORY-HISTORY.md`](MEMORY-HISTORY.md).
+
+## Telnet result verification
+
+The transport requires a password prompt and explicit successful login, rejects denial,
+command errors, timeout and incomplete early close, and checks known status/save reply
+markers. An unpredictable unknown-command fence follows each batch; its complete rejection
+establishes ordered reply completion and is stripped from the result. This adds one benign
+rejected marker command/log entry per batch. `saveworld` needs a save acknowledgement,
+not merely a connected socket or partial bytes.
+
+Controlled loopback fixtures cover these behaviors. The actual deployed game build's
+auth/status/save compatibility still needs the first controlled 7DTD startup check;
+unrecognized replies refuse verification rather than claim a successful save. No live
+shutdown, telnet or disk-exhaustion test was performed for this change.
 
 - First boot runs a one-time **SteamCMD install (~17 GB, ~10-20 min)**. The
   `sevendtd` service is `restart: "no"` so it never auto-starts on reboot — the
@@ -173,14 +182,15 @@ mismatch is the number one cause of "stuck at Starting game".
   - **Do it in two steps, and let the app run the second one.** `VERSION` is a compose
     literal, read by `/api/7dtd/update` and never written by the UI, so changing the branch
     is a compose edit and a deploy. The `START_MODE=3` run is then the **Update button** on
-    7DTD Settings → Server maintenance, which flips `START_MODE` to `3`, calls
-    `recreateService`, and restores `"1"` in a `finally`.
+    7DTD Settings → Server maintenance, which verifies shutdown, flips `START_MODE`
+    to `3`, creates a stopped container, starts it through the guarded lifecycle,
+    and restores `"1"` in a `finally`.
   - > **This said: "IMPORTANT: recreate with `docker compose up -d sevendtd`".** Don't.
     > That command starts 7DTD **with no eviction, no control lock and no co-residency
     > check**, and the app grew a deliberate refusal for exactly this situation —
     > `/api/7dtd/update` calls `refuseCoResidency("7dtd", …)` and 409s rather than stopping
-    > somebody else's game without consent. Project Zomboid is up in production right now,
-    > so typing this by hand today puts two worlds on a 15.6 GB box: the 2026-09-26
+    > somebody else's game without consent. If Project Zomboid is running,
+    > typing this by hand can put two worlds on the box: the 2026-09-26
     > co-residency incident, from the command the doc presented as the careful option. It
     > stayed believable because the half it warns about **is** still true (next bullet), so
     > the whole instruction read as current, and because naming one service looks like the
@@ -201,29 +211,24 @@ mismatch is the number one cause of "stuck at Starting game".
   save/world/profile (we chased all those). **Fix = update the server to match.**
 - **In-UI server maintenance** (7DTD Settings → "Server maintenance" card):
   - `/api/7dtd/update` (GET compares installed `appmanifest_294420.acf` buildid
-    vs the branch's latest via `api.steamcmd.net`; POST patches `START_MODE: "3"` into the
-    `sevendtd` compose block with `patchServiceEnv`, calls **`recreateService`**, and writes
-    `START_MODE: "1"` back in a `finally`). Surfaces build + "update available".
-    - **The POST refuses while another world is running, and that is not a bug.**
-      `refuseCoResidency("7dtd", containerIsRunning, "The update")` throws
-      `CoResidencyError` → **HTTP 409**, recorded in the ledger with the blocker named. The
+    vs the branch's latest via `api.steamcmd.net`; POST plans under `files:7dtd`, checks
+    strict target/peer state, claims power and rechecks before changes. It asks a running
+    game to save/stop, verifies shutdown, patches `START_MODE: "3"`, creates stopped,
+    checks the actual container mode, and starts through the guarded lifecycle. Its
+    `finally` restores and reads back `START_MODE: "1"`; terminal running state is checked.
+    The result proves that a download was requested, not that Steam finished updating.
+    - **The POST refuses a live peer, and that is not a bug.**
+      Running/paused/restarting peers produce **HTTP 409** with the blocker named;
+      unreadable/unknown state refuses too. Preflight refusals leave unrelated backups
+      alone. The
       asymmetry with `powerOn` — which evicts — is deliberate and the route's own comment
       says why: *"Nobody pressing 'Update' consented to stopping someone else's game."*
-      **Project Zomboid is up in production right now, so the Update button is currently
-      unusable**; power PZ down first. Without knowing this, the 409 looks like a broken
+      If Project Zomboid is running, power it down first. Without knowing this, the 409 looks like a broken
       route or a permission gate, which is where the debugging goes.
-    - **The update *check* can never resolve the `stable` branch.** `branchInfo` reads
-      `data.data[APPID].depots.branches[branch]` with no aliasing, and **Steam's key for
-      the default branch is `public`, not `stable`** — so on `stable` the lookup misses,
-      `latest.buildid` is `null`, and `updateAvailable: !!(installed && latest.buildid &&
-      …)` is therefore always `false`. The card reports "up to date" **permanently**, which
-      is the worst possible failure for a server whose #1 join failure is a client↔server
-      build mismatch. The same `null` is returned when the `fetch` fails, so a Steam outage
-      reads as "up to date" too. Found by the 2026-09-28 audit and never carried into a
-      live doc until now; **it bites the moment anyone follows the branch-switch
-      instructions above.** On `latest_experimental` — the current branch — the key matches
-      and the check works. Fix is a `stable` → `public` alias in `branchInfo`, plus
-      distinguishing "no answer" from "no update".
+    - Update lookup reads the configured Compose branch, maps `stable` to Steam
+      `public`, and reports `checked`/`unknown` explicitly. Missing installed/upstream
+      evidence, incomplete responses and fetch failure have `updateAvailable:null`;
+      they cannot display Up to date or enable an unverified update.
     - > **This said "recreates the container via `docker run` … so the web container can
       > update without compose", which has not been true for some time, and was the bug
       > rather than the design.** `docker run` produced a container with no compose labels
@@ -235,24 +240,43 @@ mismatch is the number one cause of "stuck at Starting game".
     stops the server, **wipes `Saves/<world>` but keeps the map** in
     `GeneratedWorlds`, bumps `GameName` (Fresh2→Fresh3) so no client has a stale
     cached character, then restarts. This is the sanctioned "start from scratch".
-- **World upload:** `/api/7dtd/world` (ADMIN) accepts a `.zip`, auto-detects
+    It holds its file lane for preflight, claims power only after admission, then rechecks
+    peers before creating a safety copy. It refuses another running world before changing files, uses strict state/shutdown
+    readbacks before the wipe, protects the current safety copy during mtime retention,
+    and verifies the new name before restart. Unknown inspection is not a stopped game.
+    XML, save and profile paths are physically admitted first. A contained final save
+    alias is snapshotted as data, then unlinked itself; its target is preserved.
+- **World upload:** `/api/7dtd/world` (ADMIN or MOD granted 7DTD) accepts a `.zip`, auto-detects
   world-vs-save from marker files (`dtm.raw`/`biomes.png`/`prefabs.xml` → world →
   `GeneratedWorlds/<name>`; `main.ttw`/`players.xml` → save → `Saves/`), extracts
-  with the container's `unzip`. UI is the uploader card in 7DTD Settings. To play
+  with the container's `unzip`, then rejects links and special files before placement.
+  Declared totals and disk headroom are checked before extraction. The expanded budget is
+  8 GiB / 250,000 entries with 1 GiB free-space reserve; actual bytes/count/free space and
+  interruption are monitored, violations kill and await the child before cleanup, and a
+  final scan gates placement. Observation intervals can overshoot; this is not an OS quota.
+  The destination's existing parents must physically remain inside the game root.
+  UI is the uploader card in 7DTD Settings. To play
   an uploaded world: set `GameWorld` to its name in All settings + restart.
   Large worlds exceed **Cloudflare's 100MB request cap** (→ 413), so the uploader
   routes the file to the **direct (non-Cloudflare) host** `direct.yoshling.xyz`
   using a short-lived HMAC token from `/api/7dtd/world/token` (the session cookie
-  isn't sent cross-origin). See the TLS section for the direct-host cert setup.
+  isn't sent cross-origin). Spending a token rechecks current invitation policy, role and world access;
+  missing/default signing secrets cannot mint usable tokens. See `MIGRATION.md` for host TLS setup.
   `GameWorld` in All settings is a **dynamic dropdown** (stock `Data/Worlds` +
   uploaded `GeneratedWorlds`, fed by `/api/7dtd/world` `allWorlds`).
-- **World delete:** `DELETE /api/7dtd/world?name=` (ADMIN) removes a custom world,
+- **World delete:** `DELETE /api/7dtd/world?name=` (ADMIN or MOD granted 7DTD) removes a custom world,
   but **refuses if it's the active `GameWorld` or referenced by any backup**
   (trash button on the uploader's world chips).
 - **7DTD backups are self-contained:** each bundles `Saves/` + the custom world
   map (`GeneratedWorlds/<world>`) + `sdtdserver.xml` + a `manifest.json` (records
   the world), so one-click restore rebuilds saves, map, and settings together.
-  (MC backups remain just the `world/` folder.) Note: tar stores members as
+  Restore preserves current control credentials, locked deployment paths and pinned ports,
+  validates archive/XML/map consistency before replacing saves, and reads back XML before
+  restart. Archived gameplay settings and the join password remain restore targets.
+  Quick settings read all four fields from XML so a stale DB mirror cannot undo them.
+  Legacy archives without XML leave current XML intact. These safeguards are locally verified;
+  post-deployment telnet and a live restore remain separate checks.
+  (Routine MC backups are world-only; pre-pack rollback also carries mods.) Note: tar stores members as
   `./name`, so manifest reads try `./manifest.json` first.
 
 ## Added 2026-09-28

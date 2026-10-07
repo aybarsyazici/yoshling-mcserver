@@ -12,24 +12,7 @@ import { pluralise } from "@/lib/format";
 import { GAMES } from "@/lib/games";
 import type { ApplyOutcome } from "@/lib/modpack-apply";
 
-/**
- * **What a modpack apply did, per mod.**
- *
- * One copy, shared by **Change pack** at the top of the mods page and **Install to Server**
- * on a saved set. It lived inside `modpacks.tsx`, which meant the new flow would either
- * have had a second copy of it or no report at all.
- *
- * Two outcomes render, and keeping them apart is the fix this extraction carries:
- *
- * - **`report`** — the route answered with counts. Title states them; the three channels
- *   (the route's headline sentence, real warnings, client-only skips, failures) each render
- *   in their own block, and the skips are deliberately *not* amber.
- * - **`still-running`** — the request gave up before the apply did, which is the normal end
- *   of a 166-mod apply behind a ~100 s origin timeout. It used to be rendered as the report
- *   with `{installed: 0, total: 0}` substituted, i.e. a **destructive-red "Installed 0 of 0
- *   mods"** for an apply that was succeeding at that moment. There are no counts to show
- *   here and this says so instead of inventing two zeroes.
- */
+/** Reports counted origin results or an unconfirmed response, without guessing execution. */
 export function ApplyReportDialog({
   outcome,
   onClose,
@@ -54,7 +37,7 @@ export function ApplyReportDialog({
         style={{ ["--tint" as string]: GAMES.minecraft.tint }}
       >
         {outcome?.kind === "still-running" ? (
-          <StillRunning packName={outcome.packName} onClose={onClose} />
+          <StillRunning operationId={outcome.operationId} packName={outcome.packName} onClose={onClose} />
         ) : outcome?.kind === "report" ? (
           <Report report={outcome.report} onClose={onClose} />
         ) : null}
@@ -63,23 +46,23 @@ export function ApplyReportDialog({
   );
 }
 
-function StillRunning({ packName, onClose }: { packName: string; onClose: () => void }) {
+function StillRunning({ packName, operationId, onClose }: { packName: string; operationId?: string; onClose: () => void }) {
   return (
     <>
       <DialogHeader>
         {/* **No counts, and not destructive.** Nothing on this path knows how many mods
-            landed: the request was abandoned, the apply was not. The old wording —
+            landed or whether work continues. The old wording —
             "Installed 0 of 0 mods" in `text-destructive` — named a failure that had not
             happened on exactly the runs long enough to hit the timeout. */}
-        <DialogTitle>Still installing {packName}</DialogTitle>
+        <DialogTitle>Install result unconfirmed · {packName}</DialogTitle>
         <DialogDescription>
-          The connection timed out before the install finished.
+          The connection ended before a usable install result arrived.
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-3 pt-2 text-xs leading-relaxed text-muted-foreground">
         <p>
-          A large pack is up to 166 downloads one after another, which takes longer than the
-          browser will wait. The install is still running on the server.
+          The install may still be running on the server. Its result is unknown until the operation strip reports it.
+          {operationId && <> Operation {operationId}.</>}
         </p>
         <p>
           Watch the operation strip at the top of the page for the per-mod result, and

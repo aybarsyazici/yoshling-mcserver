@@ -23,6 +23,8 @@ import { mkdir, rename, rm, stat } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
 import { BadArchiveError } from "@/lib/backup-archive";
+import { gameDataPath } from "@/lib/game-data-path";
+import { backupSourcePath, copyTreeCounting, countTree } from "@/lib/backup-copy";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,12 +53,48 @@ export type McArchiveMember = (typeof MC_ARCHIVE_MEMBERS)[number];
 export async function archiveMembersPresent(root: string): Promise<McArchiveMember[]> {
   const out: McArchiveMember[] = [];
   for (const member of MC_ARCHIVE_MEMBERS) {
-    const present = await stat(path.join(root, member))
+    const admitted = await gameDataPath(root, member, { allowRoot: false });
+    const present = await stat(admitted)
       .then((s) => s.isDirectory())
-      .catch(() => false);
+      .catch((e: NodeJS.ErrnoException) => {
+        if (e.code === "ENOENT") return false;
+        throw e;
+      });
     if (present) out.push(member);
   }
   return out;
+}
+
+/**
+ * Admit every archive source before tar. Normally tar reads the canonical game root;
+ * only top-level aliases need a staging tree to retain world/mods member names and
+ * actual data rather than publish a rollback archive containing just their links.
+ */
+export async function prepareMinecraftArchive(root: string, stagingDir: string): Promise<{
+  root: string;
+  members: McArchiveMember[];
+  staged: boolean;
+}> {
+  const sourceRoot = await backupSourcePath(root, root);
+  const members = await archiveMembersPresent(sourceRoot);
+  const sources = await Promise.all(members.map(async member => {
+    const source = await gameDataPath(sourceRoot, member, { allowRoot: false });
+    await countTree(source, sourceRoot);
+    return { member, source };
+  }));
+  if (sources.every(({ member, source }) => source === path.join(sourceRoot, member))) {
+    return { root: sourceRoot, members, staged: false };
+  }
+  try {
+    await mkdir(stagingDir, { recursive: true });
+    for (const { member, source } of sources) {
+      await copyTreeCounting(source, path.join(stagingDir, member), () => {}, { sourceRoot });
+    }
+    return { root: stagingDir, members, staged: true };
+  } catch (e) {
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 /**
@@ -115,7 +153,10 @@ export async function restoreMinecraftArchive(opts: {
   timeoutMs?: number;
 }): Promise<{ replaced: McArchiveMember[] }> {
   const { archivePath, mcDir, timeoutMs } = opts;
-  const work = path.join(mcDir, `.restore-${Date.now()}`);
+  const root = await gameDataPath(mcDir, "");
+  const work = await gameDataPath(root, `.restore-${Date.now()}`, {
+    allowRoot: false, followFinalSymlink: false,
+  });
   await rm(work, { recursive: true, force: true });
   await mkdir(work, { recursive: true });
   try {
@@ -134,10 +175,17 @@ export async function restoreMinecraftArchive(opts: {
       );
     }
 
-    for (const member of present) {
-      const live = path.join(mcDir, member);
+    // Admit every source and destination before the first swap. Nested contained
+    // links stay inert, but no member may cross the configured game volume.
+    const replacements = await Promise.all(present.map(async member => {
+      const source = await gameDataPath(work, member, { allowRoot: false });
+      await countTree(source, root);
+      const live = await gameDataPath(root, member, { allowRoot: false, followFinalSymlink: false });
+      return { source, live };
+    }));
+    for (const { source, live } of replacements) {
       await rm(live, { recursive: true, force: true });
-      await rename(path.join(work, member), live);
+      await rename(source, live);
     }
     return { replaced: present };
   } finally {

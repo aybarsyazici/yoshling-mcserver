@@ -2,6 +2,9 @@ import { readdir, readFile, stat, writeFile } from "fs/promises";
 import path from "path";
 import { rconCommand, type RconTarget } from "@/lib/rcon";
 import { rconCommandLong } from "@/lib/rcon-long";
+import { gameDataPath } from "@/lib/game-data-path";
+import { assertFileWriteActive } from "@/lib/operations";
+import { assertFileRevision, readFileSnapshot, recordFileRevision } from "@/lib/file-revision";
 import {
   classifyLiveOptions,
   parseShowOptions,
@@ -39,23 +42,29 @@ const DEFAULT_SERVER_NAME = process.env.PZ_SERVER_NAME || "yoshling";
  * disk keeps things working if the server was ever started under another name.
  */
 export async function serverName(): Promise<string> {
-  const dir = path.join(PZ_DIR, "Server");
+  const dir = await gameDataPath(PZ_DIR, "Server");
+  const configured = await gameDataPath(PZ_DIR, path.join("Server", `${DEFAULT_SERVER_NAME}.ini`));
   try {
-    await stat(path.join(dir, `${DEFAULT_SERVER_NAME}.ini`));
+    await stat(configured);
     return DEFAULT_SERVER_NAME;
-  } catch {}
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
   try {
     const inis = (await readdir(dir)).filter((f) => f.endsWith(".ini"));
     if (inis.length > 0) {
       const pick = inis.includes("servertest.ini") ? "servertest.ini" : inis[0];
+      await gameDataPath(PZ_DIR, path.join("Server", pick));
       return pick.replace(/\.ini$/, "");
     }
-  } catch {}
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
   return DEFAULT_SERVER_NAME;
 }
 
 export async function iniPath(): Promise<string> {
-  return path.join(PZ_DIR, "Server", `${await serverName()}.ini`);
+  return gameDataPath(PZ_DIR, path.join("Server", `${await serverName()}.ini`));
 }
 
 /** Absolute paths of everything a backup has to capture. */
@@ -68,9 +77,9 @@ export async function savePaths(): Promise<{
   const name = await serverName();
   return {
     name,
-    world: path.join(PZ_DIR, "Saves", "Multiplayer", name),
-    db: path.join(PZ_DIR, "db", `${name}.db`),
-    serverDir: path.join(PZ_DIR, "Server"),
+    world: await gameDataPath(PZ_DIR, path.join("Saves", "Multiplayer", name)),
+    db: await gameDataPath(PZ_DIR, path.join("db", `${name}.db`)),
+    serverDir: await gameDataPath(PZ_DIR, "Server"),
   };
 }
 
@@ -200,7 +209,7 @@ function sanitizeValue(v: string): string {
 
 /** Module-local on purpose: callers want `readIniProperties`, not raw text. */
 async function readIni(): Promise<string> {
-  return readFile(await iniPath(), "utf-8");
+  return readFileSnapshot(await iniPath(), "utf-8");
 }
 
 export async function readIniProperties(): Promise<PzProperty[]> {
@@ -221,7 +230,13 @@ export async function updateIni(
   const file = await iniPath();
   const current = await readFile(file, "utf-8");
   const { text, ...result } = setIniValues(current, updates, opts);
+  await assertFileRevision(file);
+  assertFileWriteActive();
   await writeFile(file, text, "utf-8");
+  recordFileRevision(file, text);
+  if (await readFile(file, "utf-8") !== text) {
+    throw new Error("The Project Zomboid config did not read back as written");
+  }
   return result;
 }
 

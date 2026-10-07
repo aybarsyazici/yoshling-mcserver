@@ -88,7 +88,7 @@ export function worlds(
  *
  * `modsInstall` / `modsRemove` ride along for the same reason — they are keys of the same
  * `can` object, not a second concept. The two named fixtures are the shapes the two roles
- * that matter actually produce (`ALL_POWERS` = ADMIN or MOD, `NO_POWERS` = MEMBER), so a
+ * that matter actually produce (`ALL_POWERS` = ADMIN, `NO_POWERS` = MEMBER; MOD has the same world controls and `usersManage: false`), so a
  * surface test can state "what a MEMBER sees" without restating the permission table; a
  * test that wants an uneven combination spells it out inline, which is what
  * `tests/mods-surfaces.test.tsx` does to keep the two mods flags independent.
@@ -100,6 +100,7 @@ export const ALL_POWERS = {
   settings: true,
   modsInstall: true,
   modsRemove: true,
+  settingsEdit: true, consoleExecute: true, filesDelete: true, usersManage: true,
 };
 export const NO_POWERS = {
   start: false,
@@ -108,6 +109,7 @@ export const NO_POWERS = {
   settings: false,
   modsInstall: false,
   modsRemove: false,
+  settingsEdit: false, consoleExecute: false, filesDelete: false, usersManage: false,
 };
 
 /**

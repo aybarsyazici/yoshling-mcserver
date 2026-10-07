@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { chmod, chown, link, readFile, rename, stat, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { PZ_DIR, serverName } from "@/lib/zomboid";
+import { gameDataPath } from "@/lib/game-data-path";
+import { assertFileWriteActive } from "@/lib/operations";
+import { assertFileRevision, readFileSnapshot, recordFileRevision } from "@/lib/file-revision";
+import { resolveSafeFilePath } from "@/lib/file-guard";
 import {
   parseSandboxLua,
   setSandboxValues,
@@ -19,11 +23,11 @@ import {
  */
 
 export async function sandboxPath(): Promise<string> {
-  return path.join(PZ_DIR, "Server", `${await serverName()}_SandboxVars.lua`);
+  return gameDataPath(PZ_DIR, path.join("Server", `${await serverName()}_SandboxVars.lua`));
 }
 
 export async function readSandboxOptions(): Promise<SandboxOption[]> {
-  return parseSandboxLua(await readFile(await sandboxPath(), "utf-8"));
+  return parseSandboxLua(await readFileSnapshot(await sandboxPath(), "utf-8"));
 }
 
 /**
@@ -55,6 +59,11 @@ async function replaceFile(file: string, text: string): Promise<void> {
   // path meant two concurrent writes could rename each other's half-written file over the
   // live one.
   const tmp = `${file}.${randomUUID()}.tmp`;
+  // Check the sibling backup too; a suffix alone does not establish containment.
+  const backup = await resolveSafeFilePath(path.dirname(file), `${path.basename(file)}.bak`, {
+    boundaryRoot: PZ_DIR, allowMissing: true, followFinalSymlink: false,
+  });
+  if (!backup) throw new Error("Refusing a sandbox backup outside the configured game volume");
   let mode = 0o664;
   let uid: number | null = null;
   let gid: number | null = null;
@@ -79,7 +88,9 @@ async function replaceFile(file: string, text: string): Promise<void> {
     const bakTmp = `${file}.bak.${randomUUID()}`;
     try {
       await link(file, bakTmp);
-      await rename(bakTmp, `${file}.bak`);
+      await assertFileRevision(file);
+      assertFileWriteActive();
+      await rename(bakTmp, backup);
     } catch (e) {
       await unlink(bakTmp).catch(() => {});
       console.warn(`[sandbox] could not keep a .bak of ${file}: ${(e as Error).message}`);
@@ -88,9 +99,12 @@ async function replaceFile(file: string, text: string): Promise<void> {
     // No existing file: there is nothing to back up and nothing to match.
   }
 
-  await writeFile(tmp, text, { encoding: "utf-8", mode });
+  await writeFile(tmp, text, { encoding: "utf-8", mode, flag: "wx" });
   try {
+    await assertFileRevision(file);
+    assertFileWriteActive();
     await rename(tmp, file);
+    recordFileRevision(file, text);
   } catch (e) {
     await unlink(tmp).catch(() => {});
     throw e;

@@ -73,6 +73,8 @@ export async function planModpackInstall(input: {
   mods: PackMod[];
   /** `getProjectVersions(id, {loaders, game_versions})` with the server's loader/version bound. */
   resolveVersions: (modrinthId: string) => Promise<ModrinthVersion[]>;
+  resolvePinnedVersion?: (versionId: string) => Promise<ModrinthVersion>;
+  target?: { mcVersion: string; loader: string };
   /** `serverSideFor` — one shared decision with `/api/mods/install`, including its project fallback. */
   sideFor: (version: ModrinthVersion, modrinthId: string) => Promise<ServerSideVerdict>;
   /** Called once per mod before it is examined, for the operation's progress count. */
@@ -92,12 +94,22 @@ export async function planModpackInstall(input: {
         // `Content-Length` at download time — see `declaredFromHeaders`.
         items.push({ kind: "direct", mod, url: mod.downloadUrl });
       } else if (mod.modrinthId) {
-        const versions = await input.resolveVersions(mod.modrinthId);
-        const version = mod.versionId
-          ? versions.find((v) => v.id === mod.versionId)
-          : versions[0];
+        const versions = mod.versionId && input.resolvePinnedVersion
+          ? [await input.resolvePinnedVersion(mod.versionId)]
+          : await input.resolveVersions(mod.modrinthId);
+        const version = mod.versionId ? versions.find(v => v.id === mod.versionId) : versions[0];
         if (!version) {
           errors.push(`${mod.name}: no compatible version`);
+          continue;
+        }
+        if (input.target && (version.project_id !== mod.modrinthId ||
+            !version.game_versions.includes(input.target.mcVersion) ||
+            !version.loaders.some(loader => loader.toLowerCase() === input.target!.loader.toLowerCase()))) {
+          errors.push(`${mod.name}: the selected build does not match its recorded project/server target`);
+          continue;
+        }
+        if (input.target && (!Array.isArray(version.files) || !version.files.some(file => file?.filename && file?.url))) {
+          errors.push(`${mod.name}: the selected build has no downloadable jar`);
           continue;
         }
         const side = await input.sideFor(version, mod.modrinthId);

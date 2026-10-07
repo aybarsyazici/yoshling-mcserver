@@ -234,6 +234,19 @@ describe("perWorldCeiling", () => {
     expect(c.honestGb).toBe(13);
     expect(c.note).toContain("13 GB");
     expect(c.note).toMatch(/only server running/i);
+    expect(c.note).toContain("before each service's container limits");
+    expect(c.note).not.toContain("Any one server can be given");
+  });
+
+  it("subtracts neighbours from the host budget before applying a service's smaller cap", () => {
+    const c = perWorldCeiling({
+      maxGb: 13, serviceMaxGb: 4, forGame: "minecraft", running: ["zomboid"], memoryGb,
+    });
+    expect(c.honestGb).toBe(1);
+    const alone = perWorldCeiling({
+      maxGb: 13, serviceMaxGb: 4, forGame: "minecraft", running: [], memoryGb,
+    });
+    expect(alone.honestGb).toBe(4);
   });
 
   it("states it with nothing running at all", () => {

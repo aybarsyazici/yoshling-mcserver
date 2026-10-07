@@ -11,6 +11,7 @@ export type OperationKind =
   | "backup.restore"
   | "backup.delete"
   | "mods.apply"
+  | "mods.install"
   | "mods.update"
   | "world.upload"
   | "world.reset"
@@ -31,7 +32,7 @@ export type OperationKind =
  * declaring them all reproduces today's total exclusivity in one line instead of
  * reasoning about which world happens to be running.
  */
-export type OperationResource = "power" | `files:${GameId}`;
+export type OperationResource = "power" | `files:${GameId}` | "auth:whitelist";
 
 export type StepKind = "running" | "done" | "noop" | "failed";
 

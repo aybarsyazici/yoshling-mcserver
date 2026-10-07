@@ -1,9 +1,8 @@
 import { createHash } from "crypto";
 import { readFile } from "fs/promises";
-import path from "path";
+import { gameDataPath } from "@/lib/game-data-path";
 
 const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
-const PROPS_FILE = path.join(MC_DIR, "server.properties");
 
 /**
  * Minecraft identity: turning a username into the id the game actually matches on.
@@ -80,7 +79,7 @@ export function offlineUuid(name: string): string {
  */
 export async function readOnlineMode(): Promise<boolean> {
   try {
-    const content = await readFile(PROPS_FILE, "utf-8");
+    const content = await readFile(await gameDataPath(MC_DIR, "server.properties"), "utf-8");
     for (const line of content.split("\n")) {
       if (line.startsWith("#")) continue;
       const [key, ...rest] = line.split("=");

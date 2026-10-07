@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { fileLaneBusy } from "@/lib/operation-response";
+import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
 import { db } from "@/lib/db";
 import {
   SandboxStructureError,
@@ -13,7 +13,7 @@ import {
   scopeOf,
   type SandboxScope,
 } from "@/lib/sandbox-lua";
-import { readSandboxOptions, updateSandbox } from "@/lib/zomboid-sandbox";
+import { sandboxPath, readSandboxOptions, updateSandbox } from "@/lib/zomboid-sandbox";
 
 /**
  * Project Zomboid's sandbox options — `Server/<name>_SandboxVars.lua`.
@@ -65,32 +65,34 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const scope = parseScope(request);
-  try {
-    const options = await readSandboxOptions();
-    const properties = options
-      .filter((o) => o.name !== VERSION_KEY && !isPresetOnly(o.name) && scopeOf(o) === scope)
-      .map((o) => ({
-        name: o.name,
-        value: o.value,
-        help: isCreationOnly(o.name)
-          ? [o.help, CREATION_ONLY_NOTE].filter(Boolean).join(" ")
-          : o.help,
-        group: sandboxGroupOf(o.name),
-        ...(o.min !== undefined ? { min: o.min, max: o.max } : {}),
-        ...(o.choices ? { choices: o.choices } : {}),
-      }));
-    return NextResponse.json({ properties, scope });
-  } catch {
-    return NextResponse.json(
-      {
-        properties: [],
-        warning:
-          "Project Zomboid hasn't written its sandbox file yet — start the server once to generate it.",
-      },
-      { status: 200 }
-    );
-  }
+  return revisionRead(() => sandboxPath(), async () => {
+    const scope = parseScope(request);
+    try {
+      const options = await readSandboxOptions();
+      const properties = options
+        .filter((o) => o.name !== VERSION_KEY && !isPresetOnly(o.name) && scopeOf(o) === scope)
+        .map((o) => ({
+          name: o.name,
+          value: o.value,
+          help: isCreationOnly(o.name)
+            ? [o.help, CREATION_ONLY_NOTE].filter(Boolean).join(" ")
+            : o.help,
+          group: sandboxGroupOf(o.name),
+          ...(o.min !== undefined ? { min: o.min, max: o.max } : {}),
+          ...(o.choices ? { choices: o.choices } : {}),
+        }));
+      return NextResponse.json({ properties, scope });
+    } catch {
+      return NextResponse.json(
+        {
+          properties: [],
+          warning:
+            "Project Zomboid hasn't written its sandbox file yet — start the server once to generate it.",
+        },
+        { status: 200 }
+      );
+    }
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -103,98 +105,99 @@ export async function PUT(request: NextRequest) {
 
   // Same guard as the .ini writer: a restore holds this world's files for minutes and
   // would overwrite whatever was saved through it while the page toasted "Saved".
-  const laneBusy = fileLaneBusy("zomboid");
-  if (laneBusy) return laneBusy;
+  return withGameFileWrite("zomboid", async () => {
 
-  const body = await request.json().catch(() => null);
-  const raw: Record<string, unknown> = body?.updates ?? {};
-  const updates: Record<string, string> = {};
-  for (const [name, value] of Object.entries(raw)) updates[name] = String(value);
-  if (Object.keys(updates).length === 0) {
-    return NextResponse.json({ error: "No settings provided" }, { status: 400 });
-  }
-
-  let outcome;
-  try {
-    outcome = await updateSandbox(updates);
-  } catch (e) {
-    // Three different failures used to collapse into one sentence that was false in both
-    // halves. `updateSandbox` reads, validates, writes a temp file, renames, and reads back —
-    // so a bare catch answered "Couldn't read the sandbox file — start Project Zomboid once
-    // first." for an ENOSPC on the temp write, an EXDEV on the rename, or a failed read-back
-    // **after the file had already been replaced**, with no activity row. Telling someone to
-    // start the server when the real problem is a full disk, and implying nothing was
-    // written when it was, is the defect class with the sign flipped.
-    const err = e as NodeJS.ErrnoException;
-    if (err.code === "ENOENT") {
-      return NextResponse.json(
-        { error: "There is no sandbox file yet — start Project Zomboid once so it writes one." },
-        { status: 404 }
-      );
+    const body = await request.json().catch(() => null);
+    const raw: Record<string, unknown> = body?.updates ?? {};
+    const updates: Record<string, string> = {};
+    for (const [name, value] of Object.entries(raw)) updates[name] = String(value);
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: "No settings provided" }, { status: 400 });
     }
-    if (err instanceof SandboxStructureError) {
-      // The guard that refuses to rewrite a partial read. Nothing was written.
+
+    let outcome;
+    try {
+      outcome = await updateSandbox(updates);
+    } catch (e) {
+      // Three different failures used to collapse into one sentence that was false in both
+      // halves. `updateSandbox` reads, validates, writes a temp file, renames, and reads back —
+      // so a bare catch answered "Couldn't read the sandbox file — start Project Zomboid once
+      // first." for an ENOSPC on the temp write, an EXDEV on the rename, or a failed read-back
+      // **after the file had already been replaced**, with no activity row. Telling someone to
+      // start the server when the real problem is a full disk, and implying nothing was
+      // written when it was, is the defect class with the sign flipped.
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") {
+        return NextResponse.json(
+          { error: "There is no sandbox file yet — start Project Zomboid once so it writes one." },
+          { status: 404 }
+        );
+      }
+      if (err instanceof SandboxStructureError) {
+        // The guard that refuses to rewrite a partial read. Nothing was written.
+        return NextResponse.json(
+          {
+            error:
+              `The sandbox file did not look complete, so nothing was written (${err.message}). ` +
+              `This usually means the server was rewriting it at that moment — try again.`,
+          },
+          { status: 409 }
+        );
+      }
       return NextResponse.json(
         {
           error:
-            `The sandbox file did not look complete, so nothing was written (${err.message}). ` +
-            `This usually means the server was rewriting it at that moment — try again.`,
+            `Saving the sandbox file failed: ${err.message}. The file may be unchanged or ` +
+            `partly written — check Server/ in the file browser, and the .bak beside it.`,
         },
-        { status: 409 }
+        { status: 500 }
       );
     }
-    return NextResponse.json(
-      {
-        error:
-          `Saving the sandbox file failed: ${err.message}. The file may be unchanged or ` +
-          `partly written — check Server/ in the file browser, and the .bak beside it.`,
-      },
-      { status: 500 }
-    );
-  }
 
-  // A refusal means nothing was written, so say what was wrong rather than returning a
-  // partial `applied` the panel would have to narrate. `config-panel.tsx` shows
-  // `data.error` as-is on a non-2xx and leaves the form's pending edits alone.
-  if (outcome.rejected.length > 0) {
-    return NextResponse.json(
-      {
-        error: `Nothing was saved. ${outcome.rejected.map((r) => r.error).join(" ")}`,
-        rejected: outcome.rejected,
-      },
-      { status: 400 }
-    );
-  }
+    // A refusal means nothing was written, so say what was wrong rather than returning a
+    // partial `applied` the panel would have to narrate. `config-panel.tsx` shows
+    // `data.error` as-is on a non-2xx and leaves the form's pending edits alone.
+    if (outcome.rejected.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Nothing was saved. ${outcome.rejected.map((r) => r.error).join(" ")}`,
+          rejected: outcome.rejected,
+        },
+        { status: 400 }
+      );
+    }
 
-  // Written, then read back, and the read-back disagreed. That should be impossible —
-  // it means something else rewrote the file between the two — so it is a 500 naming
-  // the options rather than a success message that happens to be false.
-  if (outcome.unlanded.length > 0) {
-    return NextResponse.json(
-      {
-        error: `The file was written but ${outcome.unlanded
-          .map((u) => `${u.name} reads back as ${u.found}, not ${u.wanted}`)
-          .join("; ")}. Check Server/<name>_SandboxVars.lua before trying again.`,
-        applied: outcome.applied,
-        unlanded: outcome.unlanded,
-      },
-      { status: 500 }
-    );
-  }
+    // Written, then read back, and the read-back disagreed. That should be impossible —
+    // it means something else rewrote the file between the two — so it is a 500 naming
+    // the options rather than a success message that happens to be false.
+    if (outcome.unlanded.length > 0) {
+      return NextResponse.json(
+        {
+          error: `The file was written but ${outcome.unlanded
+            .map((u) => `${u.name} reads back as ${u.found}, not ${u.wanted}`)
+            .join("; ")}. Check Server/<name>_SandboxVars.lua before trying again.`,
+          applied: outcome.applied,
+          unlanded: outcome.unlanded,
+        },
+        { status: 500 }
+      );
+    }
 
-  try {
-    await db.activity.create({
-      data: {
-        userId: session.user.id,
-        action: "edit_file",
-        details: JSON.stringify({
-          game: "zomboid",
-          file: "SandboxVars.lua",
-          count: outcome.applied.length,
-        }),
-      },
-    });
-  } catch {}
+    try {
+      await db.activity.create({
+        data: {
+          userId: session.user.id,
+          action: "edit_file",
+          details: JSON.stringify({
+            game: "zomboid",
+            file: "SandboxVars.lua",
+            count: outcome.applied.length,
+          }),
+        },
+      });
+    } catch {}
 
-  return NextResponse.json({ success: true, applied: outcome.applied });
+    return NextResponse.json({ success: true, applied: outcome.applied });
+
+  }, { request, file: () => sandboxPath() });
 }

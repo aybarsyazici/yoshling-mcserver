@@ -42,3 +42,8 @@ export const MAX_WORLD_UPLOAD_BYTES = 2_000_000_000;
  * not the user's.
  */
 export const MAX_WORLD_UPLOAD_LABEL = "1.86 GiB";
+
+/** Separate from compressed transfer size: extraction must leave working disk space. */
+export const MAX_WORLD_EXPANDED_BYTES = 8 * 1024 ** 3;
+export const MAX_WORLD_EXPANDED_ENTRIES = 250_000;
+export const WORLD_UPLOAD_DISK_RESERVE_BYTES = 1024 ** 3;

@@ -1,6 +1,8 @@
 const MODRINTH_BASE = "https://api.modrinth.com/v2";
 
 export interface ModrinthProject {
+  /** Project detail uses `id`; search hits use `project_id`. */
+  id?: string;
   slug: string;
   title: string;
   description: string;
@@ -75,6 +77,7 @@ export interface ModrinthDependency {
   version_id: string | null;
   project_id: string | null;
   dependency_type: "required" | "optional" | "incompatible" | "embedded";
+  file_name?: string | null;
 }
 
 export async function searchMods(params: {
@@ -158,10 +161,15 @@ export async function getProjectVersions(
   return res.json();
 }
 
-// `getVersion(versionId)` — GET /version/<id> — used to sit here with no caller.
-// Everything that needs a version picks one out of `getProjectVersions`, which is
-// already filtered by loader and game version, so a single-version fetch by id had
-// nowhere to be used: the id only ever comes *from* that list.
+/** Required dependencies may identify a build without supplying its project id. */
+export async function getVersion(versionId: string): Promise<ModrinthVersion> {
+  const res = await fetch(`${MODRINTH_BASE}/version/${encodeURIComponent(versionId)}`, {
+    headers: { "User-Agent": "minecraft-yoshling/1.0.0 (server-manager)" },
+    next: { revalidate: 300 },
+  });
+  if (!res.ok) throw new Error(`Modrinth getVersion failed: ${res.status}`);
+  return res.json();
+}
 
 export function buildFacets(params: {
   mcVersion?: string;
