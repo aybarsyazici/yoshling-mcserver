@@ -17,6 +17,7 @@ model User {
   // ("minecraft,7dtd,zomboid"). Empty = no access yet, an admin has to grant it.
   // ADMIN ignores this column and always sees every world.
   games      String     @default("")
+  minecraftTourDone Boolean @default(false)
   createdAt  DateTime   @default(now())
   activities Activity[]
 }

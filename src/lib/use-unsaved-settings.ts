@@ -30,6 +30,12 @@ function appLinkClick(event: MouseEvent) {
   }
 }
 
+/** Read-only admission for guided navigation; a tour must not discard existing drafts. */
+export function hasUnsavedSettings(): boolean { return drafts.size > 0; }
+export function confirmUnsavedSettingsNavigation(): boolean {
+  return !hasUnsavedSettings() || window.confirm(LEAVE_WARNING);
+}
+
 /** Protect browser unloads and ordinary same-tab app links, shared across all settings panels.
  * Client-side Back/Forward and programmatic routing need routing-level integration.
  */

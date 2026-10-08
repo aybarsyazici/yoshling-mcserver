@@ -1,0 +1,37 @@
+.driver-popover.minecraft-tour-popover {
+  color: var(--popover-foreground);
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 16px 64px #0006;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  min-width: min(18rem, calc(100vw - 2rem));
+  max-width: min(23rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  padding: 1.25rem;
+}
+.minecraft-tour-popover .driver-popover-title { padding-right: 1.75rem; color: var(--foreground); font-size: 1.1rem; }
+.minecraft-tour-popover .driver-popover-description { color: var(--popover-foreground); font-size: .875rem; line-height: 1.65; overflow-wrap: anywhere; }
+.minecraft-tour-popover .driver-popover-close-btn { color: var(--foreground); top: .5rem; right: .5rem; min-height: 2.25rem; min-width: 2.25rem; }
+.minecraft-tour-popover .driver-popover-footer { flex-wrap: wrap; gap: .75rem; text-align: left; }
+.minecraft-tour-popover .driver-popover-progress-text { color: var(--foreground); font-size: .75rem; }
+.minecraft-tour-popover .driver-popover-navigation-btns { flex-wrap: wrap; gap: .5rem; }
+.minecraft-tour-popover .driver-popover-footer-btn,
+.minecraft-tour-popover .minecraft-tour-skip {
+  color: var(--foreground); background: var(--background); border: 1px solid var(--border);
+  border-radius: .6rem; padding: .55rem .75rem; min-height: 2.5rem; font: inherit; font-size: .8rem; cursor: pointer;
+}
+.minecraft-tour-popover .driver-popover-next-btn { background: var(--foreground); color: var(--background); border-color: var(--foreground); }
+.minecraft-tour-popover .driver-popover-footer-btn:hover,
+.minecraft-tour-popover .minecraft-tour-skip:hover { background: var(--muted); color: var(--foreground); }
+.minecraft-tour-popover button:focus-visible { outline: 2px solid var(--foreground); outline-offset: 3px; }
+.minecraft-tour-popover .minecraft-tour-skip { width: 100%; margin-top: .75rem; background: transparent; }
+.minecraft-tour-popover .driver-popover-arrow { border-color: var(--popover); }
+.minecraft-tour-popover .driver-popover-arrow-side-left { border-top-color: transparent; border-bottom-color: transparent; border-right-color: transparent; }
+.minecraft-tour-popover .driver-popover-arrow-side-right { border-top-color: transparent; border-bottom-color: transparent; border-left-color: transparent; }
+.minecraft-tour-popover .driver-popover-arrow-side-top { border-bottom-color: transparent; border-left-color: transparent; border-right-color: transparent; }
+.minecraft-tour-popover .driver-popover-arrow-side-bottom { border-top-color: transparent; border-left-color: transparent; border-right-color: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .driver-overlay, .driver-popover { animation: none !important; transition: none !important; }
+}

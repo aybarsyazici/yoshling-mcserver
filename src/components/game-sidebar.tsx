@@ -23,7 +23,6 @@ import {
   LogOut,
   ChevronLeft,
   Menu,
-  BookOpen,
 } from "lucide-react";
 
 interface NavItem {
@@ -51,7 +50,6 @@ function navFor(game: GameId, canSettings: boolean): NavItem[] {
     { name: "Server", href: `${base}/server`, icon: Server },
     { name: "Backups", href: `${base}/backups`, icon: Archive },
     ...(canSettings ? [{ name: "Settings", href: `${base}/settings`, icon: Settings }] : []),
-    ...(game === "minecraft" ? [{ name: "Minecraft guide", href: `${base}/guide`, icon: BookOpen }] : []),
   ];
 }
 

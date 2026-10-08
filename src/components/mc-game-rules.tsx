@@ -3,6 +3,7 @@
 import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
 
+import { useUnsavedSettings } from "@/lib/use-unsaved-settings";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Check, RotateCw, Search } from "lucide-react";
@@ -76,6 +77,7 @@ export function McGameRules({ tint }: { tint: string }) {
   /** Draft text for the int fields only; booleans write straight through. */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState("");
+  useUnsavedSettings(Object.entries(drafts).some(([id, value]) => values !== null && value !== values[id]));
 
   /**
    * The PUT takes the `files:minecraft` lane, and a power operation declares every file

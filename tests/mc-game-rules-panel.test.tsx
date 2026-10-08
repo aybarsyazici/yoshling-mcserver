@@ -18,6 +18,7 @@
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { hasUnsavedSettings } from "@/lib/use-unsaved-settings";
 import { McGameRules } from "@/components/mc-game-rules";
 import { gamesState, installBrowserStubs } from "./helpers/dom";
 
@@ -195,5 +196,15 @@ describe("the error box", () => {
     // their post-condition; this one did not.
     await waitFor(() => expect(screen.queryByText(/exactly 4096 characters/)).not.toBeNull(), WAIT);
     expect(screen.queryByText(/mob_griefing/)).not.toBeNull();
+  });
+});
+
+describe("tour entry preserves a numeric rule draft", () => {
+  it("keeps a typed value registered until it is reverted without sending a command", async () => {
+    await panel({ body: { rules: [{ id: "random_tick_speed", value: "3" }], unread: [], discovered: 1 } });
+    const input = await screen.findByDisplayValue("3"); expect(hasUnsavedSettings()).toBe(false);
+    fireEvent.change(input, { target: { value: "5" } }); expect(hasUnsavedSettings()).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.every(([, init]) => init?.method !== "PUT")).toBe(true);
+    fireEvent.change(input, { target: { value: "3" } }); expect(hasUnsavedSettings()).toBe(false);
   });
 });

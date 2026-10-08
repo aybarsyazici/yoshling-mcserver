@@ -189,7 +189,7 @@ export function GameControls({ game }: { game: GameId }) {
   const players = snap?.players;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[1.4fr_1fr]" style={{ ["--tint" as string]: meta.tint }}>
+    <div data-minecraft-tour={game === "minecraft" ? "server-controls" : undefined} className="grid gap-4 md:grid-cols-[1.4fr_1fr]" style={{ ["--tint" as string]: meta.tint }}>
       <StatusFreshness lastSuccessAt={lastSuccessAt} pollError={pollError} />
       {/* The box is running more than one world. One sentence, from `coResidency()`, so
           this page, `/{game}` and `/home` cannot word the same fact three ways — the

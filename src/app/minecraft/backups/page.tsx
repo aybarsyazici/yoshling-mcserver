@@ -10,12 +10,12 @@ export default function MinecraftBackupsPage() {
   const tint = GAMES.minecraft.tint;
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: tint }}>
-      <SectionHeading
+      <div data-minecraft-tour="backups"><SectionHeading
         eyebrow="Minecraft · Backups"
         title="Backups"
         sub="Snapshot your world and roll back with one click."
         tint={tint}
-      />
+      /></div>
       <MinecraftProfileContext />
       <GameBackups game="minecraft" />
       <PhotoFooter src="/simba.jpg" />

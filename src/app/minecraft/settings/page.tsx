@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useUnsavedSettings } from "@/lib/use-unsaved-settings";
 import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
 import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { MinecraftProfileContext } from "@/components/minecraft-profile-context";
@@ -147,15 +148,23 @@ export default function SettingsPage() {
   const [propsReady, setPropsReady] = useState(false);
   const [propsError, setPropsError] = useState<string | null>(null);
   const [ops, setOps] = useState<OpEntry[] | null>(null);
+  const [opsBaseline, setOpsBaseline] = useState<string | null>(null);
   const [opsLoading, setOpsLoading] = useState(true);
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsSaving, setOpsSaving] = useState(false);
   const [newOp, setNewOp] = useState("");
   const [whitelist, setWhitelist] = useState<WhitelistEntry[] | null>(null);
+  const [whitelistBaseline, setWhitelistBaseline] = useState<string | null>(null);
   const [wlLoading, setWlLoading] = useState(true);
   const [wlError, setWlError] = useState<string | null>(null);
   const [wlSaving, setWlSaving] = useState(false);
   const [newWl, setNewWl] = useState("");
+  useUnsavedSettings(
+    (!!savedConfig && (config.mcVersion !== savedConfig.mcVersion || config.modLoader !== savedConfig.modLoader)) || dirtyProps.size > 0 ||
+    (ops !== null && opsBaseline !== null && JSON.stringify(ops) !== opsBaseline) ||
+    (whitelist !== null && whitelistBaseline !== null && JSON.stringify(whitelist) !== whitelistBaseline) ||
+    newOp.trim().length > 0 || newWl.trim().length > 0
+  );
 
   const loadConfig = useCallback(() => {
     return readSettings("/api/settings", "Could not load the server version.", request).then(({ data }) => {
@@ -187,7 +196,7 @@ export default function SettingsPage() {
       )) {
         throw new Error("The operators response is incomplete. Reload before editing.");
       }
-      setOps(data as OpEntry[]); setOpsRevision(revision);
+      setOps(data as OpEntry[]); setOpsBaseline(JSON.stringify(data)); setOpsRevision(revision);
       setOpsError(null);
     }).catch((error) => {
       setOps(null);
@@ -202,7 +211,7 @@ export default function SettingsPage() {
       if (!isNameList(data)) {
         throw new Error("The Minecraft whitelist response is incomplete. Reload before editing.");
       }
-      setWhitelist(data); setWlRevision(revision);
+      setWhitelist(data); setWhitelistBaseline(JSON.stringify(data)); setWlRevision(revision);
       setWlError(null);
     }).catch((error) => {
       setWhitelist(null);
@@ -376,12 +385,12 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: GAMES.minecraft.tint }}>
-      <SectionHeading
+      <div data-minecraft-tour="settings"><SectionHeading
         eyebrow="Minecraft · Settings"
         title="Server settings"
         sub="Version, resources, game rules, operators, the whitelist, and bans."
         tint={GAMES.minecraft.tint}
-      />
+      /></div>
 
       <MinecraftProfileContext />
       {context.contextError && <p role="alert">{context.contextError}</p>}

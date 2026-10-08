@@ -267,12 +267,13 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   return (
-    <div className="space-y-5" style={{ ["--tint" as string]: meta.tint }}>
+    <div data-minecraft-tour={game === "minecraft" ? "backup-list" : undefined} className="space-y-5" style={{ ["--tint" as string]: meta.tint }}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-muted-foreground">
           {describes} Take one before switching worlds, changing settings, or installing updates — then you can roll back with one click.
         </p>
         <Button
+          data-minecraft-tour={game === "minecraft" ? "backup-create" : undefined}
           onClick={create}
           disabled={!context.contextReady || !can.settingsEdit || creating || locked}
           className="disabled:cursor-not-allowed"

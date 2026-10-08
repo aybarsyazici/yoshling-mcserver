@@ -214,7 +214,7 @@ export function InstalledMods() {
   );
 
   return (
-    <div className="space-y-4" style={{ ["--tint" as string]: TINT }}>
+    <div data-minecraft-tour="mods-installed" className="space-y-4" style={{ ["--tint" as string]: TINT }}>
       {/* ── the pack, as server state ───────────────────────────────────────── */}
       <section
         data-pack-header

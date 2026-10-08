@@ -25,9 +25,9 @@ export default function MinecraftServerPage() {
 
   return (
     <div className="space-y-6" style={{ ["--tint" as string]: tint }}>
-      <SectionHeading eyebrow="Minecraft · Server" title="Server control" sub="Power, monitor, browse files, and run console commands." tint={tint} />
+      <div data-minecraft-tour="server"><SectionHeading eyebrow="Minecraft · Server" title="Server control" sub="Power, monitor, browse files, and run console commands." tint={tint} /></div>
 
-      <TabBar tabs={TABS.filter((t) => t.value !== "files" || can.settings)} value={tab} onChange={setTab} tint={tint} />
+      <div data-minecraft-tour="server-tabs"><TabBar tabs={TABS.filter((t) => t.value !== "files" || can.settings)} value={tab} onChange={setTab} tint={tint} /></div>
 
       {!can.settings && <p className="text-xs text-muted-foreground">Raw server files require settings access.</p>}
       <div className="min-h-[300px]">

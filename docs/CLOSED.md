@@ -932,3 +932,60 @@ certificate mismatch; no bypass was attempted. Authenticated browser walkthrough
 complete mobile/keyboard/contrast coverage and real game joins remain outside this
 verification. `CLAUDE.md` stays at 164 lines / 2,191 words / 16,980 bytes; dated
 evidence is retained here instead of expanding the main memory file.
+
+## 2026-10-08 — Replace the handbook with Minecraft spotlight onboarding
+
+At the user's request, retired the chapter guide, its browser checklist and its
+old tests. Added a persistent Minecraft-layout Driver.js 1.9.0 tour that dims the
+screen, highlights actual targets and navigates among the real Minecraft pages.
+A **Take tour** button remains on every Minecraft page. The old guide URL now
+redirects to explicit replay. First entry depends on verified own-user database
+state; closing for now leaves it unfinished, while Finish/Skip acknowledge it.
+Replaying never resets the flag. Superseded guide instructions moved to
+`MEMORY-HISTORY.md`; current behavior is in `MINECRAFT-TOUR.md`.
+
+Completion is a one-way, transactional, read-back User preference. Both API calls
+pin the expected account before consuming bodies or writing, so an old tab after
+a cookie/account switch cannot complete another user's onboarding. Missing or
+unconfirmed preferences do not auto-start; lost writes are reconciled. The tour
+waits for destinations/targets, respects permissions, drafts and existing dialogs,
+blocks pointer/keyboard activation of app controls, and cleans up temporary inert,
+focus, listeners and asynchronous work. Active screenshot pairing also takes
+precedence. Existing Minecraft Settings, numeric game-rule and memory drafts are
+now registered with the shared navigation guard so guided navigation preserves them.
+
+Verification from restored source:
+
+- **190 files / 3,285 tests passed**, Node 22 types and normal build/artifact guard
+  passed. Lint: **0 errors / 7 existing warnings**, unchanged from baseline.
+  The first baseline attempt had one pack-fixture timeout under concurrent build
+  load; isolated and full-alone retries passed without source changes.
+- Tour scope: **32 real SQLite cases**, **34 provider flows + 12 request/parser
+  cases + 3 actual Driver.js DOM smoke cases**, and **9 draft integration cases**.
+  All **60 guard mutants** failed assertions and were restored (17 backend,
+  38 core/protocol, five actual draft guards).
+- Offline native Chromium previews used the actual installed Driver.js and tour
+  CSS at 1280×800 and 375×812 in light/dark themes. Popovers stayed within each
+  viewport, and highlighted control activation remained zero. These are isolated
+  theme/interaction previews, not an authenticated full-website trial.
+
+Applied `20261008170000_add_minecraft_tour_done` manually before deploying the
+regenerated client. Consistent `VACUUM INTO` snapshots were independently checked
+and copied into `/root/yoshling-deploy-backup/before-tour-20261008/` as
+`yoshling.db` and `yoshling-final.db`, both mode 0600, 274,432 bytes, SHA256
+`99a4d5d2f9c54b6c8471d079dc65257afd642e912d9104b8924e01a20f80c04d`.
+The live DB still matched the final snapshot when the write transaction began.
+
+Readback verified `User.minecraftTourDone BOOLEAN NOT NULL DEFAULT false`, all six
+existing flags false, and unchanged original user columns with fingerprint
+`0bf9bbcc927a2c511727fc0f88d09fee8f1a3033d348881518d39d4f17cbfad0`.
+All 11 other tables retained their row-content hashes. Integrity remained `ok` and
+foreign-key check empty. The old client remains compatible; do not replay the ALTER.
+
+The running pre-tour web image again lacked Docker image metadata. Preserved its
+rootfs as `before-tour-20261008/web-rootfs.tar`, mode 0600, SHA256
+`2fa80530f13f6e8b929dde773c79f90c7ba53536eb4810950d55053afafc1d59`, imported as
+`yoshling-web:rollback-04b0fec-before-tour-20261008`, image
+`sha256:1fbda781b5f7dadece2876bc3239e3f65874ad8ca0dbeb9ca8a27527f7a015a5`.
+Server/BUILD_ID hashes matched and artifact guard passed. This is a rollback
+artifact; no restore or game lifecycle exercise occurred.

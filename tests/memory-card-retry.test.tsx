@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { hasUnsavedSettings } from "@/lib/use-unsaved-settings";
 import { MemoryCard } from "@/components/memory-card";
 
 const f = vi.hoisted(() => ({ edit: true, success: vi.fn(), error: vi.fn(), info: vi.fn() }));
@@ -12,13 +13,13 @@ const state = { supported: true, hostGb: 16, configuredGb: 12, liveGb: 8 as numb
 beforeEach(() => { f.edit = true; f.success.mockClear(); f.error.mockClear(); f.info.mockClear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-function load(overrides = {}) {
+function load(overrides = {}, game: "minecraft" | "zomboid" = "zomboid") {
   const initial = { ...state, ...overrides };
   const fetcher = vi.fn(async (_url: string, options?: RequestInit) => new Response(JSON.stringify(
     options?.method === "PUT" ? { ...initial, liveGb: initial.configuredGb, applied: true, running: true } : initial
   ), { status: 200, headers: { "Content-Type": "application/json" } }));
   vi.stubGlobal("fetch", fetcher);
-  render(<MemoryCard game="zomboid" tint="var(--pz)" />);
+  render(<MemoryCard game={game} tint={game === "minecraft" ? "var(--mc)" : "var(--pz)"} />);
   return fetcher;
 }
 
@@ -50,5 +51,14 @@ describe("memory drift retry affordance", () => {
     await screen.findByText(/Verified on the stopped container/);
     expect(screen.queryByRole("button", { name: "Save memory" })).toBeNull();
     expect(screen.queryByRole("button", { name: "12G" })).toBeNull();
+  });
+});
+
+describe("tour entry preserves a Minecraft heap draft", () => {
+  it("registers only the changed selection and performs no write", async () => {
+    const fetcher = load({}, "minecraft"); await screen.findByRole("button", { name: "12G" }); expect(hasUnsavedSettings()).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "8G" })); expect(hasUnsavedSettings()).toBe(true);
+    expect(fetcher.mock.calls.every(([, init]) => init?.method !== "PUT")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "12G" })); expect(hasUnsavedSettings()).toBe(false);
   });
 });

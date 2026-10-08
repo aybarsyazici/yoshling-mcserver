@@ -16,10 +16,12 @@ export async function DashShell({
   game,
   access,
   children,
+  toolbar,
 }: {
   game: GameId;
   access: GameId[];
   children: React.ReactNode;
+  toolbar?: React.ReactNode;
 }) {
   const meta = GAMES[game];
   // Seeded server-side so a reload in the middle of the operation you are anxious
@@ -36,9 +38,9 @@ export async function DashShell({
             invisible from anywhere else, which read as nothing happening. The strip
             pushes content down rather than floating, because `<main>` is the thing
             that scrolls and the sidebar is off-canvas below `lg`. */}
-        <OperationLedger />
+        <div data-minecraft-tour={game === "minecraft" ? "operation-strip" : undefined}><OperationLedger /></div>
         <main className="flex-1 overflow-y-auto px-4 py-6 max-lg:pt-14 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-6xl">{children}</div>
+          <div className="mx-auto max-w-6xl">{toolbar && <div className="mb-4 flex justify-end">{toolbar}</div>}{children}</div>
         </main>
         <footer className="flex-shrink-0 border-t border-border/50 bg-background/60 py-3 text-center text-xs text-muted-foreground backdrop-blur">
           created by{" "}

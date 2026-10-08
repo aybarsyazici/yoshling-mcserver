@@ -9,7 +9,7 @@ Update documentation with each meaningful change. State what was verified locall
 | Work | Read |
 | --- | --- |
 | Long operations, status, toasts, background work | [OPERATIONS.md](docs/OPERATIONS.md) |
-| Minecraft user tutorial | [MINECRAFT-GUIDE.md](docs/MINECRAFT-GUIDE.md) |
+| Minecraft onboarding tour | [MINECRAFT-TOUR.md](docs/MINECRAFT-TOUR.md) |
 | Frontend readiness, permissions, stale data and result handling | [FRONTEND.md](docs/FRONTEND.md) |
 | Configuration and configured versus live values | [SETTINGS.md](docs/SETTINGS.md) |
 | Discord identity, invitations, revocation and legacy preparation | [AUTHENTICATION.md](docs/AUTHENTICATION.md) |
@@ -58,7 +58,7 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 - `src/lib/upload-tree-guard.ts`: rejects extracted links and special files before upload placement.
 - Prisma client is generated into gitignored `src/generated/prisma`; schema is `prisma/schema.prisma`.
 
-Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft `/minecraft/guide`, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
+Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft spotlight onboarding, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
 
 ## Required safety and success rules
 
@@ -78,7 +78,7 @@ Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/set
 
 ## Configuration and data
 
-Minecraft target, heap and profile mount/Java/loader selectors, and PZ `MAX_MEMORY`, are UI-owned `.env` values referenced by Compose. `writeEnvFile` uses an atomic rename, mode 0600 and one `.env.bak`; only ENOENT means an absent file. `.env` is gitignored and contains production secrets. Profile deployment requires the additive schema migration first; never migrate or adopt on boot.
+Minecraft target, heap and profile mount/Java/loader selectors, and PZ `MAX_MEMORY`, are UI-owned `.env` values referenced by Compose. `writeEnvFile` uses an atomic rename, mode 0600 and one `.env.bak`; only ENOENT means an absent file. `.env` is gitignored and contains production secrets. Profile and tour deployments require their reviewed additive schema migrations first; never migrate or adopt on boot.
 
 Compose itself is git-owned. The 7DTD update route temporarily patches its literal `START_MODE` and restores it; deploy refuses uncommitted host Compose edits. Heap limits must respect both the host budget and each container's limit, with native overhead and PZ's `MIN_MEMORY` floor. 7DTD is native Unity and has no JVM heap setting.
 

@@ -119,10 +119,14 @@ The 7DTD backend maps stable to Steam public and reads the configured Compose br
 Regression evidence lives in `CLOSED.md`. Full mobile, keyboard and contrast coverage and
 real client joins remain separate validation; component fixtures are not live gameplay.
 
-## Minecraft walkthrough
+## Minecraft onboarding tour
 
-The Profiles welcome card and Minecraft sidebar open `/minecraft/guide`. Eight
-short chapters explain the actual screens; reading progress is a versioned
-preference per user in this browser. Navigation uses ordinary links with the
-existing settings-draft guard. The guide submits no game actions and distinguishes
-member reading/joining from manager controls. See [MINECRAFT-GUIDE.md](MINECRAFT-GUIDE.md).
+A persistent Minecraft layout provider owns the Driver.js spotlight overlay,
+route transitions and account-scoped database completion. A new user's first
+Minecraft visit starts the tour after verified preference/readiness. Every
+Minecraft screen has a **Take tour** button. Finishing or explicitly skipping
+saves the user's preference with readback; closing for now leaves it unfinished.
+The tour highlights actual controls but blocks feature activation, honors drafts
+and permission changes, and waits for route targets before advancing. The old
+`/minecraft/guide` URL redirects to the replay entry. Current behavior and manual
+schema rollout are in [MINECRAFT-TOUR.md](MINECRAFT-TOUR.md).

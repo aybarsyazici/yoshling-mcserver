@@ -71,7 +71,7 @@ beforeEach(async () => {
   root = await realpath(await mkdtemp(path.join(os.tmpdir(), "profile-overview-"))); state.root = root; await mkdir(path.join(root, "game"));
   vi.stubEnv("MC_SERVER_DIR", path.join(root, "game")); vi.stubEnv("MC_PROFILE_OVERVIEWS_DIR", path.join(root, "overviews")); vi.stubEnv("MC_OVERVIEW_BACKUPS_DIR", path.join(root, "backups"));
   client = new PrismaClient({ adapter: new PrismaLibSql({ url: `file:${root}/fixture.db` }) }); state.client = client;
-  for (const migration of ["20260519104842_init", "20260913144054_add_game_access_and_zomboid_mods", "20261002143000_add_installed_mod_provenance", "20261007180000_add_minecraft_profiles"]) {
+  for (const migration of ["20260519104842_init", "20260913144054_add_game_access_and_zomboid_mods", "20261002143000_add_installed_mod_provenance", "20261007180000_add_minecraft_profiles", "20261008170000_add_minecraft_tour_done"]) {
     const sql = await readFile(path.resolve(__dirname, `../../../prisma/migrations/${migration}/migration.sql`), "utf8");
     for (const part of sql.split("\n").filter(line => !line.trim().startsWith("--")).join("\n").split(";").map(text => text.trim()).filter(Boolean)) await client.$executeRawUnsafe(part);
   }

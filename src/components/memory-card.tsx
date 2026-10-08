@@ -1,5 +1,6 @@
 "use client";
 
+import { useUnsavedSettings } from "@/lib/use-unsaved-settings";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,7 @@ export function MemoryCard({ game, tint }: { game: GameId; tint: string }) {
   const [state, setState] = useState<MemoryState | null>(null);
   const [gb, setGb] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  useUnsavedSettings(saving || (gb !== null && state !== null && gb !== state.configuredGb));
 
   /**
    * Saving here IS a power operation — `setMemory` holds power and this world's files, saves and

@@ -48,18 +48,18 @@ export default function ModsPage() {
           It now names what the page answers first, because that is the change: the list is
           a *reading* of the mods directory reconciled against the database, not a recital
           of this app's own writes. */}
-      <SectionHeading
+      <div data-minecraft-tour="mods"><SectionHeading
         eyebrow="Minecraft · Content"
         title="Mods"
         sub="Search Modrinth, install a mod or a whole pack, and see what is on the server."
         tint={tint}
-      />
+      /></div>
 
       <MinecraftProfileContext />
       <InstalledMods />
 
       {/* ── the shelf ───────────────────────────────────────────────────────── */}
-      <section className="space-y-4 border-t border-border/60 pt-6">
+      <section data-minecraft-tour="saved-mod-sets" className="space-y-4 border-t border-border/60 pt-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="eyebrow" style={{ color: tint }}>
