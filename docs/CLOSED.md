@@ -1047,3 +1047,28 @@ Rollback tag `yoshling-web:rollback-9406ace-before-tour-copy-20261008`, image
 `sha256:bcfa9e4bed62539ef95b8594ca15a4e6a553967d6696b971b811f728b2cac102`.
 Server/BUILD_ID hashes matched and artifact guard passed. This is a preserved
 rollback artifact, not a rollback exercise. No schema changes were needed.
+
+### Deployment and browser copy review
+
+Feature `0a21eb13fbbaffc195ef1c06627ebd5cfb44ae77` was pushed and deployed with
+`scripts/deploy.sh --service web --verify 'Each profile is a separate world'`.
+The literal reached the running bundle. Web container
+`3865f6b8d7780d487e1993b9b96a088ffad275c319a9b71fe77dbdd48e011809` uses image
+`sha256:358d349aeab19a874bd334f8f79cab2d296ce1055a704b9e652f834c56663d3b`,
+started at 19:20:18 UTC with restart count zero.
+
+Refreshed the authenticated Firefox Minecraft page and replayed all twelve live
+steps. The updated welcome, profiles, creation, current-world, image, join, mods,
+saved-set, backup, server, settings and final messages were visibly present.
+Navigation opened their real pages; screenshots checked the welcome and backup
+popover layouts. Closed the replay with Escape and left the browser on Profiles.
+No game control, archive creation/download/restore, editor save or new screenshot
+pairing was submitted. This is desktop authenticated replay/copy evidence, not a
+new-user automatic-entry, completion-write or full mobile/accessibility exercise.
+
+Game container IDs, images, states, start times and restart counts matched the
+fresh pre-copy baseline. PZ's baseline start time was 18:12:23 UTC on 8 October;
+that restart preceded this copy rollout. `.env` stayed mode 0600 / 1,380 bytes
+with hash `495f33b0e80249bedb755f1216e4322401f713a1967110ba38b234aad4845ca7`.
+Main memory remains 166 lines / 2,215 words / 17,159 bytes; current copy guidance
+is concise there and dated evidence remains here.
