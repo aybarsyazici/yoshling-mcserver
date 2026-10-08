@@ -989,3 +989,32 @@ rootfs as `before-tour-20261008/web-rootfs.tar`, mode 0600, SHA256
 `sha256:1fbda781b5f7dadece2876bc3239e3f65874ad8ca0dbeb9ca8a27527f7a015a5`.
 Server/BUILD_ID hashes matched and artifact guard passed. This is a rollback
 artifact; no restore or game lifecycle exercise occurred.
+
+### Production verification for spotlight onboarding
+
+Pushed/deployed feature `1bd9fd26e12f92acb41fa51e746523da34524402` with
+`scripts/deploy.sh --service web --verify 'A quick tour of Minecraft'`. The
+literal was verified in the running bundle. Web container
+`b7941b25f9ccd7c4ddb24fc7cdac9f8ff7f02a4778bb9889d09d077f56b995bb` uses image
+`sha256:6d07850958f200db194ceb2053b274b840307ef18d44c5014018a4f5ad091e96`,
+started at 17:39:36 UTC with restart count zero. The tour API without a session
+returned **401**; public `/minecraft` and anonymous legacy guide access returned
+**307 → /login**. Public TLS access worked in this check, unlike the earlier
+local filter failures. Native computer-use browser control failed to start, so
+an authenticated production tour/finish was not exercised or claimed.
+
+The deployed DB retained the verified Boolean/default column, six users and zero
+completed flags. Integrity remained `ok` and foreign-key check empty. No real user
+was marked complete by agent verification. An optional direct generated-TS CLI
+probe was unsuitable outside the standalone app bundle (extensionless TS imports
+and CLI dependency resolution); it is not evidence of an authenticated Prisma/API
+flow. Its temporary resolver was removed with readback. Normal build, actual
+bundle checks and the real-SQLite regressions are the client/runtime evidence.
+
+Minecraft, 7DTD and PZ kept their exact IDs, images, start times, restart counts
+and states: Minecraft created/stopped, 7DTD exited, PZ running. `.env` remained
+0600 / 1,380 bytes with hash
+`495f33b0e80249bedb755f1216e4322401f713a1967110ba38b234aad4845ca7`.
+The generated profile overview remained ready with matching revision/PNG hash
+`76535651d004ad26a714dfbadee6e5ca6176d165fc6cc4fded0c7ab6bb3f480a`.
+Main memory remains bounded at 164 lines / 2,195 words / 17,003 bytes.
