@@ -835,3 +835,45 @@ guard passed. This is a profile-aware rollback rootfs, not a rollback exercise.
 Current behavior and recovery instructions are in
 [MINECRAFT-OVERVIEWS.md](MINECRAFT-OVERVIEWS.md); scope and resource provenance are
 in [the worker documentation](../tools/minecraft-overview/README.md).
+
+### Production verification for this release
+
+Feature commit `8c1c1319671e1bd2533dda30dbbbd003f01d0d74` was pushed to GitHub
+and deployed with `scripts/deploy.sh --service web --verify 'Automatic world overview'`.
+The script verified that literal in the actual running bundle. Web container
+`082aac221c016e5582d567931b589e434c125f0ea7df007ef50b3a3002bebe67` uses image
+`sha256:2d4c2a81bae9544a8536f7c6e27e19467acf5df9d3f09deb4b7bca65f19aae71`.
+The production Linux AMD64 renderer is
+`sha256:45e93eae886295259f7dac3f70afd5e6ab155b11ca1ca0691b3bdb88b1573ead`.
+
+Without a manual generation request, the first timer copied the existing stopped
+Fabric 26.1.2 profile's five source files (39,372,621 bytes) and published a
+**1280×800, 750,708-byte PNG** at 13:39:11 UTC. Generated hash/revision:
+`76535651d004ad26a714dfbadee6e5ca6176d165fc6cc4fded0c7ab6bb3f480a`;
+source inventory hash:
+`8ca080c7e95052ca54a9ad6c9ccc4149964e64821ebe6da627e5886137354016`.
+The image was decoded and visually inspected as actual saved forest terrain.
+Source save time, snapshot time and generation time were distinct. All five
+original saved-world hashes still matched afterward, including the pre-rollout
+`level.dat` hash. Profile revision stayed **3**, custom cover fields stayed null,
+the sidecar was `ready`, the job was `complete`, and only `job.json` remained in
+its job directory. PNG/root ownership and modes 0600/0700 were read back.
+
+Observed the actual renderer's one-CPU, 1,536 MiB/no-swap, 256-PID limits,
+`network=none`, read-only root, `privileged=false`, no added capabilities,
+`cap_drop=ALL`, no-new-privileges, UID/GID selector `0:0`, and exact 256 MiB
+`nosuid,nodev` tmpfs. Docker mounts were only that job's read-only input and writable
+output subpaths. Its container was subsequently removed. This establishes a
+production AMD64 render for this saved world, not every supported/modded world.
+
+Minecraft, 7DTD and PZ retained their exact container IDs, image IDs, start times,
+restart counts and states: Minecraft created/stopped, 7DTD exited, PZ running.
+`.env` remained mode 0600, 1,380 bytes with its prior SHA256
+`495f33b0e80249bedb755f1216e4322401f713a1967110ba38b234aad4845ca7`.
+Origin overview/image requests without a session returned **401**. The existing
+companion download's origin hash remained
+`78027c8b13086cb8717a5d28fa74458b0efbefa92cfc6ffca5ac36784860c133`.
+No schema migration, game boot, join, restore or player-camera trial occurred.
+The local public-domain DNS/TLS filter still limits public-browser verification;
+private file/artifact and origin checks are not a complete authenticated browser
+flow. `CLAUDE.md` remains bounded at 163 lines / 2,182 words / 16,874 bytes.
