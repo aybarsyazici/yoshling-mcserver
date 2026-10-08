@@ -569,3 +569,8 @@ describe("a pack apply owns power and changes jars only while Minecraft is stopp
     expect(events).not.toContain("start");
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => DIRS.mc);
+});

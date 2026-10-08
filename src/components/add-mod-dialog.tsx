@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { ModBrowser } from "@/components/mod-browser";
 import { GAMES } from "@/lib/games";
+import type { MinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
 
 /**
  * **Searching Modrinth is an action, not a place.**
@@ -31,6 +32,7 @@ export function AddModDialog({
   open,
   onOpenChange,
   onClosed,
+  activeRequest,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -43,6 +45,7 @@ export function AddModDialog({
    * created shows up as `missing`, and assuming would hide exactly that.
    */
   onClosed: () => void;
+  activeRequest: MinecraftProfileRequest;
 }) {
   return (
     <Dialog
@@ -67,7 +70,7 @@ export function AddModDialog({
             builds this server can load.
           </DialogDescription>
         </DialogHeader>
-        <ModBrowser />
+        <ModBrowser activeRequest={activeRequest} />
       </DialogContent>
     </Dialog>
   );

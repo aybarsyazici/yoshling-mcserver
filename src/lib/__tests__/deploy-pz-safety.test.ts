@@ -17,11 +17,15 @@ async function deploy(options: { service?: string; running?: string; afterBuild?
   scratch.push(root);
   const bin = path.join(root, "bin");
   await mkdir(bin);
+  await mkdir(path.join(root, "data"));
+  await mkdir(path.join(root, "mc-data"));
   const log = path.join(root, "calls");
   const script = await readFile(path.resolve(__dirname, "../../../scripts/deploy.sh"), "utf8");
   const body = script.match(/<<'REMOTE'\n([\s\S]*?)\nREMOTE/)?.[1];
   if (!body) throw new Error("remote deploy body missing");
-  const remote = body.replace("cd /opt/yoshling", `cd ${quote(root)}`).replaceAll("/tmp/deploy-build.log", path.join(root, "build.log"));
+  const remote = body.replace("cd /opt/yoshling", `cd ${quote(root)}`).replaceAll("/tmp/deploy-build.log", path.join(root, "build.log"))
+    .replaceAll("/var/lib/docker/volumes/yoshling_web-data/_data", path.join(root, "data"))
+    .replaceAll("/var/lib/docker/volumes/yoshling_mc-data/_data", path.join(root, "mc-data"));
   await writeFile(path.join(root, "remote.sh"), remote);
   await writeFile(path.join(bin, "docker"), `#!/usr/bin/env bash
 printf '%s\\n' "docker $*" >> "$AUDIT_CALLS"

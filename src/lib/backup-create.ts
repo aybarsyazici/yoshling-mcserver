@@ -47,6 +47,8 @@ import { applyRetention } from "@/lib/backup-retention";
 import { recordBackupEvent } from "@/lib/backup-log";
 import { backupSourcePath, copyTreeCounting, countTree } from "@/lib/backup-copy";
 import { gameDataPath } from "@/lib/game-data-path";
+import { minecraftActiveContext, assertMinecraftProfileCurrent, MinecraftActiveProfileError, type MinecraftActiveContext } from "./minecraft-active-profile";
+import { minecraftBackupDirectory } from "./minecraft-profile-backups";
 
 const execFileAsync = promisify(execFile);
 
@@ -95,13 +97,9 @@ function tarFailure(e: unknown): Error {
 /**
  * The live game directories a backup reads from and a restore writes back into.
  *
- * Off `RUNTIME`, which already owns them, rather than re-deriving
- * `process.env.MC_SERVER_DIR || "/minecraft"` here: the create path and the restore path
- * are now in different files, and a second copy of that expression is one rename away
- * from a restore writing somewhere the backup never read. Exported for the routes, which
- * still own the restore halves.
+ * 7DTD uses RUNTIME. Minecraft captures its profile root at operation admission;
+ * its create and restore paths share the profile context and archive namespace.
  */
-export const MC_DIR = RUNTIME.minecraft.dir;
 /** `.local/share/7DaysToDie` — Saves + GeneratedWorlds. */
 export const SDTD_DIR = RUNTIME["7dtd"].dir;
 /** `serverfiles` — where `sdtdserver.xml` lives. A separate mount, so not in `RUNTIME`. */
@@ -166,7 +164,8 @@ export type BackupActor = { userId: string; name: string } | null;
  *     exactly what someone needs to find later, and the in-memory registry drops it
  *     after six hours.
  */
-export async function createBackup(game: GameId, actor: BackupActor): Promise<CreateResult> {
+export async function createBackup(game: GameId, actor: BackupActor, expectedMinecraftContext?: MinecraftActiveContext): Promise<CreateResult> {
+  const minecraftContext = game === "minecraft" ? expectedMinecraftContext ?? await minecraftActiveContext() : null;
   try {
     const result = await runOperation<CreateResult>(
       {
@@ -178,7 +177,10 @@ export async function createBackup(game: GameId, actor: BackupActor): Promise<Cr
         // with nothing after it. Absent is the honest rendering of "we don't have a name".
         startedBy: actor?.name ? { name: actor.name } : null,
       },
-      (op) => createBody(op, game, actor)
+      async (op) => {
+        if (minecraftContext) await assertMinecraftProfileCurrent(minecraftContext);
+        return createBody(op, game, actor);
+      }
     );
 
     await recordBackupEvent(
@@ -186,6 +188,7 @@ export async function createBackup(game: GameId, actor: BackupActor): Promise<Cr
       "create",
       actor,
       {
+        ...(minecraftContext?.profileId ? { profileId: minecraftContext.profileId } : {}),
         outcome: "ok",
         name: result.backup.name,
         sizeBytes: result.backup.size,
@@ -209,20 +212,20 @@ export async function createBackup(game: GameId, actor: BackupActor): Promise<Cr
         game,
         "prune",
         actor,
-        { outcome: "ok", names: result.pruned },
+        { outcome: "ok", names: result.pruned, ...(minecraftContext?.profileId ? { profileId: minecraftContext.profileId } : {}) },
         { action: "backup_prune", details: { names: result.pruned, count: result.pruned.length } }
       );
     }
     return result;
   } catch (e) {
     // Refused before it started: nothing was attempted, so nothing is recorded.
-    if (e instanceof OperationConflictError) throw e;
+    if (e instanceof OperationConflictError || e instanceof MinecraftActiveProfileError) throw e;
     const error = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 300);
     await recordBackupEvent(
       game,
       "create",
       actor,
-      { outcome: "failed", error },
+      { outcome: "failed", error, ...(minecraftContext?.profileId ? { profileId: minecraftContext.profileId } : {}) },
       { action: "backup_failed", details: { what: "create", error, automatic: actor === null } }
     );
     throw e;
@@ -351,7 +354,7 @@ export async function sealArchive(
   const prune =
     opts.prune === false
       ? { deleted: [] as string[] }
-      : await applyRetention(op, opts.game, { protect: [opts.filename] });
+      : await applyRetention(op, opts.game, { protect: [opts.filename], directory: path.dirname(opts.target) });
 
   const facts: OperationFact[] = [];
   if (size != null) facts.push({ label: "Size", value: formatBytes(size) });
@@ -477,7 +480,9 @@ async function createMinecraft(
   op: OpHandle,
   actor: BackupActor
 ): Promise<{ facts: OperationFact[]; value: CreateResult }> {
-  const dir = BACKUP_DIRS.minecraft;
+  const context = await minecraftActiveContext();
+  const dir = await minecraftBackupDirectory(context);
+  const MC_DIR = context.root;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `world-${stamp}.tar.gz`;
   const target = path.join(dir, filename);
@@ -546,6 +551,7 @@ async function createMinecraft(
     }
 
     const manifest: McManifest = {
+      ...(context.profileId ? { minecraftProfileId: context.profileId } : {}),
       createdAt: new Date().toISOString(),
       flushed,
       members,

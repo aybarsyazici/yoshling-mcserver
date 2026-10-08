@@ -236,3 +236,8 @@ describe("sealArchive's prune option", () => {
     expect(src).not.toMatch(/if \(!opts\.prune\)/);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => DIRS.mc);
+});

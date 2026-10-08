@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { db } from "@/lib/db";
+import { requireMinecraftProfileContext, assertMinecraftProfileCurrent, withMinecraftProfileRead } from "@/lib/minecraft-active-profile";
 import { applyServiceEnv } from "@/lib/game-manager";
 import { readCompose, readEnvMap, readServiceEnv } from "@/lib/compose";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
@@ -36,12 +37,12 @@ export async function GET() {
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
-
+  return withMinecraftProfileRead(async context => {
   const config = await db.serverConfig.findUnique({ where: { id: "main" } });
   if (!config) {
     try {
       const initial = await configuredMinecraft();
-      return NextResponse.json({ ...initial, initialized: false, worldVersion: await readWorldVersion() });
+      return NextResponse.json({ ...initial, initialized: false, worldVersion: await readWorldVersion(context.root), profileId: context.profileId, targetEditable: !context.profileId });
     } catch (e) {
       return NextResponse.json({ error: `Couldn't read the initial Minecraft configuration: ${(e as Error).message}` }, { status: 503 });
     }
@@ -71,12 +72,15 @@ export async function GET() {
   // 1.21.4 for weeks), so showing the two side by side is the same
   // configured-vs-live comparison the memory card makes.
   return NextResponse.json({
+    profileId: context.profileId,
+    targetEditable: !context.profileId,
     id: config.id,
     mcVersion: config.mcVersion,
     modLoader: config.modLoader,
     maxMemory: config.maxMemory,
     initialized: true,
-    worldVersion: await readWorldVersion(),
+    worldVersion: await readWorldVersion(context.root),
+  });
   });
 }
 
@@ -91,6 +95,11 @@ export async function PUT(request: NextRequest) {
   if (!hasPermission(session.user.role, "settings.edit")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  let context;
+  try {
+    context = await requireMinecraftProfileContext(request);
+    if (context.profileId) return NextResponse.json({ error: "This profile has an exact Minecraft and loader target. Create another profile to play a different version or pack.", profileId: context.profileId }, { status: 409 });
+  } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
 
   const body = await request.json();
   const { mcVersion, modLoader, confirm } = body;
@@ -139,7 +148,7 @@ export async function PUT(request: NextRequest) {
       .catch(() => []);
     const mismatches = versionChangeMismatches({
       ...target,
-      worldVersion: await readWorldVersion(),
+      worldVersion: await readWorldVersion(context.root),
       mods,
     });
     if (mismatches.length > 0 && confirm !== true) {
@@ -175,6 +184,7 @@ export async function PUT(request: NextRequest) {
           `Changing Minecraft to ${finalLoader} ${finalVersion}` +
           (overrodeMismatch ? " (mismatch confirmed)" : ""),
         setting: "The Minecraft version",
+        beforeApply: () => assertMinecraftProfileCurrent(context),
         startedBy: session.user.name,
         onApplied: async () => {
           await db.serverConfig.upsert({

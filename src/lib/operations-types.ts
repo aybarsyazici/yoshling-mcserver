@@ -16,6 +16,10 @@ export type OperationKind =
   | "world.upload"
   | "world.reset"
   | "game.update"
+  | "profile.prepare"
+  | "profile.adopt"
+  | "profile.switch"
+  | "profile.delete"
   /**
    * Synthetic, derived from the boot probe — never entered by a route and never
    * admissible. A game container booting is work that outlives this Node process,

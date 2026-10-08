@@ -13,8 +13,10 @@ import {
   removeManifestSidecar,
   safeBackupName,
 } from "@/lib/backup-archive";
-import { archiveResponse, BACKUP_DIRS, listArchives, readBackupManifest } from "@/lib/backup-store";
-import { createBackup, MC_DIR, type McManifest } from "@/lib/backup-create";
+import { archiveResponse, listArchives, readBackupManifest } from "@/lib/backup-store";
+import { createBackup, type McManifest } from "@/lib/backup-create";
+import { minecraftActiveContext, requireMinecraftProfileContext, assertMinecraftProfileCurrent, withMinecraftContext, minecraftInventoryWhere, MinecraftActiveProfileError } from "@/lib/minecraft-active-profile";
+import { minecraftBackupDirectory, assertMinecraftArchiveProfile, minecraftBackupJournalScope } from "@/lib/minecraft-profile-backups";
 import {
   describeMembers,
   manifestIncludesMods,
@@ -30,7 +32,6 @@ import { validateMcRollbackMetadata } from "@/lib/mc-rollback-metadata";
 // the request lives as long as a graceful stop plus an extract.
 export const maxDuration = 300;
 
-const BACKUP_DIR = BACKUP_DIRS.minecraft;
 
 /**
  * Long enough for a big world. Was 60s, which is a coin-toss for a 170 MB world
@@ -40,8 +41,8 @@ const BACKUP_DIR = BACKUP_DIRS.minecraft;
 const TAR_TIMEOUT_MS = 300_000;
 
 /** Sidecars are fast; pack rollback metadata also survives inside downloaded tar files. */
-async function mcManifest(name: string): Promise<McManifest | null> {
-  return readBackupManifest<McManifest>(BACKUP_DIR, name);
+async function mcManifest(name: string, dir: string): Promise<McManifest | null> {
+  return readBackupManifest<McManifest>(dir, name);
 }
 
 export async function GET(request: NextRequest) {
@@ -51,6 +52,11 @@ export async function GET(request: NextRequest) {
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
+
+  let context;
+  try { context = await minecraftActiveContext(); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
+  try { await assertMinecraftProfileCurrent(context); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
+  const BACKUP_DIR = await minecraftBackupDirectory(context);
 
   const { searchParams } = new URL(request.url);
 
@@ -66,6 +72,10 @@ export async function GET(request: NextRequest) {
     if (!hasPermission(session.user.role, "settings.edit")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+    const expectedContext = request.headers.get("X-Minecraft-Context") ?? searchParams.get("context");
+    if ((context.profileId && expectedContext !== context.token) || (expectedContext && expectedContext !== context.token)) {
+      return NextResponse.json({ error: "The Minecraft profile changed. Reload its backups before downloading." }, { status: 409 });
+    }
     const name = safeBackupName(download);
     if (!name) return NextResponse.json({ error: "Invalid backup name" }, { status: 400 });
     try {
@@ -77,10 +87,11 @@ export async function GET(request: NextRequest) {
         "minecraft",
         "download",
         { userId: session.user.id, name: session.user.name ?? "" },
-        { outcome: "ok", name },
+        { outcome: "ok", name, ...(context.profileId ? { profileId: context.profileId } : {}) },
         { action: "backup_download", details: { name } }
       );
-      return response;
+      await assertMinecraftProfileCurrent(context, false);
+      return withMinecraftContext(response, context);
     } catch {
       return NextResponse.json({ error: "No such backup" }, { status: 404 });
     }
@@ -91,7 +102,7 @@ export async function GET(request: NextRequest) {
   // stays the plain array every existing caller expects.
   if (searchParams.get("meta")) {
     const policy = policyFor("minecraft");
-    return NextResponse.json({
+    const response = NextResponse.json({
       policy,
       policyText: describePolicy(policy),
       schedule: {
@@ -104,7 +115,7 @@ export async function GET(request: NextRequest) {
       // were fixed for. The policy and the schedule stay visible to anyone who can see the
       // world, because "why did an archive disappear" is a fair question for a reader.
       journal: hasPermission(session.user.role, "settings.edit")
-        ? await readJournal("minecraft", 8)
+        ? await readJournal("minecraft", 8, await minecraftBackupJournalScope(context))
         : [],
       // Whether the Download button should be rendered at all.
       //
@@ -119,6 +130,8 @@ export async function GET(request: NextRequest) {
       // fix.
       canDownload: hasPermission(session.user.role, "settings.edit"),
     });
+    await assertMinecraftProfileCurrent(context, false);
+    return withMinecraftContext(response, context);
   }
 
   try {
@@ -127,7 +140,7 @@ export async function GET(request: NextRequest) {
       (await listArchives(BACKUP_DIR)).map(async (a) => {
         // A sidecar read, not a `tar -xzO`: it is a ~150-byte file, so unlike 7DTD's and
         // PZ's in-tar fallback this costs nothing per archive.
-        const m = await mcManifest(a.name);
+        const m = await mcManifest(a.name, BACKUP_DIR);
         return {
           name: a.name,
           size: a.size,
@@ -146,9 +159,10 @@ export async function GET(request: NextRequest) {
         };
       })
     );
-    return NextResponse.json(backups);
+    await assertMinecraftProfileCurrent(context, false);
+    return withMinecraftContext(NextResponse.json(backups), context);
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    return NextResponse.json({ error: (e as Error).message }, { status: e instanceof MinecraftActiveProfileError ? 409 : 500 });
   }
 }
 
@@ -164,6 +178,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  let context;
+  try { context = await requireMinecraftProfileContext(request); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
+  const BACKUP_DIR = await minecraftBackupDirectory(context);
+  const MC_DIR = context.root;
+
   const { action, backupName } = await request.json();
   const actor = { userId: session.user.id, name: session.user.name ?? "" };
 
@@ -173,11 +192,11 @@ export async function POST(request: NextRequest) {
       // `instrumentation.ts` has to take the *same* backup — same flush, same pre-emption
       // boundaries, same checksum, same retention pass. A second, simpler create for the
       // timer is the drift this codebase has already paid for with the power control.
-      const { backup, pruned } = await createBackup("minecraft", actor);
+      const { backup, pruned } = await createBackup("minecraft", actor, context);
       return NextResponse.json({ success: true, backup, pruned });
     } catch (e) {
       if (isConflict(e)) return conflictResponse(e);
-      return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: 500 });
+      return NextResponse.json({ error: (e as Error).message || "Backup failed" }, { status: e instanceof MinecraftActiveProfileError ? 409 : 500 });
     }
   }
 
@@ -202,7 +221,7 @@ export async function POST(request: NextRequest) {
       //
       // An archive with no recorded checksum is *unknown*, not *bad*: every archive on the
       // box today predates them. It is reported as a fact rather than refused.
-      const integrity = await verifyArchive(BACKUP_DIR, name, await mcManifest(name));
+      const integrity = await verifyArchive(BACKUP_DIR, name, await mcManifest(name, BACKUP_DIR));
 
       // What the restore actually put back, in words, read out of the archive rather than
       // assumed from the request. An archive taken before a modpack apply carries `mods`
@@ -217,7 +236,8 @@ export async function POST(request: NextRequest) {
       // Resolve and validate recorded metadata before downtime. A missing legacy
       // inventory or target stays explicitly unknown; a modern archive can recover
       // its record from manifest.json even if the downloaded tar lost its sidecar.
-      const manifest = await mcManifest(name);
+      const manifest = await mcManifest(name, BACKUP_DIR);
+      await assertMinecraftArchiveProfile(context, manifest);
       validateMcRollbackMetadata(manifest);
       if (manifest?.minecraftTarget) {
         const current = await getMinecraftTarget();
@@ -238,6 +258,7 @@ export async function POST(request: NextRequest) {
         "minecraft",
         "restart",
         async (op) => {
+          await assertMinecraftProfileCurrent(context);
           op.step("Restoring the world from backup");
           op.detail(name);
           const result = await restoreMinecraftArchive({
@@ -264,6 +285,7 @@ export async function POST(request: NextRequest) {
           if (result.replaced.includes("mods")) {
             if (Array.isArray(manifest?.installedMods)) {
               const rows = manifest.installedMods.map(m => ({
+                ...(context.schemaReady ? { profileId: context.profileId } : {}),
                 ...(m.id ? { id: m.id } : {}),
                 modrinthId: m.modrinthId, slug: m.slug, name: m.name, version: m.version,
                 fileName: m.fileName, mcVersion: m.mcVersion, loader: m.loader,
@@ -275,9 +297,9 @@ export async function POST(request: NextRequest) {
                 ...(m.updatedAt ? { updatedAt: new Date(m.updatedAt) } : {}),
               }));
               await db.$transaction(async (tx: Pick<typeof db, "installedMod">) => {
-                await tx.installedMod.deleteMany();
+                await tx.installedMod.deleteMany({ where: minecraftInventoryWhere(context) });
                 if (rows.length) await tx.installedMod.createMany({ data: rows });
-                const after = await tx.installedMod.findMany();
+                const after = await tx.installedMod.findMany({ where: minecraftInventoryWhere(context) });
                 const project = (m: typeof rows[number]) => ({
                   modrinthId: m.modrinthId, slug: m.slug, name: m.name, version: m.version,
                   fileName: m.fileName, mcVersion: m.mcVersion, loader: m.loader,
@@ -317,6 +339,7 @@ export async function POST(request: NextRequest) {
           // the mess on its first autosave. Staying down keeps the archive usable.
           restartOnFailure: false,
           beforeStop: async () => {
+            await assertMinecraftProfileCurrent(context);
             if (!manifest?.minecraftTarget) return;
             const actual = await getMinecraftTarget();
             if (actual.mcVersion !== manifest.minecraftTarget.mcVersion || actual.loader !== manifest.minecraftTarget.loader.toLowerCase()) {
@@ -329,7 +352,7 @@ export async function POST(request: NextRequest) {
         "minecraft",
         "restore",
         actor,
-        { outcome: "ok", name, detail: integrity.state },
+        { outcome: "ok", name, detail: integrity.state, ...(context.profileId ? { profileId: context.profileId } : {}) },
         // `replaced` in the durable row, because the registry drops the record after six
         // hours and "did that restore put the mods back" is a question asked later.
         { action: "backup_restore", details: { name, restartedAfter: restarted, replaced } }
@@ -350,7 +373,7 @@ export async function POST(request: NextRequest) {
         "minecraft",
         "restore",
         actor,
-        { outcome: "failed", name, error },
+        { outcome: "failed", name, error, ...(context.profileId ? { profileId: context.profileId } : {}) },
         { action: "backup_failed", details: { what: "restore", name, error } }
       );
       // A valid gzip archive that turns out not to contain a `world/` folder is the
@@ -360,7 +383,7 @@ export async function POST(request: NextRequest) {
       if (e instanceof BadArchiveError) {
         return NextResponse.json({ error: e.message }, { status: 400 });
       }
-      return NextResponse.json({ error }, { status: 500 });
+      return NextResponse.json({ error }, { status: e instanceof MinecraftActiveProfileError ? 409 : 500 });
     }
   }
 
@@ -382,7 +405,7 @@ export async function POST(request: NextRequest) {
     // `backup.restore` declares every `files:` lane, so "never delete the archive an
     // operation is mid-restore from" is this check and not a hope.
     return withGameFileWrite("minecraft", async () => {
-
+      try { await assertMinecraftProfileCurrent(context); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
       const target = path.join(BACKUP_DIR, name);
       try {
         await stat(target);
@@ -398,12 +421,12 @@ export async function POST(request: NextRequest) {
           "minecraft",
           "delete",
           actor,
-          { outcome: "ok", name },
+          { outcome: "ok", name, ...(context.profileId ? { profileId: context.profileId } : {}) },
           { action: "backup_delete", details: { name } }
         );
         return NextResponse.json({ success: true });
       } catch (e) {
-        return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+        return NextResponse.json({ error: (e as Error).message }, { status: e instanceof MinecraftActiveProfileError ? 409 : 500 });
       }
 
     });

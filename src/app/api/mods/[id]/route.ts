@@ -4,6 +4,7 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { withGameFileWrite } from "@/lib/operation-response";
 import { removeMod } from "@/lib/mod-manager";
+import { requireMinecraftProfileContext, assertMinecraftProfileCurrent } from "@/lib/minecraft-active-profile";
 
 export async function DELETE(
   request: NextRequest,
@@ -28,7 +29,10 @@ export async function DELETE(
   // throws on the loser, the apply pushes it into `errors` as "could not be removed", and
   // the operator is shown a named failure for a mod that was in fact deleted — a reported
   // fault that did not happen, which is as costly to chase as a real one.
+  let context;
+  try { context = await requireMinecraftProfileContext(request); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
   return withGameFileWrite("minecraft", async () => {
+    await assertMinecraftProfileCurrent(context);
 
     const { id } = await params;
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -80,6 +82,8 @@ interface ExportPayload {
  * set with no target version says so, because both change what Apply would do.
  */
 export function Modpacks() {
+  const profileContext = useMinecraftProfileRequest();
+  const profileRequest = profileContext.request;
   const { refresh: refreshOperations } = useOperations();
   // `can.modsInstall` / `can.modsRemove` only; see `CAPABILITY_POLL_MS` for the interval.
   const { can } = useGames(CAPABILITY_POLL_MS);
@@ -125,11 +129,12 @@ export function Modpacks() {
   }
   useEffect(() => {
     fetchModpacks();
+    void profileRequest("/api/minecraft/active-profile").catch(() => {});
     fetch("/api/minecraft-versions")
       .then((r) => r.json())
       .then((data) => { if (data.versions) setMcVersions(data.versions); })
       .catch(() => {});
-  }, []);
+  }, [profileRequest]);
 
 
   async function handleCreate() {
@@ -272,11 +277,12 @@ export function Modpacks() {
    * three slots with one sentence.
    */
   async function handleInstallToServer(modpackId: string) {
+    if (!profileContext.contextReady || !can.modsInstall) return;
     setShowInstallConfirm(null);
     setInstalling(modpackId);
     const packName = modpacks.find((p) => p.id === modpackId)?.name ?? "Modpack";
     try {
-      const result = await applyModpackToServer({ modpackId, packName });
+      const result = await applyModpackToServer({ modpackId, packName, fetcher: profileRequest });
       if (result.kind === "unconfirmed-import") { toast.info(result.message); return; }
       if (result.kind === "error") {
         toast.error(result.message);
@@ -433,7 +439,7 @@ export function Modpacks() {
                       <Button
                         size="sm"
                         onClick={() => setShowInstallConfirm(pack.id)}
-                        disabled={installing === pack.id || pack.mods.length === 0}
+                        disabled={!profileContext.contextReady || installing === pack.id || pack.mods.length === 0}
                       >
                         {installing === pack.id ? "Installing..." : "Install to Server"}
                       </Button>

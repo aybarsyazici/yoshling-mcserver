@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
 import { StatusFreshness } from "@/components/status-freshness";
+import { useMinecraftRecoveryReady } from "@/hooks/use-minecraft-recovery-ready";
+import { MinecraftProfilePicker } from "@/components/minecraft-profile-picker";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
@@ -29,7 +31,7 @@ export function GameControls({ game }: { game: GameId }) {
   const meta = GAMES[game];
   // Poll faster while an operation is in flight so buttons re-enable promptly.
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, running, busy: serverBusy, can, memoryGb, clockSkewMs, lastSuccessAt, pollError, refresh } = useGames(
+  const { games, running, busy: serverBusy, can, memoryGb, clockSkewMs, lastSuccessAt, pollError, minecraftContext, refresh } = useGames(
     localBusy ? 1500 : 4000
   );
   /**
@@ -42,6 +44,8 @@ export function GameControls({ game }: { game: GameId }) {
    * noticed the server misbehaving ends up, and "why is it swapping" is answerable only if
    * something says two worlds are running.
    */
+  const verifiedRecovery = useMinecraftRecoveryReady(minecraftContext, lastSuccessAt, pollError);
+  const canRecover = game !== "minecraft" || verifiedRecovery;
   const co = coResidency(running);
   // The registry, not just the power lock: a four-minute backup of this world also
   // has to disable these buttons, and the single-slot lock could never say so.
@@ -52,6 +56,7 @@ export function GameControls({ game }: { game: GameId }) {
   const reduced = usePrefersReducedMotion();
 
   const [confirm, setConfirm] = useState(false);
+  const [profilePicker, setProfilePicker] = useState(false);
   const [confirmPreempt, setConfirmPreempt] = useState<"stop" | "restart" | null>(null);
 
   const blocker = powerBlocker(operations, game);
@@ -144,25 +149,26 @@ export function GameControls({ game }: { game: GameId }) {
       if (cutShort.length > 0) return setConfirmPreempt("stop");
       return void control("stop");
     }
+    if (game === "minecraft") return setProfilePicker(true);
     if (power.blocking.length > 0 || cutShort.length > 0) setConfirm(true);
     else void control("start");
   }
 
   function onRestart() {
-    if (busy) return;
+    if (busy || !canRecover) return;
     if (cutShort.length > 0) return setConfirmPreempt("restart");
     void control("restart");
   }
 
   async function control(action: "start" | "stop" | "restart") {
-    if (localBusy) return;
+    if (localBusy || action === "restart" && !canRecover) return;
     setLocalBusy(true);
     setConfirm(false);
     setConfirmPreempt(null);
     try {
       const res = await fetch("/api/games/control", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(game === "minecraft" && action === "restart" && minecraftContext ? { "X-Minecraft-Context": minecraftContext } : {}) },
         body: JSON.stringify({ game, action }),
       });
       const data = await readOperationResponse(res);
@@ -289,13 +295,14 @@ export function GameControls({ game }: { game: GameId }) {
               everything that is not a hand-off is byte-identical. */}
           {power.label}
         </button>
-        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !power.canRestart} onClick={onRestart}>
+        <Button variant="outline" className="h-11 disabled:cursor-not-allowed" disabled={busy || !power.canRestart || !canRecover} onClick={onRestart}>
           {/* Not a spinner. `animate-spin` on a 1s CSS loop says "something is
               happening" whether or not anything is, which is the claim we refuse to
               make anywhere in this feature. */}
           <RotateCw className="h-4 w-4" />
           {ownBusy && ownAction === "restart" ? "Restarting…" : "Restart"}
         </Button>
+        {game === "minecraft" && containerUp && <Button variant="outline" className="min-h-11" disabled={busy || !power.canRestart} onClick={() => setProfilePicker(true)}>Switch profile &amp; restart</Button>}
 
         {/* One sentence, from one derivation, for every "why is this dead / what will
             this do" case — so this and `/{game}`, `/home`, `/{game}/backups` and the
@@ -343,6 +350,7 @@ export function GameControls({ game }: { game: GameId }) {
         )}
       </AnimatePresence>
 
+      {game === "minecraft" && containerUp && !canRecover && <p role="status" className="text-sm">Recovery Restart waits for a fresh verified Minecraft profile identity. Power off remains available.</p>}
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>
           <DialogHeader>
@@ -421,6 +429,7 @@ export function GameControls({ game }: { game: GameId }) {
           )}
         </DialogContent>
       </Dialog>
+      {game === "minecraft" && <MinecraftProfilePicker open={profilePicker} onOpenChange={setProfilePicker} onSubmitted={() => { void refresh(); }} />}
     </div>
   );
 }

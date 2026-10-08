@@ -74,7 +74,7 @@ function stubFetch(backups: unknown[]) {
 }
 
 function json(status: number, body: unknown) {
-  return { ok: status < 400, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "legacy@0" } });
 }
 
 /** The row for one archive, scoped by its own file name. */

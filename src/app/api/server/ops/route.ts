@@ -5,13 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
+import { revisionRead } from "@/lib/operation-response";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import { gameDataPath } from "@/lib/game-data-path";
-
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 
 interface OpEntry {
   uuid: string;
@@ -82,15 +81,15 @@ export async function GET() {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  return revisionRead(() => gameDataPath(MC_DIR, "ops.json"), async () => {
+  return withMinecraftProfileRead(context => revisionRead(() => gameDataPath(context.root, "ops.json"), async () => {
     try {
-      const content = await readFileSnapshot(await gameDataPath(MC_DIR, "ops.json"), "utf-8");
+      const content = await readFileSnapshot(await gameDataPath(context.root, "ops.json"), "utf-8");
       return NextResponse.json(JSON.parse(content));
     } catch (e) {
       if (errorCode(e) === "ENOENT") return NextResponse.json([]);
       return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
     }
-  });
+  }));
 }
 
 export async function PUT(request: NextRequest) {
@@ -109,7 +108,7 @@ export async function PUT(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const parsed = parseOps(await request.json());
     if ("error" in parsed) {
@@ -124,13 +123,13 @@ export async function PUT(request: NextRequest) {
     //
     // Entries that already carry a valid UUID are untouched, so the two real operators
     // keep the ids Minecraft itself wrote for them.
-    const withIds = await resolveEntryUuids(parsed.ops);
+    const withIds = await resolveEntryUuids(parsed.ops, context.root);
     if (!withIds.ok) {
       return NextResponse.json({ error: withIds.error }, { status: withIds.status });
     }
 
     try {
-      const file = await gameDataPath(MC_DIR, "ops.json");
+      const file = await gameDataPath(context.root, "ops.json");
       const written = JSON.stringify(withIds.entries, null, 2);
       await assertFileRevision(file);
       assertFileWriteActive();
@@ -148,6 +147,7 @@ export async function PUT(request: NextRequest) {
           action: "edit_file",
           details: JSON.stringify({
             game: "minecraft",
+            profileId: context.profileId,
             file: "ops.json",
             count: withIds.entries.length,
           }),
@@ -162,5 +162,5 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true, count: withIds.entries.length });
 
-  }, { request, file: () => gameDataPath(MC_DIR, "ops.json") });
+  }, context => gameDataPath(context.root, "ops.json"));
 }

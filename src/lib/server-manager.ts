@@ -16,12 +16,12 @@
 // happen is worse than no log"). A dormant duplicate of a power path is a standing
 // invitation to re-diverge, so the whole shim went with it.
 //
-// `getModsDir` is the shared lexical path helper. Physical admission lives in
-// `mod-path` for readers/writers; the synchronous export stays for existing callers.
+// `getModsDir` resolves the selected profile for each call. `mod-path` anchors
+// readers and writers to that profile's data root.
 
 import path from "path";
-import { RUNTIME } from "@/lib/game-manager";
+import { getMinecraftDataRoot } from "./minecraft-profile-store";
 
-export function getModsDir(): string {
-  return path.join(RUNTIME.minecraft.dir, "mods");
+export async function getModsDir(): Promise<string> {
+  return path.join(await getMinecraftDataRoot(), "mods");
 }

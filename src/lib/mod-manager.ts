@@ -14,6 +14,7 @@ import {
   type ServerSideVerdict,
 } from "./mod-admission";
 import type { ModProvenance } from "./mod-inventory";
+import { minecraftActiveContext, minecraftInventoryWhere, MinecraftActiveProfileError } from "./minecraft-active-profile";
 
 /**
  * Every Activity row this module writes carries `game: "minecraft"` in its `details`
@@ -141,14 +142,15 @@ export async function installMod(params: {
   beforeWrite?: () => void;
 }): Promise<IntegrityCheck> {
   const { modrinthId, slug, name, version, userId, source } = params;
-  const modsDir = getModsDir();
+  const context = await minecraftActiveContext();
+  const modsDir = await getModsDir();
 
   const file = version.files.find((f) => f.primary) || version.files[0];
   if (!file) throw new Error("No file found for this version");
 
-  await modFilePath(modsDir, file.filename);
+  await modFilePath(modsDir, file.filename, { boundaryRoot: context.root });
   const { buffer, check } = await downloadVerifiedJar(file);
-  const filePath = await modFilePath(modsDir, file.filename);
+  const filePath = await modFilePath(modsDir, file.filename, { boundaryRoot: context.root });
   params.beforeWrite?.();
   await writeFile(filePath, buffer);
   const written = await readFile(filePath);
@@ -158,6 +160,7 @@ export async function installMod(params: {
 
   await db.installedMod.create({
     data: {
+      ...(context.schemaReady ? { profileId: context.profileId } : {}),
       modrinthId,
       slug,
       name,
@@ -189,11 +192,13 @@ export async function installMod(params: {
 }
 
 export async function removeMod(modId: string, userId: string): Promise<void> {
+  const context = await minecraftActiveContext();
   const mod = await db.installedMod.findUnique({ where: { id: modId } });
   if (!mod) throw new Error("Mod not found");
+  if (context.schemaReady && (mod.profileId ?? null) !== context.profileId) throw new MinecraftActiveProfileError("This mod belongs to another Minecraft profile.");
 
-  const modsDir = getModsDir();
-  const filePath = await modFilePath(modsDir, mod.fileName, { followFinalSymlink: false });
+  const modsDir = await getModsDir();
+  const filePath = await modFilePath(modsDir, mod.fileName, { boundaryRoot: context.root, followFinalSymlink: false });
 
   try {
     assertFileWriteActive();
@@ -220,7 +225,8 @@ export async function checkForUpdates(): Promise<
     hasUpdate: boolean;
   }>
 > {
-  const installedMods = await db.installedMod.findMany();
+  const context = await minecraftActiveContext();
+  const installedMods = await db.installedMod.findMany({ where: minecraftInventoryWhere(context) });
   const results = [];
 
   for (const mod of installedMods) {
@@ -288,16 +294,18 @@ export async function updateMod(
   newVersion: ModrinthVersion,
   userId: string
 ): Promise<IntegrityCheck> {
+  const context = await minecraftActiveContext();
   const mod = await db.installedMod.findUnique({ where: { id: modId } });
   if (!mod) throw new Error("Mod not found");
+  if (context.schemaReady && (mod.profileId ?? null) !== context.profileId) throw new MinecraftActiveProfileError("This mod belongs to another Minecraft profile.");
 
-  const modsDir = getModsDir();
+  const modsDir = await getModsDir();
 
   // Remove old file
   const file = newVersion.files.find((f) => f.primary) || newVersion.files[0];
   if (!file) throw new Error("No file found for this version");
-  const oldFilePath = await modFilePath(modsDir, mod.fileName, { followFinalSymlink: false });
-  const newFilePath = await modFilePath(modsDir, file.filename);
+  const oldFilePath = await modFilePath(modsDir, mod.fileName, { boundaryRoot: context.root, followFinalSymlink: false });
+  const newFilePath = await modFilePath(modsDir, file.filename, { boundaryRoot: context.root });
   try {
     await unlink(oldFilePath);
   } catch (e) {

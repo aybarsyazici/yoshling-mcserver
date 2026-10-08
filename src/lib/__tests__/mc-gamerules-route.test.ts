@@ -124,6 +124,11 @@ vi.mock("@/lib/game-manager", () => ({
   containerIsRunning: vi.fn(async () => true),
 }));
 
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => "/minecraft");
+});
+
 const { GET, PUT } = await import("@/app/api/server/gamerules/route");
 
 /** A build with enough rules to clear the plausibility floor, plus the ones tests name. */

@@ -18,7 +18,7 @@ vi.mock("sonner", () => ({ toast: toasts }));
 beforeAll(() => { installBrowserStubs(); window.scrollTo = vi.fn(); });
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-const json = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as Response;
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "legacy@0" } });
 const backup = { name: "fixture.tar.gz", size: 12, createdAt: "2026-01-01" };
 const update = { branch: "stable", resolvedBranch: "public", installedBuildId: "1", latestBuildId: "2", lookupStatus: "checked", updateAvailable: true, checkError: null };
 const pz = { stale: [], checkedAt: Date.now(), lastError: "", applyingSince: null, applyingTitles: [], announcedAt: null, appliedAt: null, pollMs: 300000, watching: true };
@@ -30,6 +30,7 @@ function stub(reply: Response | Error) {
     if (u === "/api/7dtd/update") return json(update);
     if (u === "/api/7dtd/reset") return json({ world: "RWG", gameName: "old", nextGameName: "new" });
     if (u === "/api/zomboid/updates") return json(pz);
+    if (u === "/api/minecraft/active-profile") return json({});
     if (u === "/api/modpacks") return json([pack]);
     if (u === "/api/minecraft-versions") return json({ versions: ["1.21.1"] });
     return json(u.includes("meta=1") ? {} : [backup]);

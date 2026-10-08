@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { withGameFileWrite } from "@/lib/operation-response";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { containerIsRunning } from "@/lib/game-manager";
 import { sendCommand, sendCommandLong } from "@/lib/rcon";
@@ -95,7 +95,6 @@ import path from "path";
  * progress a reader needs to follow, not for work that is merely sometimes slow.
  */
 
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 const PLAYERS_FILE = "banned-players.json";
 const IPS_FILE = "banned-ips.json";
 
@@ -136,17 +135,17 @@ interface BanFiles {
  * reading EACCES as an empty list is how a writer ends up replacing a full ban file with
  * a one-entry one.
  */
-async function readBanFile(file: string): Promise<string> {
+async function readBanFile(root: string, file: string): Promise<string> {
   try {
-    return await readFile(await gameDataPath(MC_DIR, file), "utf-8");
+    return await readFile(await gameDataPath(root, file), "utf-8");
   } catch (e) {
     if ((e as { code?: string }).code === "ENOENT") return "[]";
     throw e;
   }
 }
 
-async function readBanFiles(): Promise<BanFiles> {
-  const [players, ips] = await Promise.all([readBanFile(PLAYERS_FILE), readBanFile(IPS_FILE)]);
+async function readBanFiles(root: string): Promise<BanFiles> {
+  const [players, ips] = await Promise.all([readBanFile(root, PLAYERS_FILE), readBanFile(root, IPS_FILE)]);
   return { players: parseBannedPlayersFile(players), ips: parseBannedIpsFile(ips) };
 }
 
@@ -163,9 +162,9 @@ async function readBanFiles(): Promise<BanFiles> {
  * trading it for a file the game cannot rewrite would be the worse bug. Same call the
  * ops and whitelist routes make, for the same reason.
  */
-async function writeBanFile(file: string, json: string): Promise<void> {
+async function writeBanFile(root: string, file: string, json: string): Promise<void> {
   assertFileWriteActive();
-  await writeFile(await gameDataPath(MC_DIR, file), json, "utf-8");
+  await writeFile(await gameDataPath(root, file), json, "utf-8");
 }
 
 /**
@@ -221,9 +220,10 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  return withMinecraftProfileRead(async context => {
   let files: BanFiles;
   try {
-    files = await readBanFiles();
+    files = await readBanFiles(context.root);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "unknown error";
     return NextResponse.json({ error: `Couldn't read the ban files: ${msg}` }, { status: 500 });
@@ -308,6 +308,7 @@ export async function GET() {
      */
     drift,
   });
+  }, { verifyRuntime: true });
 }
 
 // ── The two mutations ───────────────────────────────────────────────────────
@@ -321,7 +322,8 @@ export async function GET() {
  */
 async function applyBanChange(
   action: "ban" | "pardon",
-  input: { kind: unknown; target: unknown; reason?: unknown }
+  input: { kind: unknown; target: unknown; reason?: unknown },
+  request: NextRequest
 ): Promise<NextResponse> {
   const session = await auth();
   if (!session?.user) {
@@ -338,7 +340,7 @@ async function applyBanChange(
   // properties, ops and whitelist writers use. It matters on *both* paths: a restore
   // would overwrite a file written through it, and an RCON ban issued mid-restore talks
   // to a server that is about to be stopped and have its save replaced.
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const checked = checkBanTarget(input.kind, input.target);
     if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 });
@@ -376,7 +378,7 @@ async function applyBanChange(
     const result =
       routing.path === "rcon"
         ? await applyViaRcon(action, kind, target, input.reason, running)
-        : await applyViaFile(action, kind, target, input.reason, session.user.name);
+        : await applyViaFile(action, kind, target, input.reason, session.user.name, context.root);
 
     if ("response" in result) return result.response;
 
@@ -401,6 +403,7 @@ async function applyBanChange(
             action: action === "ban" ? "ban_add" : "ban_remove",
             details: JSON.stringify({
               game: "minecraft",
+              profileId: context.profileId,
               kind,
               target,
               via: routing.path,
@@ -418,7 +421,7 @@ async function applyBanChange(
 
     let files: BanFiles | null = null;
     try {
-      files = await readBanFiles();
+      files = await readBanFiles(context.root);
     } catch {
       // The lists are a convenience for the page, not the outcome. A read failure here
       // must not turn a verified ban into an error.
@@ -548,13 +551,14 @@ async function applyViaFile(
   kind: BanKind,
   target: string,
   reason: unknown,
-  actor: string | null | undefined
+  actor: string | null | undefined,
+  root: string
 ): Promise<ChangeResult> {
   const file = kind === "player" ? PLAYERS_FILE : IPS_FILE;
 
   let files: BanFiles;
   try {
-    files = await readBanFiles();
+    files = await readBanFiles(root);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "unknown error";
     return {
@@ -608,7 +612,7 @@ async function applyViaFile(
        * player keeps connecting. All-or-nothing, so a name that will not resolve refuses
        * the write instead of persisting a blank.
        */
-      const withIds = await resolveEntryUuids([entry]);
+      const withIds = await resolveEntryUuids([entry], root);
       if (!withIds.ok) {
         return {
           response: NextResponse.json({ error: withIds.error }, { status: withIds.status }),
@@ -655,7 +659,7 @@ async function applyViaFile(
   if (!changed) return { verified: true, noop: true };
 
   try {
-    await writeBanFile(file, json);
+    await writeBanFile(root, file, json);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "unknown error";
     return {
@@ -671,7 +675,7 @@ async function applyViaFile(
    */
   let after: BanFiles;
   try {
-    after = await readBanFiles();
+    after = await readBanFiles(root);
   } catch {
     return { verified: false };
   }
@@ -703,7 +707,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Expected a JSON body." }, { status: 400 });
   }
   const b = (body ?? {}) as Record<string, unknown>;
-  return applyBanChange("ban", { kind: b.kind, target: b.target, reason: b.reason });
+  return applyBanChange("ban", { kind: b.kind, target: b.target, reason: b.reason }, request);
 }
 
 export async function DELETE(request: NextRequest) {
@@ -714,5 +718,5 @@ export async function DELETE(request: NextRequest) {
   return applyBanChange("pardon", {
     kind: searchParams.get("kind"),
     target: searchParams.get("target"),
-  });
+  }, request);
 }

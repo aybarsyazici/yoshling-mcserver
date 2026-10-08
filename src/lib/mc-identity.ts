@@ -1,8 +1,7 @@
 import { createHash } from "crypto";
 import { readFile } from "fs/promises";
 import { gameDataPath } from "@/lib/game-data-path";
-
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
+import { getMinecraftDataRoot } from "@/lib/minecraft-profile-store";
 
 /**
  * Minecraft identity: turning a username into the id the game actually matches on.
@@ -77,9 +76,9 @@ export function offlineUuid(name: string): string {
  * default. Guessing offline instead would mint offline UUIDs for a licensed server,
  * which is the same silent-discard bug with the sign flipped.
  */
-export async function readOnlineMode(): Promise<boolean> {
+export async function readOnlineMode(root?: string): Promise<boolean> {
   try {
-    const content = await readFile(await gameDataPath(MC_DIR, "server.properties"), "utf-8");
+    const content = await readFile(await gameDataPath(root ?? await getMinecraftDataRoot(), "server.properties"), "utf-8");
     for (const line of content.split("\n")) {
       if (line.startsWith("#")) continue;
       const [key, ...rest] = line.split("=");
@@ -143,13 +142,14 @@ export async function resolveUuid(
  * in the live `ops.json` keep the ids the game wrote for them.
  */
 export async function resolveEntryUuids<T extends { uuid: string; name: string }>(
-  entries: T[]
+  entries: T[],
+  root?: string
 ): Promise<{ ok: true; entries: T[] } | { ok: false; status: number; error: string }> {
   const needsResolving = entries.some((e) => !isValidUuid(e.uuid));
   if (!needsResolving) return { ok: true, entries };
 
   // One read per request, not one per entry.
-  const onlineMode = await readOnlineMode();
+  const onlineMode = await readOnlineMode(root);
 
   const resolved: T[] = [];
   for (const entry of entries) {

@@ -7,6 +7,7 @@ import { ModpackBrowserModrinth } from "@/components/modpack-browser-modrinth";
 import { SectionHeading } from "@/components/ui-bits";
 import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
+import { MinecraftProfileContext } from "@/components/minecraft-profile-context";
 
 /**
  * **One page, one list, the pack as a header.**
@@ -54,6 +55,7 @@ export default function ModsPage() {
         tint={tint}
       />
 
+      <MinecraftProfileContext />
       <InstalledMods />
 
       {/* ── the shelf ───────────────────────────────────────────────────────── */}

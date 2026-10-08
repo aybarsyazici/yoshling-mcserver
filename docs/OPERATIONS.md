@@ -7,6 +7,13 @@ adversarial lenses, 4 blockers and 23 majors found and repaired).
 **If you add an operation that can take more than ten seconds, wrap it in
 `runOperation`. Do not invent a second mechanism.**
 
+Minecraft `profile.prepare`, `profile.adopt`, `profile.switch` and `profile.delete`
+use the registry. Preparation/deletion own Minecraft files; adoption/switch claim
+power only after preflight. A switch leases the exact reviewed running peers and
+refuses occupied file lanes. It confirms saves, checkpoints, mount/target readback,
+selection and actual RCON readiness as separate evidence. See
+[MINECRAFT-PROFILES.md](MINECRAFT-PROFILES.md).
+
 ## Deployment admission
 
 `scripts/deploy.sh` observes seeds and backup staging before checkout/build and again

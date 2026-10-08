@@ -1,5 +1,7 @@
 "use client";
 
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
@@ -126,6 +128,8 @@ export function GameBackups({ game }: { game: GameId }) {
   // starts it back up, all inside one operation. So it has to know whether the server
   // is up (to say what will happen) and whether anything else already holds this
   // world's files (the request would come back 409).
+  const context = useMinecraftProfileRequest(game === "minecraft");
+  const request = context.request;
   const { games, can, refresh } = useGames();
   const { operations, elapsedMs, refresh: refreshOperations } = useOperations();
   const running = games?.[game]?.containerRunning ?? false;
@@ -136,7 +140,7 @@ export function GameBackups({ game }: { game: GameId }) {
 
   async function fetchBackups() {
     try {
-      const res = await fetch(endpoint);
+      const res = await request(endpoint);
       const data = await res.json();
       if (Array.isArray(data)) setBackups(data);
     } catch {
@@ -158,7 +162,7 @@ export function GameBackups({ game }: { game: GameId }) {
     // Errors swallowed on purpose, and this is the one place on this page where that is
     // right: the archive list is what someone came for, and a header that failed to load
     // must not take it down. Every *mutation* here reports its failure loudly.
-    const res = await fetch(`${endpoint}?meta=1`).catch(() => null);
+    const res = await request(`${endpoint}?meta=1`).catch(() => null);
     if (!res || !res.ok) return;
     const data = await res.json().catch(() => null);
     if (data && typeof data === "object" && data.policy) setLifecycle(data as BackupMeta);
@@ -173,10 +177,10 @@ export function GameBackups({ game }: { game: GameId }) {
   }, []);
 
   async function create() {
-    if (!can.settingsEdit || creating || locked) return;
+    if (!context.contextReady || !can.settingsEdit || creating || locked) return;
     setCreating(true);
     try {
-      const res = await fetch(endpoint, {
+      const res = await request(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "create" }),
@@ -203,11 +207,11 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function restore(name: string) {
-    if (!can.settingsEdit || restoring || locked) return;
+    if (!context.contextReady || !can.settingsEdit || restoring || locked) return;
     setConfirmRestore(null);
     setRestoring(name);
     try {
-      const res = await fetch(endpoint, {
+      const res = await request(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "restore", backupName: name }),
@@ -230,11 +234,11 @@ export function GameBackups({ game }: { game: GameId }) {
   }
 
   async function del(name: string) {
-    if (!can.settingsEdit || deleting || locked) return;
+    if (!context.contextReady || !can.settingsEdit || deleting || locked) return;
     setConfirmDelete(null);
     setDeleting(name);
     try {
-      const res = await fetch(endpoint, {
+      const res = await request(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", backupName: name }),
@@ -270,7 +274,7 @@ export function GameBackups({ game }: { game: GameId }) {
         </p>
         <Button
           onClick={create}
-          disabled={!can.settingsEdit || creating || locked}
+          disabled={!context.contextReady || !can.settingsEdit || creating || locked}
           className="disabled:cursor-not-allowed"
           style={{ background: meta.tint, color: "var(--background)" }}
         >
@@ -384,7 +388,7 @@ export function GameBackups({ game }: { game: GameId }) {
                       reads, and the moment someone most wants a copy off the box is the
                       moment something is going wrong on it. The lane exists to stop two
                       *writers*; this is not one. */}
-                  {lifecycle?.canDownload && (
+                  {lifecycle?.canDownload && (game !== "minecraft" || context.contextReady && context.contextToken !== null) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -401,7 +405,7 @@ export function GameBackups({ game }: { game: GameId }) {
                       // saved as a 27-byte `.tar.gz` under a finished-download indicator.
                       render={
                         <a
-                          href={`${endpoint}?download=${encodeURIComponent(b.name)}`}
+                          href={`${endpoint}?download=${encodeURIComponent(b.name)}${game === "minecraft" ? `&context=${encodeURIComponent(context.contextToken!)}` : ""}`}
                           aria-label={`Download backup ${b.name}`}
                         />
                       }
@@ -414,14 +418,14 @@ export function GameBackups({ game }: { game: GameId }) {
                     variant="outline"
                     className="disabled:cursor-not-allowed"
                     onClick={() => setConfirmRestore(b.name)}
-                    disabled={!can.settingsEdit || restoring !== null || locked}
+                    disabled={!context.contextReady || !can.settingsEdit || restoring !== null || locked}
                   >
                     <RotateCcw className={cn("h-3.5 w-3.5", restoring === b.name && "animate-spin")} />{" "}
                     {restoring === b.name ? "Restoring…" : "Restore"}
                   </Button>
                   {/* `disabled` and `aria-label` were both missing. Delete was the only
                       backup mutation with no gate at all, while Restore right next to it
-                      carried `disabled={!can.settingsEdit || restoring !== null || locked}` — so an archive
+                      carried `disabled={!context.contextReady || !can.settingsEdit || restoring !== null || locked}` — so an archive
                       could be removed out from under a restore that was reading it. And
                       the button is icon-only, so with no label a screen reader announced
                       it as "button" with no indication of what it deletes. */}
@@ -431,7 +435,7 @@ export function GameBackups({ game }: { game: GameId }) {
                     className="disabled:cursor-not-allowed"
                     aria-label={`Delete backup ${b.name}`}
                     onClick={() => setConfirmDelete(b.name)}
-                    disabled={!can.settingsEdit || deleting !== null || restoring !== null || locked}
+                    disabled={!context.contextReady || !can.settingsEdit || deleting !== null || restoring !== null || locked}
                   >
                     <Trash2 className={cn("h-3.5 w-3.5", deleting === b.name && "animate-pulse")} />
                   </Button>

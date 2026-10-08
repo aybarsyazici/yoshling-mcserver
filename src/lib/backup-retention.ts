@@ -205,9 +205,9 @@ export interface PruneResult {
 export async function applyRetention(
   op: OpHandle,
   game: GameId,
-  opts: { protect?: string[]; now?: number } = {}
+  opts: { protect?: string[]; now?: number; directory?: string } = {}
 ): Promise<PruneResult> {
-  const dir = BACKUP_DIRS[game];
+  const dir = opts.directory ?? BACKUP_DIRS[game];
   const policy = policyFor(game);
   op.step("Applying the retention policy");
 

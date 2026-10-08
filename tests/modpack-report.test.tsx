@@ -106,6 +106,7 @@ function stubFetch(reply: { status?: number; body: unknown }) {
     vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
       if (init?.method === "POST") posts.push(u);
+      if (u === "/api/minecraft/active-profile") return json(200, {});
       if (u === "/api/modpacks") return json(200, [PACK]);
       if (u === "/api/minecraft-versions") return json(200, { versions: ["26.1.2"] });
       if (u === "/api/mods/install-modpack") return json(reply.status ?? 200, reply.body);
@@ -115,7 +116,7 @@ function stubFetch(reply: { status?: number; body: unknown }) {
 }
 
 function json(status: number, body: unknown) {
-  return { ok: status < 400, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "legacy@0" } });
 }
 
 /** Render, click Install, confirm. Leaves whatever the component decided on screen. */

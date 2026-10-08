@@ -516,3 +516,63 @@ UI behavior, game joins or gameplay restores. Those remain current manual checks
 Rollback image and private original/candidate policy material are retained as recorded above.
 The final documentation synchronization uses the same guarded script and records any image
 change separately after readback; documentation is excluded from Docker build inputs.
+
+
+## Minecraft profiles implemented locally — 2026-10-08
+
+Delivered the profile gallery, exact-source create flow, named pack-build choices,
+private screenshot covers, detail metadata/inactive world settings and confirmed
+inactive deletion. Start opens a picker; switch/restart selects an isolated complete
+server directory with fixed Minecraft, loader and Java targets. Existing mods,
+files, identity/player tools, settings and backups bind to the selected profile.
+
+Runtime admission verifies the exact reviewed peers, saves before shutdown, checks
+space/tree shape before power changes, preserves three private full checkpoints,
+recreates through Compose volume subpaths, verifies mount/target/image policy before
+committing selection, and requires actual RCON readiness. Failure recovery retains
+stopped verified data; unresolved identity drift refuses ordinary writes. Verified
+peer shutdowns retain activity rows even when later startup fails; optional play
+history/audit failures do not stop an already verified server.
+
+Preparation streams downloads, ZIP overrides and properties to guarded staging
+with independent file hash readback. It preserves exact pack/build/mod pins,
+server override precedence and client-file exclusions. The 2 GiB total server
+budget does not become 2 GiB of live buffers in the 2 GiB web container. Archive/file
+and configuration limits are documented in `MINECRAFT-PROFILES.md`.
+
+Additive schema and manual SQL are included; no automatic migration or GET seeding
+occurs. Adoption preserves original data and inventory identity/provenance/history.
+Reserved legacy-directory collisions and known world downgrades refuse before game
+changes. Private durable markers and deployment checks cover lifecycle/source/
+checkpoint/deletion work and nested Minecraft backup staging.
+
+Independent reviews repaired concrete integration defects: cross-profile backup
+retention, scheduler identity handoff, old live-cache results, recovery Restart
+headers, stale confirmation for newly appeared peers, ineffective bundled-world
+seed overrides, normal vanilla jar aliases, copied ownership, delayed read
+reactivation, oversized configuration/memory buffering, and deployment admission.
+The older single-world pack-switch proposal moved to `MEMORY-HISTORY.md`.
+
+### Verification
+
+- Supported Node 22.18.0; baseline 146 files / 2,565 tests; final **171 files / 2,927
+  tests passed**. TypeScript and normal production build/artifact checks passed.
+  Full lint: **zero errors, seven existing warnings**. Diff checks passed.
+- Real temporary SQLite/filesystem tests cover schema absence, selection and
+  inventory transactions, metadata revisions, covers, safe paths, settings,
+  publication, quarantine, retention and scheduled identity. DOM/deferred/timer
+  tests use the real client hook for stale identity and action readiness.
+- Added regression protections were removed/broken, observed failing assertions,
+  restored and checked green. Focused logs/manifests are under
+  `/tmp/yoshling-profile*` and `/tmp/minecraft-profile-*`; these are local evidence,
+  not production artifacts.
+- Disposable Docker/Compose fixtures proved volume subpaths, scoped public env
+  inspection and UID/GID 1000 reading copied protected files. Fixtures were cleaned;
+  game containers and production volumes were not mounted.
+- Streaming data exercise used 12 MiB; limit/metadata/adversarial checks cover the
+  2 GiB/128 MiB/256 MiB/20,000-entry budgets. No complete 2 GiB pack/RSS benchmark,
+  authenticated visual-browser pass, real game boot/join, restore or production
+  migration/adoption/deployment was performed.
+
+Production rollout remains open in `MINECRAFT-PROFILES.md`. Current web remains the
+previous deployed release; local test/build success is not deployment evidence.

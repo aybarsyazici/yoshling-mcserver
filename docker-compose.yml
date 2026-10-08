@@ -15,7 +15,7 @@ services:
     # to `docker compose config`, so losing that for profiled services costs it nothing --
     # but a human verifying by hand needs `--profile games`.
     profiles: ["games"]
-    image: itzg/minecraft-server
+    image: "itzg/minecraft-server:${MC_JAVA_VARIANT:-latest}"
     container_name: yoshling-mc
     ports:
       - "25565:25565"
@@ -47,12 +47,27 @@ services:
       # world corruption -- it was a boot failure the status probe rendered as a
       # permanent "Starting...".
       VERSION: "${MC_VERSION:-26.1.2}"
+      # Profiles pin their loader build. Empty keeps the legacy server's behavior
+      # until adoption; unrelated loader pins are cleared when selecting a profile.
+      FABRIC_LOADER_VERSION: "${MC_FABRIC_LOADER_VERSION:-}"
+      FORGE_VERSION: "${MC_FORGE_VERSION:-}"
+      NEOFORGE_VERSION: "${MC_NEOFORGE_VERSION:-}"
+      QUILT_LOADER_VERSION: "${MC_QUILT_LOADER_VERSION:-}"
+      # Selected profiles own their properties file; only control settings are
+      # refreshed by the dashboard. Legacy startup behavior remains the default.
+      OVERRIDE_SERVER_PROPERTIES: "${MC_PROFILE_PROPERTIES_OVERRIDE:-true}"
       MEMORY: "${MC_MEMORY:-4G}"
       RCON_PASSWORD: "${RCON_PASSWORD}"
       ENABLE_RCON: "true"
       RCON_PORT: 25575
     volumes:
-      - mc-data:/data
+      - type: volume
+        source: mc-data
+        target: /data
+        volume:
+          # Web sees the complete volume; the game sees only the selected profile.
+          # '.' preserves the existing server until explicit, verified adoption.
+          subpath: "${MC_PROFILE_SUBPATH:-.}"
     # "no", like the other two worlds. `unless-stopped` turned a failed boot into an
     # unbounded crash loop, and on a host reboot it would start Minecraft regardless
     # of which world was meant to be running -- and only one fits on the box.

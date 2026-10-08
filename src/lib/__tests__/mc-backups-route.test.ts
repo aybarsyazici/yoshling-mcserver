@@ -479,3 +479,8 @@ describe("the gates", () => {
     expect(steps).toEqual([]);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => DIRS.mc);
+});

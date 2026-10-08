@@ -17,6 +17,13 @@ headers and retain ETag compatibility. A stale reply freezes the draft until exp
 never retry old data against a fresh revision automatically. Failed/invalid initial reads
 offer retry and cannot submit defaults or empty lists.
 
+Minecraft editors also pin `X-Minecraft-Context` from a verified read. Once that
+identity changes they require reload; a late old reply cannot enable the draft again.
+Recovery Restart sends the identity of its accepted status snapshot; emergency Stop
+remains available. Recovery logs carry no action-granting identity when unverified.
+Profile selection, exact pack builds, adoption and inactive settings are documented
+in [MINECRAFT-PROFILES.md](MINECRAFT-PROFILES.md).
+
 PZ quick/maps/mods/updates validate their response shapes and distinguish initial failure
 from stale prior data. Mod drafts/cancel/save retain actual enabled/disabled variant tokens;
 an unchanged save cannot enable disabled variants or erase unrelated loaded tokens.

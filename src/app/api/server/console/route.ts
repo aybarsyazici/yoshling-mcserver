@@ -5,6 +5,8 @@ import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
 import { containerIsRunning, tailContainerLog } from "@/lib/game-manager";
 import { classifyRconFailure, rconFailureMessage } from "@/lib/rcon-failure";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
+import { assertFileWriteActive } from "@/lib/operations";
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -14,6 +16,7 @@ export async function GET(request: NextRequest) {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
+  return withMinecraftProfileRead(async () => {
   const { searchParams } = new URL(request.url);
   // Left unvalidated on purpose: `tailContainerLog` clamps to 1..MAX_LOG_LINES (1000)
   // and substitutes DEFAULT_LOG_LINES for anything non-finite, and its comment says
@@ -32,6 +35,7 @@ export async function GET(request: NextRequest) {
     const msg = e instanceof Error ? e.message : "unknown error";
     return NextResponse.json({ error: `Failed to read the log: ${msg}` }, { status: 500 });
   }
+  }, { verifyRuntime: false });
 }
 
 /**
@@ -65,6 +69,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  return withMinecraftProfileFileWrite(request, async () => {
   const { command } = await request.json();
 
   if (!command || typeof command !== "string") {
@@ -73,6 +78,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const { sendCommand } = await import("@/lib/rcon");
+    assertFileWriteActive();
     const response = await sendCommand(command);
     return NextResponse.json({ response });
   } catch (e) {
@@ -97,4 +103,5 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+  });
 }

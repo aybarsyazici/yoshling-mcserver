@@ -1,5 +1,7 @@
 "use client";
 
+import { useMinecraftProfileRequest, type MinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useState, useEffect, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +30,10 @@ interface Modpack {
   targetLoader: string | null;
 }
 
-export function ModBrowser() {
+export function ModBrowser({ activeRequest }: { activeRequest?: MinecraftProfileRequest } = {}) {
+  const ownRequest = useMinecraftProfileRequest(!activeRequest);
+  const context = activeRequest ?? ownRequest;
+  const request = context.request;
   // One poll for the whole grid, not one per card — see `ModCardProps.canAddToPack`.
   const { can } = useGames(CAPABILITY_POLL_MS);
   const [query, setQuery] = useState("");
@@ -101,7 +106,7 @@ export function ModBrowser() {
       params.set("sort", sortBy);
 
       try {
-        const res = await fetch(`/api/mods/search?${params.toString()}`);
+        const res = await request(`/api/mods/search?${params.toString()}`);
         const data = await res.json();
         if (newOffset === 0) {
           setResults(data.hits || []);
@@ -117,7 +122,7 @@ export function ModBrowser() {
         setLoading(false);
       }
     },
-    [query, sortBy, category, activeModpack, allVersions]
+    [query, sortBy, category, activeModpack, allVersions, request]
   );
 
   useEffect(() => {
@@ -127,6 +132,7 @@ export function ModBrowser() {
 
   return (
     <div className="space-y-6">
+      {context.contextError && <p role="alert">{context.contextError}</p>}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
         <div className="flex-1">
           <Input
@@ -294,6 +300,7 @@ export function ModBrowser() {
                 mod={mod}
                 canAddToPack={can.modsInstall}
                 canInstall={can.modsInstall}
+                activeRequest={context}
               />
             ))}
           </div>

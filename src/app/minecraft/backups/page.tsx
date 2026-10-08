@@ -4,6 +4,7 @@ import { SectionHeading } from "@/components/ui-bits";
 import { GameBackups } from "@/components/game-backups";
 import { PhotoFooter } from "@/components/photo-footer";
 import { GAMES } from "@/lib/games";
+import { MinecraftProfileContext } from "@/components/minecraft-profile-context";
 
 export default function MinecraftBackupsPage() {
   const tint = GAMES.minecraft.tint;
@@ -15,6 +16,7 @@ export default function MinecraftBackupsPage() {
         sub="Snapshot your world and roll back with one click."
         tint={tint}
       />
+      <MinecraftProfileContext />
       <GameBackups game="minecraft" />
       <PhotoFooter src="/simba.jpg" />
     </div>

@@ -130,6 +130,10 @@ const DEFAULT_RESOURCES: Record<OperationKind, (g: GameId | null) => OperationRe
   "mods.apply": (g) => (g ? [`files:${g}`] : []),
   "mods.install": (g) => (g ? [`files:${g}`] : []),
   "world.upload": (g) => (g ? [`files:${g}`] : []),
+  "profile.prepare": (g) => (g ? [`files:${g}`] : []),
+  "profile.adopt": (g) => (g ? [`files:${g}`] : []),
+  "profile.switch": (g) => (g ? [`files:${g}`] : []),
+  "profile.delete": (g) => (g ? [`files:${g}`] : []),
   // Derived from the boot probe. Never admitted, so it can never block anything.
   boot: () => [],
 };
@@ -666,7 +670,11 @@ export function assertResourceFree(resource: OperationResource): void {
  * interrupts another world's backup; normal power recovery can still preempt
  * the planning phase. Callers already hold the target world's file resource.
  */
-export function claimOperationPower(op: OpHandle, action: ControlAction = "restart"): void {
+export function claimOperationPower(
+  op: OpHandle,
+  action: ControlAction = "restart",
+  additionalGames: readonly GameId[] = []
+): void {
   const entry = LIVE.get(op.id);
   const now = Date.now();
   if (!entry || !notStale(entry, now) || entry.preempted) {
@@ -675,9 +683,14 @@ export function claimOperationPower(op: OpHandle, action: ControlAction = "resta
   if (!entry.game || !entry.resources.includes(`files:${entry.game}`)) {
     throw new Error("The operation must hold its world's files before taking power.");
   }
-  if (entry.resources.includes("power")) return;
-  assertResourceFree("power");
-  entry.resources.push("power");
+  // Claim every confirmed hand-off lane in the same synchronous tick. A busy peer
+  // refuses before acquiring power or stopping anything; an unclaimed peer must
+  // never be saved/stopped merely because it appeared after the planning probe.
+  const additions = [...new Set<OperationResource>([
+    "power", ...additionalGames.map(game => `files:${game}` as OperationResource),
+  ])].filter(resource => !entry.resources.includes(resource));
+  for (const resource of additions) assertResourceFree(resource);
+  entry.resources.push(...additions);
   entry.action = action;
   entry.heartbeatAt = now;
 }
@@ -881,7 +894,10 @@ function summarize(entry: Entry, outcome: Outcome): string {
     // yet. Use Restart if it stays that way. Project Zomboid is still running." says the
     // same thing twice and reads as a contradiction.
     const touchesPower = entry.resources.includes("power");
-    const statesPower = /\b(already running|still running|powered off|already stopped)\b/i.test(why);
+    const statesPower = /\b(already running|still running|powered off|already stopped)\b/i.test(why) &&
+      // A profile hand-off can fail on a peer after Minecraft stopped. The peer's
+      // "still running" is not a statement about Minecraft's terminal power state.
+      (!entry.kind.startsWith("profile.") || why.startsWith(name));
     const where = statesPower
       ? ""
       : power
@@ -924,6 +940,18 @@ function summarize(entry: Entry, outcome: Outcome): string {
   }
 
   switch (entry.kind) {
+    case "profile.prepare":
+      return `Prepared ${factValue(entry, "Profile") ?? "the Minecraft profile"} in ${took}.${sideNote(entry, [])}`;
+    case "profile.delete":
+      return `Deleted ${factValue(entry, "Profile") ?? "the Minecraft profile"} in ${took}.${sideNote(entry, [])}`;
+    case "profile.adopt":
+      return `Saved the existing Minecraft server as ${factValue(entry, "Profile") ?? "a profile"}. ${powerSentence(entry)}${sideNote(entry, ["Power"])}`;
+    case "profile.switch":
+      return `${factValue(entry, "Profile") ?? "The Minecraft profile"} selected in ${took}. ${
+        factValue(entry, "Boot") === "running and answering"
+          ? "Minecraft is running and answering."
+          : powerSentence(entry)
+      }${sideNote(entry, ["Power", "Boot"])}`;
     case "power": {
       const past =
         entry.action === "stop" ? "stopped" : entry.action === "restart" ? "restarted" : "started";
@@ -1124,6 +1152,14 @@ function summarize(entry: Entry, outcome: Outcome): string {
 
 function verbFor(entry: Entry): string {
   switch (entry.kind) {
+    case "profile.prepare":
+      return "Preparing the Minecraft profile";
+    case "profile.delete":
+      return "Deleting the Minecraft profile";
+    case "profile.adopt":
+      return "Adopting the Minecraft server";
+    case "profile.switch":
+      return "Starting the Minecraft profile";
     case "power":
       return entry.action === "start" ? "Starting" : entry.action === "stop" ? "Stopping" : "Restarting";
     case "settings":
@@ -1154,6 +1190,11 @@ function verbFor(entry: Entry): string {
 /** The surface that would actually show whether this worked. */
 function describeTarget(entry: Entry): string {
   switch (entry.kind) {
+    case "profile.prepare":
+    case "profile.delete":
+    case "profile.adopt":
+    case "profile.switch":
+      return "the Minecraft profiles page";
     case "backup.create":
     case "backup.delete":
       return "the backups list";

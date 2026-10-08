@@ -11,11 +11,20 @@ import {
 import { GAME_LIST, type GameId } from "@/lib/games";
 import type { LiveSettings } from "@/lib/live-settings";
 import { hasPermission } from "@/lib/permissions";
+import { minecraftActiveContext, assertMinecraftProfileCurrent, withMinecraftContext } from "@/lib/minecraft-active-profile";
 
 export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const access = session.user.games;
+  let minecraftContext = null;
+  if (access.includes("minecraft")) {
+    try {
+      minecraftContext = await minecraftActiveContext();
+      await assertMinecraftProfileCurrent(minecraftContext);
+    } catch { minecraftContext = null; }
   }
 
   // Coalesced (3.5s) and copied before mutation: the cache hands out the same object
@@ -23,7 +32,6 @@ export async function GET(request: Request) {
   // out of the shared snapshot for whoever polls next.
   const snapshot = await cachedAllStatus();
   const games = { ...snapshot };
-  const access = session.user.games;
 
   // Every world's run state is reported, even ones this user can't open: only
   // one server fits on the box, so their Start button stops whatever is running
@@ -116,7 +124,7 @@ export async function GET(request: Request) {
         };
   }
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     games,
     activeGame,
     running,
@@ -167,4 +175,11 @@ export async function GET(request: Request) {
     // browser's. `Date.now() - busy.since` mixed the two.
     serverNow: Date.now(),
   });
+  if (minecraftContext) {
+    try {
+      await assertMinecraftProfileCurrent(minecraftContext);
+      return withMinecraftContext(response, minecraftContext);
+    } catch { /* Other games still report status; no Minecraft editing identity was granted. */ }
+  }
+  return response;
 }

@@ -35,7 +35,7 @@ function setup({ minecraft = mcReading(), zomboid = pz, orphans = ["ZuluLoose", 
   vi.stubGlobal("fetch", vi.fn(async (url, init) => {
     const method = init?.method ?? "GET"; requests.push({ url: String(url), method, body: init?.body ? JSON.parse(init.body) : undefined, headers: init?.headers ? new Headers(init.headers) : undefined });
     const body = method === "GET" ? String(url).startsWith("/api/mods/installed") ? minecraft : { mods: zomboid, orphanModIds: orphans } : { success: true };
-    return new Response(JSON.stringify(body), { headers: { "X-File-Revision": '"full-list-revision"' } });
+    return new Response(JSON.stringify(body), { headers: { "X-File-Revision": '"full-list-revision"', "X-Minecraft-Context": "fixture-active-context" } });
   }));
   return requests;
 }
@@ -149,7 +149,7 @@ describe("adjacent deletion and background-read integrity", () => {
     const requests: string[] = []; let reads = 0;
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
       if (init?.method === "DELETE") { requests.push("DELETE"); return pending.promise; }
-      requests.push("GET"); return new Response(JSON.stringify(mcReading(++reads === 1 ? mc : mc.filter((m) => m.name !== "Map Helper"))));
+      requests.push("GET"); return new Response(JSON.stringify(mcReading(++reads === 1 ? mc : mc.filter((m) => m.name !== "Map Helper"))), { headers: { "X-Minecraft-Context": "fixture-active-context" } });
     }));
     await viewMC(); search("Minecraft", "Map Helper"); fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(toasts.info).not.toHaveBeenCalled();

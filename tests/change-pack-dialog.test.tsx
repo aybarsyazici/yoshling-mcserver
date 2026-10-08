@@ -1,3 +1,4 @@
+import type { MinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
 // @vitest-environment jsdom
 /**
  * **Change pack: the version comparison, shown before anything is applied.**
@@ -57,6 +58,8 @@ vi.mock("sonner", () => ({
 }));
 
 import { ChangePackDialog } from "@/components/change-pack-dialog";
+
+const activeRequest: MinecraftProfileRequest = { request: (...args) => fetch(...args), contextReady: true, contextError: null, contextToken: "legacy@0" };
 
 beforeAll(installBrowserStubs);
 afterEach(() => {
@@ -177,7 +180,7 @@ function button(name: string | RegExp): HTMLButtonElement | null {
 function open(over: Partial<GamesState> = {}, counts: ProvenanceCounts = COUNTS) {
   setup(over);
   render(
-    <ChangePackDialog
+    <ChangePackDialog request={activeRequest}
       open
       onOpenChange={() => {}}
       counts={counts}
@@ -503,7 +506,7 @@ describe("after an apply", () => {
     const openChanges: boolean[] = [];
     setup();
     render(
-      <ChangePackDialog
+      <ChangePackDialog request={activeRequest}
         open
         onOpenChange={(v) => openChanges.push(v)}
         counts={COUNTS}
@@ -526,7 +529,7 @@ describe("after an apply", () => {
     const applied = vi.fn();
     setup();
     render(
-      <ChangePackDialog open onOpenChange={() => {}} counts={COUNTS} onApplied={applied} />
+      <ChangePackDialog request={activeRequest} open onOpenChange={() => {}} counts={COUNTS} onApplied={applied} />
     );
     await waitFor(() => expect(screen.queryByText(REMOTE_PACK.title)).not.toBeNull(), WAIT);
     fireEvent.click(screen.getByRole("button", { name: "Choose this pack" }));
@@ -545,7 +548,7 @@ describe("reopening the sheet", () => {
     return (
       <>
         <button onClick={() => setOpen(true)}>reopen</button>
-        <ChangePackDialog
+        <ChangePackDialog request={activeRequest}
           open={open}
           onOpenChange={setOpen}
           counts={COUNTS}

@@ -7,6 +7,13 @@ running game are separate facts. Current deployment and live verification limits
 
 ## Source contracts
 
+Minecraft profiles keep separate world properties and fixed version/loader/Java
+targets. The simple inactive profile editor validates gameplay keys and locks seed,
+type and generation settings after a world exists. Ports/RCON remain deployment
+controls; heap is shared Minecraft host configuration. Source-pack properties are
+bounded and normalized before publication. See
+[MINECRAFT-PROFILES.md](MINECRAFT-PROFILES.md) for identity and rollout rules.
+
 | Layer | Source | Responsibility |
 | --- | --- | --- |
 | Minecraft properties | `src/lib/mc-properties.ts` | Help, hidden/locked keys and property policy. |

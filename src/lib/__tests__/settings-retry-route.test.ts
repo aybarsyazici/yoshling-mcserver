@@ -260,3 +260,8 @@ describe("settings applies are retryable and persist after verification", () => 
     expect(commands).toEqual([]);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => "/minecraft");
+});

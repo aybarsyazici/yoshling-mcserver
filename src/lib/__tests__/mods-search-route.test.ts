@@ -206,3 +206,8 @@ describe("who may search", () => {
     expect(searchMods).toHaveBeenCalledTimes(1);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => "/minecraft");
+});

@@ -211,3 +211,8 @@ describe("single-mod route required dependency preflight", () => {
     expect(registryReads).toEqual(["/v2/project/selected/version"]);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => context.dir);
+});

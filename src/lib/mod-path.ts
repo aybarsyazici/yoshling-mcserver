@@ -1,4 +1,5 @@
 import path from "node:path";
+import { realpath } from "node:fs/promises";
 import { gameDataPath } from "./game-data-path";
 import { resolveSafeFilePath } from "./file-guard";
 
@@ -10,7 +11,12 @@ function boundaryFor(modsDir: string, boundaryRoot?: string): string {
 /** A derived mods shortcut is not an independently trusted filesystem root. */
 export async function modDirectoryPath(modsDir: string, boundaryRoot?: string): Promise<string> {
   const root = boundaryFor(modsDir, boundaryRoot);
-  return gameDataPath(root, path.relative(path.resolve(root), path.resolve(modsDir)));
+  const canonicalRoot = await realpath(root);
+  const absolute = path.resolve(modsDir);
+  // Canonicalize the parent, keeping the final directory link subject to admission.
+  // Both configured roots and derived data paths may use macOS /var aliases.
+  const anchored = path.join(await realpath(path.dirname(absolute)), path.basename(absolute));
+  return gameDataPath(canonicalRoot, path.relative(canonicalRoot, anchored));
 }
 
 /** Admit ordinary/new jar paths and contained links before reads or mutations. */

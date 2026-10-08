@@ -127,6 +127,8 @@ export interface GamesState {
   clockSkewMs: number;
   loading: boolean;
   lastSuccessAt?: number | null;
+  /** Identity verified with this accepted status body; power controls may rebind on polls. */
+  minecraftContext?: string | null;
   pollError?: string | null;
   refresh: () => Promise<void>;
 }
@@ -213,6 +215,7 @@ export function useGames(interval = 5000): GamesState {
   const requestGeneration = useRef(0);
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
+  const [minecraftContext, setMinecraftContext] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const generation = ++requestGeneration.current;
@@ -227,6 +230,7 @@ export function useGames(interval = 5000): GamesState {
           typeof snap.players.online === "number" && typeof snap.players.max === "number" && Array.isArray(snap.players.players);
       })) throw new Error("Status response is incomplete");
       if (!alive.current || generation !== requestGeneration.current) return;
+      setMinecraftContext(res.headers?.get("X-Minecraft-Context") || null);
       setLastSuccessAt(Date.now()); setPollError(null);
       if (typeof data.serverNow === "number") setClockSkewMs(data.serverNow - receivedAt);
       setGames(data.games);
@@ -255,7 +259,7 @@ export function useGames(interval = 5000): GamesState {
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
       setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);
     } catch (error) {
-      if (alive.current && generation === requestGeneration.current) setPollError(error instanceof Error ? error.message : "Couldn't refresh server status");
+      if (alive.current && generation === requestGeneration.current) { setMinecraftContext(null); setPollError(error instanceof Error ? error.message : "Couldn't refresh server status"); }
     } finally {
       if (alive.current) setLoading(false);
     }
@@ -289,7 +293,7 @@ export function useGames(interval = 5000): GamesState {
     maxGb,
     clockSkewMs,
     loading,
-    lastSuccessAt, pollError,
+    lastSuccessAt, pollError, minecraftContext,
     refresh,
   };
 }

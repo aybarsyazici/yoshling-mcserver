@@ -4,13 +4,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
+import { revisionRead } from "@/lib/operation-response";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
 import { db } from "@/lib/db";
 import { lstat, readdir, readFile, writeFile, stat, rm } from "fs/promises";
 import path from "path";
 import { resolveSafeFilePath, looksBinary, readTextFile } from "@/lib/file-guard";
-
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -33,12 +32,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  return withMinecraftProfileRead(async context => {
   const { searchParams } = new URL(request.url);
   const relativePath = searchParams.get("path") || "";
   const action = searchParams.get("action") || "list";
 
   try {
-    const fullPath = await resolveSafeFilePath(MC_DIR, relativePath);
+    const fullPath = await resolveSafeFilePath(context.root, relativePath);
     if (!fullPath) return NextResponse.json({ error: "Invalid path" }, { status: 400 });
 
     if (action === "read") {
@@ -108,6 +108,7 @@ return revisionRead(async () => fullPath, async () => {
     }
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
+  });
 }
 
 export async function PUT(request: NextRequest) {
@@ -129,7 +130,7 @@ export async function PUT(request: NextRequest) {
   // write *any* file in the same tree, including the very files they guard.
   // Deliberately NOT on GET: browsing during a backup is harmless, and blocking it is
   // worse than allowing it.
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const { path: relativePath, content } = await request.json();
 
@@ -138,7 +139,7 @@ export async function PUT(request: NextRequest) {
     }
 
     try {
-      const fullPath = await resolveSafeFilePath(MC_DIR, relativePath, {
+      const fullPath = await resolveSafeFilePath(context.root, relativePath, {
         allowMissing: true,
         allowRoot: false,
       });
@@ -177,7 +178,7 @@ return withFileRevision(request, async () => fullPath, async () => {
             // `/api/activity` (which keeps untagged rows visible on purpose) leaked this row
             // to anyone, and `/minecraft`'s own panel — which selects on `contains
             // "minecraft"` — could never show it.
-            details: JSON.stringify({ game: "minecraft", path: relativePath }),
+            details: JSON.stringify({ game: "minecraft", profileId: context.profileId, path: relativePath }),
           },
         });
 
@@ -205,7 +206,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const { searchParams } = new URL(request.url);
     const relativePath = searchParams.get("path") || "";
@@ -215,7 +216,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     try {
-      const fullPath = await resolveSafeFilePath(MC_DIR, relativePath, {
+      const fullPath = await resolveSafeFilePath(context.root, relativePath, {
         allowRoot: false,
         followFinalSymlink: false,
       });
@@ -232,7 +233,7 @@ return withFileRevision(request, async () => fullPath, async () => {
           data: {
             userId: session.user.id,
             action: "delete_file",
-            details: JSON.stringify({ game: "minecraft", path: relativePath }),
+            details: JSON.stringify({ game: "minecraft", profileId: context.profileId, path: relativePath }),
           },
         });
 

@@ -191,7 +191,7 @@ describe("the endpoint answers a reconcile, not a row list", () => {
 
   it("still asks for the newest row first", async () => {
     await get();
-    expect(modQueries).toEqual([{ orderBy: { installedAt: "desc" } }]);
+    expect(modQueries).toEqual([{ where: {}, orderBy: { installedAt: "desc" } }]);
   });
 });
 
@@ -376,4 +376,9 @@ describe("the gates", () => {
     games = "minecraft";
     expect((await get()).status).toBe(200);
   });
+});
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => ROOT);
 });

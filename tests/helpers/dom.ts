@@ -138,6 +138,8 @@ export function gamesState(over: Partial<GamesState> = {}): GamesState {
     hostGb: 16,
     clockSkewMs: 0,
     loading: false,
+    lastSuccessAt: Date.now(),
+    minecraftContext: "legacy@0",
     refresh: async () => {},
     ...over,
   };

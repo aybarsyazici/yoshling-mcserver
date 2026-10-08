@@ -59,6 +59,7 @@ export interface ActivityRowish {
  * is the only way this record can go quietly wrong.
  */
 export function appliedPackDetails(input: {
+  profileId?: string;
   game: string;
   packId: string;
   packName: string;

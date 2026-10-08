@@ -90,9 +90,10 @@ export function applyOutcomeOf(packName: string, body: unknown): ApplyOutcome {
 export async function applyModpackToServer(args: {
   modpackId: string;
   packName: string;
+  fetcher?: typeof fetch;
 }): Promise<ApplyOutcome> {
   try {
-    const res = await fetch("/api/mods/install-modpack", {
+    const res = await (args.fetcher ?? fetch)("/api/mods/install-modpack", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ modpackId: args.modpackId }),
@@ -116,6 +117,7 @@ export async function applyModpackToServer(args: {
 export async function importAndApply(args: {
   modrinthId: string;
   packName: string;
+  fetcher?: typeof fetch;
 }): Promise<ApplyOutcome> {
   let modpackId: string;
   try {
@@ -142,7 +144,7 @@ export async function importAndApply(args: {
     return { kind: "unconfirmed-import", message: unconfirmedOperationMessage(`import of "${args.packName}"`, error) + " No apply was requested; check Saved sets before importing again." };
   }
 
-  return applyModpackToServer({ modpackId, packName: args.packName });
+  return applyModpackToServer({ modpackId, packName: args.packName, fetcher: args.fetcher });
 }
 
 function stringList(value: unknown): string[] {

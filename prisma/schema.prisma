@@ -45,6 +45,46 @@ model InstalledMod {
   /// could only be answered by the version *number*, which is a publisher's free text.
   /// Nullable: pre-existing rows have none, and the Technic path has no Modrinth version.
   versionId String?
+
+  /// Null belongs to the pre-profile legacy server until explicit adoption.
+  profileId String?
+  profile   MinecraftProfile? @relation(fields: [profileId], references: [id], onDelete: Restrict)
+
+  @@index([profileId])
+}
+
+model MinecraftProfile {
+  id                String @id
+  name              String
+  description       String @default("")
+  status            String @default("preparing")
+  mcVersion         String
+  loader            String
+  loaderVersion     String?
+  javaVariant       String
+  sourceKind        String
+  sourceRef         String?
+  sourceVersionId   String?
+  sourceTitle       String?
+  preparationError  String?
+  coverKey          String?
+  coverMime         String?
+  revision          Int @default(1)
+  createdBy         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastPlayedAt      DateTime?
+  mods              InstalledMod[]
+  selectedBy        MinecraftRuntime[]
+}
+
+/// One selected runtime pointer; reads never create this row.
+model MinecraftRuntime {
+  id                String @id @default("main")
+  selectedProfileId String?
+  selectedProfile   MinecraftProfile? @relation(fields: [selectedProfileId], references: [id], onDelete: Restrict)
+  revision          String @default("0")
+  updatedAt         DateTime @updatedAt
 }
 
 model ServerConfig {

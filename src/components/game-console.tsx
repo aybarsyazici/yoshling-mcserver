@@ -1,5 +1,7 @@
 "use client";
 
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
@@ -22,8 +24,10 @@ const EXAMPLES: Record<GameId, string> = {
 };
 
 export function GameConsole({ game }: { game: GameId }) {
+  const context = useMinecraftProfileRequest(game === "minecraft");
+  const request = context.request;
   const { can } = useGames(CAPABILITY_POLL_MS);
-  const canSend = can.consoleExecute === true;
+  const canSend = can.consoleExecute === true && context.contextReady;
   const meta = GAMES[game];
   const endpoint = meta.api.console;
   const [logs, setLogs] = useState("");
@@ -48,7 +52,8 @@ export function GameConsole({ game }: { game: GameId }) {
    */
   const fetchLogs = useCallback(async () => {
     try {
-      const res = await fetch(`${endpoint}?lines=200`);
+      if (game === "minecraft" && !context.contextReady) await request("/api/minecraft/active-profile").catch(() => null);
+      const res = await request(`${endpoint}?lines=200`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error || `Couldn't read the log (HTTP ${res.status})`);
@@ -59,7 +64,7 @@ export function GameConsole({ game }: { game: GameId }) {
     } catch {
       setError("Couldn't reach the server to read the log");
     }
-  }, [endpoint]);
+  }, [endpoint, request, game, context.contextReady]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -83,7 +88,7 @@ export function GameConsole({ game }: { game: GameId }) {
     setHistory((h) => [command.trim(), ...h].slice(0, 50));
     setHistIdx(-1);
     try {
-      const res = await fetch(endpoint, {
+      const res = await request(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: command.trim() }),

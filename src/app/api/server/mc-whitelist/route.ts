@@ -5,13 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
+import { revisionRead } from "@/lib/operation-response";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
 import { resolveEntryUuids } from "@/lib/mc-identity";
 import { db } from "@/lib/db";
 import { readFile, writeFile } from "fs/promises";
 import { gameDataPath } from "@/lib/game-data-path";
-
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 
 interface WhitelistEntry {
   uuid: string;
@@ -62,15 +61,15 @@ export async function GET() {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  return revisionRead(() => gameDataPath(MC_DIR, "whitelist.json"), async () => {
+  return withMinecraftProfileRead(context => revisionRead(() => gameDataPath(context.root, "whitelist.json"), async () => {
     try {
-      const content = await readFileSnapshot(await gameDataPath(MC_DIR, "whitelist.json"), "utf-8");
+      const content = await readFileSnapshot(await gameDataPath(context.root, "whitelist.json"), "utf-8");
       return NextResponse.json(JSON.parse(content));
     } catch (e) {
       if (errorCode(e) === "ENOENT") return NextResponse.json([]);
       return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
     }
-  });
+  }));
 }
 
 export async function PUT(request: NextRequest) {
@@ -89,7 +88,7 @@ export async function PUT(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const parsed = parseWhitelist(await request.json());
     if ("error" in parsed) {
@@ -107,13 +106,13 @@ export async function PUT(request: NextRequest) {
     // Refuse the whole request rather than persist a blank for the one name that
     // wouldn't resolve: a partial write is the same silent-nothing failure, just
     // harder to notice.
-    const withIds = await resolveEntryUuids(parsed.entries);
+    const withIds = await resolveEntryUuids(parsed.entries, context.root);
     if (!withIds.ok) {
       return NextResponse.json({ error: withIds.error }, { status: withIds.status });
     }
 
     try {
-      const file = await gameDataPath(MC_DIR, "whitelist.json");
+      const file = await gameDataPath(context.root, "whitelist.json");
       const written = JSON.stringify(withIds.entries, null, 2);
       await assertFileRevision(file);
       assertFileWriteActive();
@@ -131,6 +130,7 @@ export async function PUT(request: NextRequest) {
           action: "edit_file",
           details: JSON.stringify({
             game: "minecraft",
+            profileId: context.profileId,
             file: "whitelist.json",
             count: withIds.entries.length,
           }),
@@ -144,5 +144,5 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true, count: withIds.entries.length });
 
-  }, { request, file: () => gameDataPath(MC_DIR, "whitelist.json") });
+  }, context => gameDataPath(context.root, "whitelist.json"));
 }

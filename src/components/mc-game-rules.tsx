@@ -1,5 +1,8 @@
 "use client";
 
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Check, RotateCw, Search } from "lucide-react";
@@ -60,6 +63,9 @@ type RowPhase =
   | { kind: "failed"; message: string };
 
 export function McGameRules({ tint }: { tint: string }) {
+  const context = useMinecraftProfileRequest();
+  const request = context.request;
+  const { can } = useGames(CAPABILITY_POLL_MS);
   const [values, setValues] = useState<Record<string, string> | null>(null);
   const [order, setOrder] = useState<string[]>([]);
   const [unread, setUnread] = useState<string[]>([]);
@@ -86,7 +92,7 @@ export function McGameRules({ tint }: { tint: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/server/gamerules");
+      const res = await request("/api/server/gamerules");
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         // Shown, not swallowed. A panel that renders empty on a 403 or on a stopped server
@@ -117,7 +123,7 @@ export function McGameRules({ tint }: { tint: string }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [request]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -125,9 +131,10 @@ export function McGameRules({ tint }: { tint: string }) {
   }, [load]);
 
   async function write(id: string, value: string) {
+    if (!context.contextReady || !can.settingsEdit) return;
     setPhases((p) => ({ ...p, [id]: { kind: "writing" } }));
     try {
-      const res = await fetch("/api/server/gamerules", {
+      const res = await request("/api/server/gamerules", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rule: id, value }),
@@ -282,7 +289,7 @@ export function McGameRules({ tint }: { tint: string }) {
                     const phase = phases[id] ?? { kind: "idle" };
                     const draft = drafts[id] ?? value;
                     const atDefault = isDefaultGameRuleValue(id, value);
-                    const busy = phase.kind === "writing" || !!blocked;
+                    const busy = phase.kind === "writing" || !!blocked || !context.contextReady || !can.settingsEdit;
                     return (
                       <div key={id} className="space-y-1.5">
                         <Label className="flex flex-wrap items-baseline gap-x-1.5 text-xs">

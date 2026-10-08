@@ -309,3 +309,8 @@ describe("serverSideFor fails OPEN when Modrinth cannot be reached", () => {
     expect(getProject).not.toHaveBeenCalled();
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => "/minecraft");
+});

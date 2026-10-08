@@ -22,7 +22,9 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { mkdir, readFile, rm, unlink, writeFile } from "fs/promises";
 import path from "path";
-import { gameContainerState, getMinecraftTarget, RUNTIME, startGameForOperation, stopGameForOperation } from "@/lib/game-manager";
+import { gameContainerState, getMinecraftTarget, startGameForOperation, stopGameForOperation } from "@/lib/game-manager";
+import { requireMinecraftProfileContext, assertMinecraftProfileCurrent, minecraftInventoryWhere, MinecraftActiveProfileError, type MinecraftActiveContext } from "@/lib/minecraft-active-profile";
+import { minecraftBackupDirectory } from "@/lib/minecraft-profile-backups";
 import { otherGames, type GameId } from "@/lib/games";
 import { CoResidencyError } from "@/lib/coresidency";
 import { GAMES } from "@/lib/games";
@@ -32,7 +34,6 @@ import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { sealArchive, type McManifest } from "@/lib/backup-create";
 import { recordBackupEvent } from "@/lib/backup-log";
 import { removeManifestSidecar } from "@/lib/backup-archive";
-import { BACKUP_DIRS } from "@/lib/backup-store";
 import { archiveMembersPresent, describeMembers, prepareMinecraftArchive } from "@/lib/mc-archive";
 import { APPLY_MODPACK_ACTION, appliedPackDetails } from "@/lib/modpack-applied";
 
@@ -52,7 +53,6 @@ const execFileAsync = promisify(execFile);
  * Same directory `/api/server/backups` lists and restores from, so the archive written
  * here really is offerable as a restore point.
  */
-const BACKUP_DIR = BACKUP_DIRS.minecraft;
 
 const stoppedStates = new Set(["exited", "created", "missing"]);
 
@@ -97,6 +97,8 @@ export async function POST(request: NextRequest) {
   if (!hasPermission(session.user.role, "mods.install")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  let context;
+  try { context = await requireMinecraftProfileContext(request); } catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 409 }); }
 
   const { modpackId, mcVersion, modLoader } = await request.json();
 
@@ -163,9 +165,11 @@ export async function POST(request: NextRequest) {
         startedBy: session.user.name ? { name: session.user.name } : null,
       },
       async (op) => {
+        await assertMinecraftProfileCurrent(context);
         let result: (OpSuccess<NextResponse> & { expectedRunning?: boolean }) | undefined;
         try {
           result = await applyModpack(op, {
+            context,
             modpack,
             serverConfig,
             userId: session.user.id,
@@ -207,6 +211,7 @@ export async function POST(request: NextRequest) {
     );
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof MinecraftActiveProfileError) return NextResponse.json({ error: e.message }, { status: 409 });
     if (e instanceof CoResidencyError) {
       return NextResponse.json({ error: e.message, conflict: "coresidency", running: e.running }, { status: 409 });
     }
@@ -229,6 +234,7 @@ export async function POST(request: NextRequest) {
 async function applyModpack(
   op: OpHandle,
   {
+    context,
     modpack,
     serverConfig,
     userId,
@@ -237,6 +243,7 @@ async function applyModpack(
     warnings,
     skipped,
   }: {
+    context: MinecraftActiveContext;
     modpack: { id: string; name: string; mods: PackMod[] };
     serverConfig: { mcVersion: string; modLoader: string };
     userId: string;
@@ -246,6 +253,8 @@ async function applyModpack(
     skipped: SkippedMod[];
   }
 ): Promise<OpSuccess<NextResponse> & { expectedRunning?: boolean }> {
+  const MC_DIR = context.root;
+  const BACKUP_DIR = await minecraftBackupDirectory(context);
   const verifiedTarget = await getMinecraftTarget();
   if (verifiedTarget.mcVersion !== serverConfig.mcVersion || verifiedTarget.loader !== serverConfig.modLoader.toLowerCase()) {
     throw new Error("The server settings mirror differs from the verified Minecraft target. No jars were replaced; verify the settings first.");
@@ -471,8 +480,8 @@ async function applyModpack(
   if (new Set(plannedNames).size !== plannedNames.length) {
     throw new Error("The pack has colliding jar filenames. No jars were replaced.");
   }
-  const modsDirectory = path.join(RUNTIME.minecraft.dir, "mods");
-  const existingJars = await activeModJars(modsDirectory, RUNTIME.minecraft.dir);
+  const modsDirectory = path.join(MC_DIR, "mods");
+  const existingJars = await activeModJars(modsDirectory, MC_DIR);
   op.fact({ label: "Active jars to replace", value: existingJars.join(", ") || "none" });
   // Planning is read-only. Acquire power only once the plan can actually apply,
   // so a client-only refusal cannot preempt somebody else's backup or block power.
@@ -523,7 +532,6 @@ async function applyModpack(
   // mods totalling 5.8 MB. See `src/lib/mc-archive.ts` for why the restore side of this is
   // in the same commit: a two-member archive restored through the old route would have
   // renamed only `world` into place and deleted the rest with the staging dir.
-  const MC_DIR = RUNTIME.minecraft.dir;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const filename = `auto-before-modpack-${stamp}.tar.gz`;
   const archive = path.join(BACKUP_DIR, filename);
@@ -535,7 +543,7 @@ async function applyModpack(
   // the manifest has to carry the inventory, and by the time the loop runs the archive is
   // already sealed. `removeMod` deletes each row with its file, so this is the only moment
   // the provenance exists to be recorded.
-  const installedMods = await db.installedMod.findMany();
+  const installedMods = await db.installedMod.findMany({ where: minecraftInventoryWhere(context) });
 
   // The probe runs before the step so the label can name what is actually about to be
   // archived. It said "Backing the world up first" while tarring both, which is the size of
@@ -568,6 +576,7 @@ async function applyModpack(
       stagedArchive = prepared.staged;
       members = prepared.members;
       const snapshot: McManifest = {
+        ...(context.profileId ? { minecraftProfileId: context.profileId } : {}),
         createdAt: new Date().toISOString(), flushed: false, members,
         minecraftTarget: verifiedTarget,
         ...(members.includes("mods") ? { installedMods: installedMods.map((m: InstalledMod) => ({
@@ -616,6 +625,7 @@ async function applyModpack(
       // /app/data/backups come from", which is the question a prune or a restore raises
       // long after the operation record has aged out of memory.
       await recordBackupEvent("minecraft", "create", { userId, name: actorName }, {
+        ...(context.profileId ? { profileId: context.profileId } : {}),
         outcome: "ok",
         name: filename,
         sizeBytes: sealed.size ?? undefined,
@@ -730,7 +740,7 @@ async function applyModpack(
         if (check.checked === null) unverified.push(mod.name);
 
         const fileName = `${mod.slug}.jar`;
-        const filePath = await modFilePath(getModsDir(), fileName);
+        const filePath = await modFilePath(await getModsDir(), fileName, { boundaryRoot: context.root });
         refusePreemptedApply(op);
         await writeFile(filePath, buffer);
         const written = await readFile(filePath);
@@ -740,6 +750,7 @@ async function applyModpack(
 
         await db.installedMod.create({
           data: {
+            ...(context.schemaReady ? { profileId: context.profileId } : {}),
             modrinthId: mod.modrinthId || mod.slug,
             slug: mod.slug,
             name: mod.name,
@@ -814,6 +825,7 @@ async function applyModpack(
         userId,
         action: APPLY_MODPACK_ACTION,
         details: appliedPackDetails({
+          ...(context.profileId ? { profileId: context.profileId } : {}),
           game: "minecraft",
           packId: modpack.id,
           packName: modpack.name,

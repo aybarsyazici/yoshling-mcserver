@@ -1,5 +1,8 @@
 import { chmod, readFile, rename, unlink, writeFile } from "fs/promises";
 import path from "path";
+import { MINECRAFT_JAVA_VARIANTS } from "@/lib/minecraft-profile-types";
+import type { MinecraftProfileTarget } from "@/lib/minecraft-profile-types";
+export { MINECRAFT_JAVA_VARIANTS } from "@/lib/minecraft-profile-types";
 
 /**
  * Surgical reads/writes of `docker-compose.yml` and its `.env` on the host.
@@ -319,4 +322,101 @@ export async function writeEnvFile(text: string): Promise<void> {
 /** The live `.env` as a map, for resolving compose's `${...}` references. */
 export async function readEnvMap(): Promise<Record<string, string>> {
   return parseEnvFile(await readEnvFile());
+}
+
+/** Only these selectors belong to a Minecraft profile. Ports, secrets and memory stay shared. */
+export interface MinecraftProfileComposeSettings {
+  subpath: string;
+  type: string;
+  version: string;
+  javaVariant: string;
+  fabricLoaderVersion: string;
+  forgeVersion: string;
+  neoForgeVersion: string;
+  quiltLoaderVersion: string;
+  propertiesOverride: string;
+}
+
+const PROFILE_SUBPATH = /^profiles\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/server$/;
+const PROFILE_TYPES = new Set(["VANILLA", "FABRIC", "FORGE", "NEOFORGE", "QUILT"]);
+
+export function validateMinecraftProfileComposeSettings(settings: MinecraftProfileComposeSettings): void {
+  if (settings.subpath !== "." && !PROFILE_SUBPATH.test(settings.subpath)) {
+    throw new Error("Refusing an invalid Minecraft profile mount selector");
+  }
+  if (!PROFILE_TYPES.has(settings.type) || !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(settings.version)) {
+    throw new Error("Refusing an invalid Minecraft profile version or loader");
+  }
+  if (settings.javaVariant !== "latest" && !(MINECRAFT_JAVA_VARIANTS as readonly string[]).includes(settings.javaVariant)) {
+    throw new Error("Refusing an unsupported Minecraft Java image");
+  }
+  if (!["true", "false"].includes(settings.propertiesOverride) || (settings.subpath !== "." && settings.propertiesOverride !== "false")) {
+    throw new Error("Minecraft profiles must preserve their own server properties");
+  }
+  for (const value of [settings.fabricLoaderVersion, settings.forgeVersion, settings.neoForgeVersion, settings.quiltLoaderVersion]) {
+    if (value !== "" && !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(value)) {
+      throw new Error("Refusing an invalid Minecraft loader build");
+    }
+  }
+}
+
+export function minecraftProfileComposeSettings(id: string, target: MinecraftProfileTarget): MinecraftProfileComposeSettings {
+  if (/^(?:latest|snapshot|release|recommended)$/i.test(target.mcVersion) ||
+      !(MINECRAFT_JAVA_VARIANTS as readonly string[]).includes(target.javaVariant)) {
+    throw new Error("Minecraft profiles require a concrete version and an explicit Java variant");
+  }
+  if (target.loader !== "vanilla" && (!target.loaderVersion || /^(?:latest|recommended)$/i.test(target.loaderVersion))) {
+    throw new Error("This Minecraft profile does not have an exact loader build");
+  }
+  const settings: MinecraftProfileComposeSettings = {
+    subpath: `profiles/${id}/server`, type: target.loader.toUpperCase(), version: target.mcVersion,
+    javaVariant: target.javaVariant, fabricLoaderVersion: target.loader === "fabric" ? target.loaderVersion! : "",
+    forgeVersion: target.loader === "forge" ? target.loaderVersion! : "",
+    neoForgeVersion: target.loader === "neoforge" ? target.loaderVersion! : "",
+    quiltLoaderVersion: target.loader === "quilt" ? target.loaderVersion! : "",
+    propertiesOverride: "false",
+  };
+  validateMinecraftProfileComposeSettings(settings);
+  return settings;
+}
+
+export async function readMinecraftProfileComposeSettings(): Promise<MinecraftProfileComposeSettings> {
+  const [compose, env] = await Promise.all([readCompose(), readEnvMap()]);
+  const read = (key: string) => readServiceEnv(compose, "minecraft", key, env);
+  const image = read("image");
+  const javaVariant = image?.match(/^itzg\/minecraft-server:([A-Za-z0-9._-]+)$/)?.[1];
+  const settings: MinecraftProfileComposeSettings = {
+    subpath: read("subpath") ?? "",
+    type: read("TYPE") ?? "",
+    version: read("VERSION") ?? "",
+    javaVariant: javaVariant ?? "",
+    fabricLoaderVersion: read("FABRIC_LOADER_VERSION") ?? "",
+    forgeVersion: read("FORGE_VERSION") ?? "",
+    neoForgeVersion: read("NEOFORGE_VERSION") ?? "",
+    quiltLoaderVersion: read("QUILT_LOADER_VERSION") ?? "",
+    propertiesOverride: read("OVERRIDE_SERVER_PROPERTIES") ?? "",
+  };
+  validateMinecraftProfileComposeSettings(settings);
+  return settings;
+}
+
+/** Called under the Minecraft files and power leases. Every resolved selector is read back. */
+export async function writeMinecraftProfileComposeSettings(settings: MinecraftProfileComposeSettings): Promise<void> {
+  validateMinecraftProfileComposeSettings(settings);
+  const updates = {
+    MC_PROFILE_SUBPATH: settings.subpath,
+    MC_TYPE: settings.type,
+    MC_VERSION: settings.version,
+    MC_JAVA_VARIANT: settings.javaVariant,
+    MC_FABRIC_LOADER_VERSION: settings.fabricLoaderVersion,
+    MC_FORGE_VERSION: settings.forgeVersion,
+    MC_NEOFORGE_VERSION: settings.neoForgeVersion,
+    MC_QUILT_LOADER_VERSION: settings.quiltLoaderVersion,
+    MC_PROFILE_PROPERTIES_OVERRIDE: settings.propertiesOverride,
+  };
+  await writeEnvFile(patchEnvFile(await readEnvFile(), updates).text);
+  const actual = await readMinecraftProfileComposeSettings();
+  if (Object.keys(settings).some(key => actual[key as keyof typeof actual] !== settings[key as keyof typeof settings])) {
+    throw new Error("The Minecraft profile selectors did not resolve to the written values; the container was not recreated");
+  }
 }

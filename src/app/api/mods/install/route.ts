@@ -11,6 +11,7 @@ import { refuseIfPreemptedEarly } from "@/lib/backup-archive";
 import { db } from "@/lib/db";
 import { getModsDir } from "@/lib/server-manager";
 import { verifyRequiredDependencies } from "@/lib/mod-dependencies";
+import { requireMinecraftProfileContext, assertMinecraftProfileCurrent, minecraftInventoryWhere, MinecraftActiveProfileError } from "@/lib/minecraft-active-profile";
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -32,11 +33,13 @@ export async function POST(request: NextRequest) {
 
   let operationId: string | undefined;
   try {
+    const context = await requireMinecraftProfileContext(request);
     return await runOperation<NextResponse>({
       kind: "mods.install", game: "minecraft", resources: ["files:minecraft"],
       title: `Installing ${name}`, startedBy: session.user.name ? { name: session.user.name } : null,
     }, async (op) => {
       operationId = op.id;
+      await assertMinecraftProfileCurrent(context);
       op.step("Checking the mod and its required dependencies");
       const serverConfig = await db.serverConfig.findUnique({ where: { id: "main" } });
       refuseIfPreemptedEarly(op, "the mod install");
@@ -55,7 +58,7 @@ export async function POST(request: NextRequest) {
         }, { status: 409 }) };
       }
 
-      const existing = await db.installedMod.findFirst({ where: { modrinthId } });
+      const existing = await db.installedMod.findFirst({ where: { modrinthId, ...minecraftInventoryWhere(context) } });
       refuseIfPreemptedEarly(op, "the mod install");
       if (existing) {
         op.reject("Mod is already installed");
@@ -79,13 +82,14 @@ export async function POST(request: NextRequest) {
           !["optional", "incompatible", "embedded"].includes(dependency.dependency_type)
       );
       const installed = needsPreflight ? await db.installedMod.findMany({
+        where: minecraftInventoryWhere(context),
         select: { modrinthId: true, name: true, fileName: true, versionId: true },
       }) : [];
       refuseIfPreemptedEarly(op, "the mod install");
-      const dependencies = await verifyRequiredDependencies({
+      const dependencies = needsPreflight ? await verifyRequiredDependencies({
         version: selectedVersion, mcVersion: serverConfig.mcVersion, loader: serverConfig.modLoader,
-        modsDir: getModsDir(), installed,
-      });
+        modsDir: await getModsDir(), boundaryRoot: context.root, installed,
+      }) : { checked: [], issues: [] };
       refuseIfPreemptedEarly(op, "the mod install");
       if (dependencies.issues.length) {
         const named = dependencies.issues.map((issue) => `${issue.name}: ${issue.reason}`).join(" ");
@@ -116,6 +120,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     if (isConflict(error)) return conflictResponse(error);
-    return NextResponse.json({ ...(operationId ? { operationId } : {}), error: error instanceof Error ? error.message : "Mod install failed" }, { status: 500 });
+    return NextResponse.json({ ...(operationId ? { operationId } : {}), error: error instanceof Error ? error.message : "Mod install failed" }, { status: error instanceof MinecraftActiveProfileError ? 409 : 500 });
   }
 }

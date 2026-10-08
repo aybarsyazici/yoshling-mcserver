@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getModsDir } from "@/lib/server-manager";
 import { reconcileMods, type InstalledReading } from "@/lib/mod-inventory";
 import { APPLY_MODPACK_ACTION, parseAppliedPack } from "@/lib/modpack-applied";
+import { minecraftInventoryWhere, withMinecraftProfileRead } from "@/lib/minecraft-active-profile";
 
 /**
  * **What is installed — reconciled against the directory, not recited from the database.**
@@ -42,9 +43,11 @@ export async function GET(request: NextRequest) {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
+  return withMinecraftProfileRead(async context => {
   const hash = new URL(request.url).searchParams.get("hash") === "1";
 
   const rows = await db.installedMod.findMany({
+    where: minecraftInventoryWhere(context),
     orderBy: { installedAt: "desc" },
   });
 
@@ -70,7 +73,7 @@ export async function GET(request: NextRequest) {
   // must not read them all. The `user` relation comes along, so the actor's name needs no
   // second lookup — unlike `InstalledMod.installedBy`, which is a plain column.
   const applied = await db.activity.findFirst({
-    where: { action: APPLY_MODPACK_ACTION },
+    where: { action: APPLY_MODPACK_ACTION, ...(context.profileId ? { details: { contains: `\"profileId\":\"${context.profileId}\"` } } : {}) },
     orderBy: { createdAt: "desc" },
     include: { user: { select: { username: true } } },
   });
@@ -79,9 +82,10 @@ export async function GET(request: NextRequest) {
   const cfg = await db.serverConfig.findUnique({ where: { id: "main" } });
 
   const reading: InstalledReading = {
-    ...(await reconcileMods(rows, getModsDir(), { hash, actorNames })),
+    ...(await reconcileMods(rows, await getModsDir(), { hash, actorNames, boundaryRoot: context.root })),
     pack: parseAppliedPack(applied),
     server: cfg ? { mcVersion: cfg.mcVersion, loader: cfg.modLoader } : null,
   };
   return NextResponse.json(reading);
+  });
 }

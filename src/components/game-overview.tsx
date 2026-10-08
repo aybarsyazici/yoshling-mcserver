@@ -6,6 +6,8 @@ import { motion } from "motion/react";
 import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
 import { StatusFreshness } from "@/components/status-freshness";
 import { JoinPanel } from "@/components/join-panel";
+import { useMinecraftRecoveryReady } from "@/hooks/use-minecraft-recovery-ready";
+import { MinecraftProfilePicker } from "@/components/minecraft-profile-picker";
 import { toast } from "sonner";
 import { GAMES, type GameId } from "@/lib/games";
 import { useGames } from "@/lib/use-games";
@@ -52,7 +54,7 @@ export function GameOverview({
 }) {
   const meta = GAMES[game];
   const [localBusy, setLocalBusy] = useState(false);
-  const { games, running, busy: serverBusy, can, clockSkewMs, lastSuccessAt, pollError, refresh } = useGames(
+  const { games, running, busy: serverBusy, can, clockSkewMs, lastSuccessAt, pollError, minecraftContext, refresh } = useGames(
     localBusy ? 1500 : 5000
   );
   /**
@@ -62,6 +64,8 @@ export function GameOverview({
    * (`a7d76b8`, the `can:` projection, the registry) — so it gets the same sentence from
    * the same derivation rather than a variant of its own.
    */
+  const verifiedRecovery = useMinecraftRecoveryReady(minecraftContext, lastSuccessAt, pollError);
+  const canRecover = game !== "minecraft" || verifiedRecovery;
   const co = coResidency(running);
   const snap = games?.[game];
   const status = snap?.status ?? "offline";
@@ -69,6 +73,7 @@ export function GameOverview({
   const reduced = usePrefersReducedMotion();
 
   const [confirm, setConfirm] = useState(false);
+  const [profilePicker, setProfilePicker] = useState(false);
   const [confirmPreempt, setConfirmPreempt] = useState<"stop" | "restart" | null>(null);
 
   /**
@@ -165,25 +170,26 @@ export function GameOverview({
     }
     // One dialog for both consequences, the way `game-controls.tsx` does it — never an
     // early return that drops the hand-off warning.
+    if (game === "minecraft") return setProfilePicker(true);
     if (power.blocking.length > 0 || preemptable) setConfirm(true);
     else void control("start");
   }
 
   function onRestart() {
-    if (busy) return;
+    if (busy || !canRecover) return;
     if (preemptable) return setConfirmPreempt("restart");
     void control("restart");
   }
 
   async function control(action: "start" | "stop" | "restart") {
-    if (localBusy) return;
+    if (localBusy || action === "restart" && !canRecover) return;
     setLocalBusy(true);
     setConfirm(false);
     setConfirmPreempt(null);
     try {
       const res = await fetch("/api/games/control", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(game === "minecraft" && action === "restart" && minecraftContext ? { "X-Minecraft-Context": minecraftContext } : {}) },
         body: JSON.stringify({ game, action }),
       });
       const data = await readOperationResponse(res);
@@ -305,7 +311,7 @@ export function GameOverview({
                 <Button
                   variant="outline"
                   className="h-11 disabled:cursor-not-allowed"
-                  disabled={busy || !power.canRestart}
+                  disabled={busy || !power.canRestart || !canRecover}
                   onClick={onRestart}
                 >
                   {/* Not a spinner. `animate-spin` on a 1s CSS loop claims liveness it
@@ -319,6 +325,7 @@ export function GameOverview({
                   {ownBusy && ownAction === "restart" ? "Restarting…" : "Restart"}
                 </Button>
               )}
+              {game === "minecraft" && power.containerUp && <Button variant="outline" className="min-h-11" disabled={busy || !power.canRestart} onClick={() => setProfilePicker(true)}>Switch profile &amp; restart</Button>}
               <Link
                 href={`${meta.base}/server`}
                 className="inline-flex h-11 items-center gap-1.5 rounded-xl bg-muted px-4 text-sm font-medium transition-colors hover:bg-accent"
@@ -362,6 +369,7 @@ export function GameOverview({
       </Stagger>
 
       {children}
+      {game === "minecraft" && <MinecraftProfilePicker open={profilePicker} onOpenChange={setProfilePicker} onSubmitted={() => { void refresh(); }} />}
 
       {/* Recent activity */}
       <Reveal>
@@ -393,6 +401,7 @@ export function GameOverview({
         </div>
       </Reveal>
 
+      {game === "minecraft" && containerUp && !canRecover && <p role="status" className="text-sm">Recovery Restart waits for a fresh verified Minecraft profile identity. Power off remains available.</p>}
       {/* Switch confirm */}
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>

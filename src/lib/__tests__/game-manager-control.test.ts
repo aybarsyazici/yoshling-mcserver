@@ -172,6 +172,12 @@ vi.mock("@/lib/zomboid", () => ({
 
 let pzHonoursQuit = true;
 
+vi.mock("@/lib/minecraft-profile-store", () => ({
+  readMinecraftRuntime: vi.fn(async () => ({ schemaReady: false, runtime: null })),
+  getMinecraftProfile: vi.fn(async () => null),
+  activeMinecraftServerPath: vi.fn(async (relative: string) => path.join("/minecraft", relative)),
+}));
+
 vi.mock("@/lib/compose", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/compose")>();
   return {
@@ -214,8 +220,14 @@ import {
   setMemory,
   withGameStopped,
   ControlBusyError,
+  stopGameForOperation,
+  waitForMinecraftProfileReady,
+  liveSettings,
+  invalidateMinecraftRuntimeProbes,
 } from "@/lib/game-manager";
 import { parseEnvFile } from "@/lib/compose";
+import { currentControlLock, runOperation } from "@/lib/operations";
+import { sendCommand } from "@/lib/rcon";
 
 // ── harness ──────────────────────────────────────────────────────────────────
 
@@ -261,6 +273,7 @@ beforeEach(() => {
   pzHonoursQuit = true;
   makeBox({});
   setCommandRunner(fakeRunner);
+  invalidateMinecraftRuntimeProbes();
   // Every driver sleeps after a save (1–1.5 s) and Project Zomboid polls for its own
   // exit every 500 ms. Real timers would make this suite seconds long; the whole point
   // of `vitest.config.mts` is a suite fast enough that it actually gets run.
@@ -272,6 +285,122 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetCommandRunner();
+  vi.mocked(sendCommand).mockImplementation(async () => "There are 0 of a max of 20 players online:");
+});
+
+describe("Minecraft profile lifecycle invalidates status and live caches across epochs", () => {
+  it("reads profile B live values immediately instead of serving profile A's ten-second cache", async () => {
+    makeBox({ minecraft: "running" }); let difficulty = "Hard"; let calls = 0;
+    vi.mocked(sendCommand).mockImplementation(async command => {
+      if (command === "difficulty") { calls++; return `The difficulty is ${difficulty}`; }
+      return "There are 0 of a max of 20 players online:";
+    });
+    expect(await liveSettings("minecraft")).toMatchObject({ available: true, values: { difficulty: "hard" } });
+    difficulty = "Easy"; invalidateMinecraftRuntimeProbes();
+    expect(await liveSettings("minecraft")).toMatchObject({ available: true, values: { difficulty: "easy" } });
+    expect(calls).toBe(2);
+  });
+
+  it("discards a late A read without replacing B's populated cache", async () => {
+    makeBox({ minecraft: "running" }); let calls = 0;
+    let oldStarted!: () => void; const started = new Promise<void>(resolve => { oldStarted = resolve; });
+    let oldReply!: (reply: string) => void; const pendingReply = new Promise<string>(resolve => { oldReply = resolve; });
+    vi.mocked(sendCommand).mockImplementation(async command => {
+      if (command === "difficulty") { calls++; if (calls === 1) { oldStarted(); return pendingReply; } return "The difficulty is Easy"; }
+      return "There are 0 of a max of 20 players online:";
+    });
+    const aReading = liveSettings("minecraft"); await started;
+    invalidateMinecraftRuntimeProbes();
+    expect(await liveSettings("minecraft")).toMatchObject({ available: true, values: { difficulty: "easy" } });
+    oldReply("The difficulty is Hard");
+    expect(await aReading).toMatchObject({ available: false, values: {} });
+    expect(await liveSettings("minecraft")).toMatchObject({ available: true, values: { difficulty: "easy" } });
+    expect(calls).toBe(2);
+  });
+
+  it("keeps B's in-flight probe when the old A promise settles", async () => {
+    makeBox({ minecraft: "running" }); let calls = 0;
+    let oldStarted!: () => void; const aStarted = new Promise<void>(resolve => { oldStarted = resolve; });
+    let newStarted!: () => void; const bStarted = new Promise<void>(resolve => { newStarted = resolve; });
+    let oldReply!: (reply: string) => void; const aReply = new Promise<string>(resolve => { oldReply = resolve; });
+    let newReply!: (reply: string) => void; const bReply = new Promise<string>(resolve => { newReply = resolve; });
+    vi.mocked(sendCommand).mockImplementation(async command => {
+      if (command === "difficulty") { calls++; if (calls === 1) { oldStarted(); return aReply; } newStarted(); return bReply; }
+      return "There are 0 of a max of 20 players online:";
+    });
+    const old = liveSettings("minecraft"); await aStarted; invalidateMinecraftRuntimeProbes();
+    const current = liveSettings("minecraft"); await bStarted; oldReply("The difficulty is Hard"); await old;
+    const coalesced = liveSettings("minecraft"); await Promise.resolve(); await Promise.resolve();
+    expect(calls).toBe(2);
+    newReply("The difficulty is Easy");
+    const read = await Promise.all([current, coalesced]);
+    expect(read.every(value => value.available && value.values.difficulty === "easy")).toBe(true);
+  });
+});
+
+describe("profile lifecycle uses explicit save and in-operation request admission", () => {
+  it("keeps a running Minecraft world intact when flush did not confirm saving", async () => {
+    makeBox({ minecraft: "running" });
+    await expect(settle(runOperation({ kind: "profile.adopt", game: "minecraft", title: "Adopting", resources: ["power", "files:minecraft"] }, async op => {
+      await stopGameForOperation(op, "minecraft", { requireSave: true });
+      return { value: null };
+    }))).rejects.toThrow(/did not confirm saving/);
+    expect(mutations()).toEqual([]);
+    expect(box["yoshling-mc"].state).toBe("running");
+    expect(sendCommand).toHaveBeenCalledWith("save-all flush", 120_000);
+  });
+
+  it("stops only after the explicit flush success reply", async () => {
+    makeBox({ minecraft: "running" });
+    vi.mocked(sendCommand).mockResolvedValueOnce("Saving the game...Saved the game");
+    await settle(runOperation({ kind: "profile.adopt", game: "minecraft", title: "Adopting", resources: ["power", "files:minecraft"] }, async op => {
+      await stopGameForOperation(op, "minecraft", { requireSave: true });
+      return { value: null };
+    }));
+    expect(mutations()).toEqual(["docker stop yoshling-mc"]);
+    expect(box["yoshling-mc"].state).toBe("exited");
+  });
+
+  it("refuses a stale restart request inside admission before saving or stopping", async () => {
+    makeBox({ minecraft: "running" });
+    const gate = vi.fn(async () => {
+      expect(currentControlLock()?.game).toBe("minecraft");
+      throw new Error("stale profile context");
+    });
+    await expect(settle(restartGame("minecraft", "friend", gate))).rejects.toThrow(/stale profile/);
+    expect(gate).toHaveBeenCalledOnce();
+    expect(mutations()).toEqual([]);
+  });
+
+  it("refuses a stale settings request inside admission before env writes or lifecycle", async () => {
+    makeBox({ minecraft: "running" });
+    await expect(settle(applyServiceEnv("minecraft", { VERSION: "1.21.4" }, { stage: "Changing version", beforeApply: async () => {
+      expect(currentControlLock()?.game).toBe("minecraft");
+      throw new Error("stale profile context");
+    } }))).rejects.toThrow(/stale profile/);
+    expect(envText).toBe("");
+    expect(mutations()).toEqual([]);
+  });
+
+  it("refuses stale memory admission before env writes or container recreation", async () => {
+    makeBox({ minecraft: "running" });
+    await expect(settle(setMemory("minecraft", 3, "friend", async () => {
+      expect(currentControlLock()?.game).toBe("minecraft");
+      throw new Error("stale profile context");
+    }))).rejects.toThrow(/stale profile/);
+    expect(envText).toBe(""); expect(mutations()).toEqual([]);
+  });
+
+  it("requires a real list reply rather than any successful RCON response", async () => {
+    makeBox({ minecraft: "running" });
+    vi.mocked(sendCommand).mockResolvedValueOnce("Unknown or incomplete command");
+    const before = vi.mocked(sendCommand).mock.calls.length;
+    await settle(runOperation({ kind: "profile.switch", game: "minecraft", title: "Starting", resources: ["power", "files:minecraft"] }, async op => {
+      await waitForMinecraftProfileReady(op);
+      return { value: null };
+    }));
+    expect(vi.mocked(sendCommand).mock.calls.length - before).toBe(2);
+  });
 });
 
 /** Drive fake time forward until `p` settles, then rethrow or return as it did. */
@@ -1326,5 +1455,21 @@ describe("applyServiceEnv routes Minecraft's version and loader through .env", (
     expect(envText).toBe("");
     expect(composeText).toBe(REAL_COMPOSE);
     expect(commands.some((c) => /docker compose/.test(c))).toBe(false);
+  });
+});
+
+// Last: resetting modules creates a second Next-like module graph. No subsequent
+// transport fixture should accidentally observe that graph's separate mocks.
+describe("Minecraft probe generation is shared across module graphs", () => {
+  it("invalidates graph A's live cache when graph B selects another profile", async () => {
+    makeBox({ minecraft: "running" }); let difficulty = "Hard";
+    vi.mocked(sendCommand).mockImplementation(async command => command === "difficulty"
+      ? `The difficulty is ${difficulty}` : "There are 0 of a max of 20 players online:");
+    expect(await liveSettings("minecraft")).toMatchObject({ available: true, values: { difficulty: "hard" } });
+    difficulty = "Easy";
+    vi.resetModules();
+    const secondGraph = await import("@/lib/game-manager");
+    secondGraph.invalidateMinecraftRuntimeProbes();
+    expect(await liveSettings("minecraft")).toMatchObject({ available: true, values: { difficulty: "easy" } });
   });
 });

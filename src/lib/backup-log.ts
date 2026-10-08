@@ -84,6 +84,7 @@ export async function logBackupActivity(
 export type BackupEvent = "create" | "restore" | "delete" | "download" | "prune";
 
 export interface JournalEntry {
+  profileId?: string;
   /** ISO8601, so a human reading the raw file gets a date without a converter. */
   at: string;
   game: GameId;
@@ -144,7 +145,7 @@ async function trimJournal(): Promise<void> {
  * Unparseable lines are dropped rather than throwing: a torn last line (a container
  * killed mid-append) must not take the whole history down with it.
  */
-export async function readJournal(game: GameId | null, limit = 20): Promise<JournalEntry[]> {
+export async function readJournal(game: GameId | null, limit = 20, profile?: { id: string; includeLegacy: boolean }): Promise<JournalEntry[]> {
   let text: string;
   try {
     text = await readFile(JOURNAL_FILE, "utf-8");
@@ -159,6 +160,7 @@ export async function readJournal(game: GameId | null, limit = 20): Promise<Jour
     try {
       const entry = JSON.parse(raw) as JournalEntry;
       if (game && entry.game !== game) continue;
+      if (profile && entry.profileId !== profile.id && !(profile.includeLegacy && !entry.profileId)) continue;
       out.push(entry);
     } catch {
       /* torn line */
@@ -190,6 +192,6 @@ export async function recordBackupEvent(
   // disagreed about who took it.
   await journalBackup({ game, event, actor: actor?.name || null, ...entry });
   if (actor && activity) {
-    await logBackupActivity(actor.userId, game, activity.action, activity.details);
+    await logBackupActivity(actor.userId, game, activity.action, { ...activity.details, ...(entry.profileId ? { profileId: entry.profileId } : {}) });
   }
 }

@@ -22,7 +22,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { McBansCard } from "@/components/mc-bans-card";
-import { installBrowserStubs } from "./helpers/dom";
+import { gamesState, installBrowserStubs } from "./helpers/dom";
+
+vi.mock("@/lib/use-games", async original => ({ ...(await original<typeof import("@/lib/use-games")>()), useGames: () => gamesState() }));
 
 beforeAll(() => {
   installBrowserStubs();
@@ -71,9 +73,9 @@ function stubFetch(get: Record<string, unknown>, mutation?: Record<string, unkno
         method,
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
-      if (method === "GET") return { ok: true, json: async () => get } as Response;
+      if (method === "GET") return new Response(JSON.stringify(get), { headers: { "X-Minecraft-Context": "legacy@0" } });
       const body = mutation ?? { success: true, verified: true, message: "Banned." };
-      return { ok: body.error === undefined, json: async () => body } as Response;
+      return new Response(JSON.stringify(body), { status: body.error === undefined ? 200 : 400, headers: { "X-Minecraft-Context": "legacy@0" } });
     })
   );
 }

@@ -337,3 +337,8 @@ describe("who may install and remove a single mod", () => {
     expect(removedIds).toEqual(["m2"]);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => process.env.MC_SERVER_DIR || "/minecraft");
+});

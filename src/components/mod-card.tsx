@@ -22,6 +22,7 @@ import { readOperationResponse } from "@/lib/operation-client";
 import { toast } from "sonner";
 import { ModDetailDialog } from "@/components/mod-detail-dialog";
 import { useOperations } from "@/components/operations-provider";
+import type { MinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
 import type { ModrinthProject } from "@/lib/modrinth";
 
 interface ModCardProps {
@@ -40,6 +41,7 @@ interface ModCardProps {
    * that puts the jar on the running server rather than into a pack.
    */
   canInstall: boolean;
+  activeRequest?: MinecraftProfileRequest;
 }
 
 interface SimpleModpack {
@@ -54,7 +56,7 @@ interface Dependency {
   name: string;
 }
 
-export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
+export function ModCard({ mod, canAddToPack, canInstall, activeRequest }: ModCardProps) {
   const { refresh: refreshOperations } = useOperations();
   const [showDetail, setShowDetail] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -98,10 +100,11 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
    * `confirm` is built on.
    */
   async function install(allowClientOnly = false) {
+    if (!canInstall || !activeRequest?.contextReady) return;
     setInstalling(true);
     const unconfirmed = `The connection ended before ${mod.title}'s install result was confirmed. Check the operation strip before retrying.`;
     try {
-      const res = await fetch("/api/mods/install", {
+      const res = await activeRequest.request("/api/mods/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -344,7 +347,7 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
                 {canInstall && (
                   <Button
                     size="sm"
-                    disabled={installing}
+                    disabled={installing || !activeRequest?.contextReady}
                     onClick={(e) => { e.stopPropagation(); install(); }}
                     className="shadow-sm"
                   >
@@ -385,7 +388,7 @@ export function ModCard({ mod, canAddToPack, canInstall }: ModCardProps) {
                 start — the same weight the modpack apply's confirm carries. */}
             <Button
               variant="destructive"
-              disabled={installing}
+              disabled={installing || !activeRequest?.contextReady}
               onClick={() => install(true)}
             >
               {installing ? "Installing..." : "Install it anyway"}

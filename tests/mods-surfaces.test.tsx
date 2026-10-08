@@ -189,7 +189,7 @@ let packs: unknown[] = [PACK];
 let exportMods: unknown[] = [];
 
 function json(status: number, body: unknown) {
-  return { ok: status < 400, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "legacy@0" } });
 }
 
 function stubFetch() {
@@ -204,6 +204,8 @@ function stubFetch() {
         deletes.push(u);
         return failDelete ? json(failDelete.status, failDelete.body) : json(200, { success: true });
       }
+      if (u === "/api/minecraft/active-profile") return json(200, {});
+      if (u === "/api/minecraft/profiles") return json(200, { profiles: [], runtime: { selectedProfileId: null, appliedProfileId: null, verified: false, state: "legacy", revision: "legacy@0" }, requiresAdoption: true, capabilities: { read: true, manage: false, start: false, switch: false } });
       if (u === "/api/modpacks") return json(200, packs);
       if (u === "/api/minecraft-versions") return json(200, { versions: ["26.1.2"] });
       if (u.startsWith("/api/mods/installed")) return json(200, INSTALLED);
@@ -429,7 +431,7 @@ describe("every component that writes a mod or a modpack is in the table above",
         const flat = readFileSync(path.join(dir, f), "utf8").replace(/\s+/g, " ");
         const calls = [
           ...flat.matchAll(
-            /fetch\(\s*(`[^`]*`|"[^"]*")\s*,\s*\{[^}]*method:\s*"(?:POST|PUT|PATCH|DELETE)"/g
+            /(?:fetch|request|activeRequest)\(\s*(`[^`]*`|"[^"]*")\s*,\s*\{[^}]*method:\s*"(?:POST|PUT|PATCH|DELETE)"/g
           ),
         ];
         if (calls.some((m) => /\/api\/mods|\/api\/modpacks/.test(m[1]))) return true;
@@ -461,7 +463,7 @@ describe("every component that writes a mod or a modpack is in the table above",
       path.resolve(__dirname, "../src/components/change-pack-dialog.tsx"),
       "utf8"
     ).replace(/\s+/g, " ");
-    expect(flat).not.toMatch(/fetch\([^)]*,\s*\{[^}]*method:\s*"POST"/);
+    expect(flat).not.toMatch(/(?:fetch|request|activeRequest)\([^)]*,\s*\{[^}]*method:\s*"POST"/);
     expect(writeSurfaces()).toContain("change-pack-dialog.tsx");
   });
 

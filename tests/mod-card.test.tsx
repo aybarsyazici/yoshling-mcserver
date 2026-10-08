@@ -1,3 +1,4 @@
+import type { MinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
 // @vitest-environment jsdom
 /**
  * **The search result's Install button and the client-only override dialog, rendered.**
@@ -41,6 +42,8 @@ vi.mock("sonner", () => ({
     warning: (text: string) => toasts.push({ kind: "warning", text }),
   },
 }));
+
+const activeRequest: MinecraftProfileRequest = { request: (input, init) => fetch(input, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), "X-Minecraft-Context": "fixture-active-context" } }), contextReady: true, contextError: null, contextToken: "legacy@0" };
 
 beforeAll(() => {
   installBrowserStubs();
@@ -127,7 +130,7 @@ const CLIENT_ONLY_409 = {
 describe("a search result installs one mod", () => {
   it("does not infer install failure from a gateway timeout with no operation receipt", async () => {
     stubFetch([{ status: 504, body: {} }]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
     await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
     expect(toasts).toEqual([{ kind: "info", text: expect.stringContaining("Check the operation strip before retrying") }]);
@@ -135,7 +138,7 @@ describe("a search result installs one mod", () => {
 
   it("refreshes the ledger instead of duplicating an admitted failure", async () => {
     stubFetch([{ status: 409, body: { operationId: "install-1", error: "dependency-preflight", message: "Required dependency missing." } }]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
     await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
     expect(toasts).toEqual([]);
@@ -143,7 +146,7 @@ describe("a search result installs one mod", () => {
 
   it("reports an unknown result after a connection failure and refreshes the ledger", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("Connection closed"); }));
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
     await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
     expect(toasts).toHaveLength(1);
@@ -155,7 +158,7 @@ describe("a search result installs one mod", () => {
 
   it("posts the mod to /api/mods/install, with no override", async () => {
     stubFetch([{ body: { success: true, verified: "sha512", message: "Mod installed. Restart server to activate." } }]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
 
     await waitFor(() => expect(posts).toHaveLength(1), WAIT);
@@ -184,7 +187,7 @@ describe("a search result installs one mod", () => {
         },
       },
     ]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
 
     await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
@@ -209,7 +212,7 @@ describe("a search result installs one mod", () => {
         },
       },
     ]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
 
     await waitFor(() => expect(toasts).toHaveLength(1), WAIT);
@@ -234,7 +237,7 @@ describe("a search result installs one mod", () => {
         },
       },
     ]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
 
     await waitFor(() => expect(toasts).toHaveLength(1), WAIT);
@@ -251,7 +254,7 @@ describe("a search result installs one mod", () => {
    */
   it("still offers Add to pack, which does not install anything", async () => {
     stubFetch([]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     fireEvent.click(screen.getByRole("button", { name: "Add to pack" }));
     await waitFor(() => expect(screen.queryByText("Add to Modpack")).not.toBeNull(), WAIT);
     expect(posts).toEqual([]);
@@ -268,7 +271,7 @@ function clientOnlyDialog(): HTMLElement | null {
 describe("the client-only refusal becomes a dialog that offers the override", () => {
   it("names the mod, states the consequence, and installs nothing yet", async () => {
     stubFetch([CLIENT_ONLY_409]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
 
     await waitFor(() => expect(clientOnlyDialog()).not.toBeNull(), WAIT);
@@ -298,7 +301,7 @@ describe("the client-only refusal becomes a dialog that offers the override", ()
         },
       },
     ]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
     await waitFor(() => expect(clientOnlyDialog()).not.toBeNull(), WAIT);
 
@@ -318,7 +321,7 @@ describe("the client-only refusal becomes a dialog that offers the override", ()
 
   it("sends nothing more when the override is cancelled", async () => {
     stubFetch([CLIENT_ONLY_409]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
     await waitFor(() => expect(clientOnlyDialog()).not.toBeNull(), WAIT);
 
@@ -335,7 +338,7 @@ describe("the client-only refusal becomes a dialog that offers the override", ()
    */
   it("opens no dialog for a mod the server supports", async () => {
     stubFetch([{ body: { success: true, verified: "sha512", message: "Mod installed. Restart server to activate." } }]);
-    render(<ModCard mod={SODIUM} canAddToPack canInstall />);
+    render(<ModCard activeRequest={activeRequest} mod={SODIUM} canAddToPack canInstall />);
     install();
     await waitFor(() => expect(refreshOperations).toHaveBeenCalledTimes(1), WAIT);
     expect(toasts).toEqual([]);

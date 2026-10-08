@@ -45,6 +45,8 @@
 
 import { GAME_LIST, type GameId } from "@/lib/games";
 import { BACKUP_DIRS, listArchives } from "@/lib/backup-store";
+import { minecraftActiveContext, assertMinecraftProfileCurrent, MinecraftActiveProfileError, type MinecraftActiveContext } from "./minecraft-active-profile";
+import { minecraftBackupDirectory } from "./minecraft-profile-backups";
 
 /** Default cadence. One a day per world, which with `keep: 5` is five days of history. */
 const DEFAULT_INTERVAL_HOURS = 24;
@@ -201,8 +203,11 @@ export function scheduleState(game: GameId): { lastFailedAtMs: number } {
   return { lastFailedAtMs: MEMORY.failedAt[game] ?? 0 };
 }
 
-async function decideFor(game: GameId, now: number): Promise<ScheduleVerdict> {
-  const archives = await listArchives(BACKUP_DIRS[game]);
+type ScheduleDecision = ScheduleVerdict & { minecraftContext?: MinecraftActiveContext };
+async function decideFor(game: GameId, now: number): Promise<ScheduleDecision> {
+  const minecraftContext = game === "minecraft" ? await minecraftActiveContext() : undefined;
+  const dir = minecraftContext ? await minecraftBackupDirectory(minecraftContext) : BACKUP_DIRS[game];
+  const archives = await listArchives(dir);
   const base: Omit<ScheduleInput, "world"> = {
     now,
     enabled: scheduleEnabled(),
@@ -213,15 +218,16 @@ async function decideFor(game: GameId, now: number): Promise<ScheduleVerdict> {
   };
 
   const cheap = shouldRunScheduledBackup({ ...base, world: null });
-  if (cheap.verdict !== "probe") return cheap;
+  if (cheap.verdict !== "probe") return { ...cheap, minecraftContext };
 
   // Only now is a live probe worth its telnet/RCON round trip.
   const { getGameStatus } = await import("@/lib/game-manager");
   const snap = await getGameStatus(game);
-  return shouldRunScheduledBackup({
+  if (minecraftContext) await assertMinecraftProfileCurrent(minecraftContext);
+  return { ...shouldRunScheduledBackup({
     ...base,
     world: { status: snap.status, playersOnline: snap.players.online },
-  });
+  }), minecraftContext };
 }
 
 /**
@@ -239,10 +245,11 @@ export async function runScheduledBackups(now = Date.now()): Promise<void> {
 
   for (const meta of GAME_LIST) {
     const game = meta.id;
-    let decision: ScheduleVerdict;
+    let decision: ScheduleDecision;
     try {
       decision = await decideFor(game, now);
     } catch (e) {
+      if (e instanceof MinecraftActiveProfileError) { console.log(`[backups] ${game}: skipped — Minecraft profile changed or is unverified`); continue; }
       console.error(`[backups] could not decide whether to back up ${game}:`, e);
       continue;
     }
@@ -255,7 +262,7 @@ export async function runScheduledBackups(now = Date.now()): Promise<void> {
     console.log(`[backups] ${game}: taking an automatic backup — ${decision.reason}`);
     try {
       const { createBackup } = await import("@/lib/backup-create");
-      const result = await createBackup(game, null);
+      const result = await createBackup(game, null, decision.minecraftContext);
       // Cleared explicitly rather than left: a world that failed an hour ago and succeeds
       // now must not keep serving its old cooldown.
       delete MEMORY.failedAt[game];
@@ -265,7 +272,7 @@ export async function runScheduledBackups(now = Date.now()): Promise<void> {
       );
     } catch (e) {
       const { OperationConflictError } = await import("@/lib/operations");
-      if (e instanceof OperationConflictError) {
+      if (e instanceof OperationConflictError || e instanceof MinecraftActiveProfileError) {
         // Not a failure: something else holds this world's files, which is precisely what
         // the lane is for. No cooldown — the next tick must be free to try, and nothing was
         // attempted so nothing is recorded anywhere.

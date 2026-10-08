@@ -1,5 +1,7 @@
 "use client";
 
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
 
 import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
@@ -39,6 +41,8 @@ export function FileBrowser({
   rootLabel?: string;
   tint?: string;
 } = {}) {
+  const context = useMinecraftProfileRequest(endpoint.startsWith("/api/server/"));
+  const request = context.request;
   const { can } = useGames(CAPABILITY_POLL_MS);
   const [root, setRoot] = useState(roots?.[0]?.key ?? "");
   const [items, setItems] = useState<FileEntry[]>([]);
@@ -71,7 +75,7 @@ export function FileBrowser({
       setEditContent("");
       setReadOk(false);
       try {
-        const res = await fetch(`${endpoint}?path=${encodeURIComponent(dirPath)}${rootQuery}`);
+        const res = await request(`${endpoint}?path=${encodeURIComponent(dirPath)}${rootQuery}`);
         const data = await res.json();
         if (generation !== requestGeneration.current) return;
         if (res.ok && Array.isArray(data.items)) {
@@ -86,7 +90,7 @@ export function FileBrowser({
       }
       if (generation === requestGeneration.current) setLoading(false);
     },
-    [endpoint, rootQuery]
+    [endpoint, rootQuery, request]
   );
 
   /**
@@ -103,7 +107,7 @@ export function FileBrowser({
     let content: string;
     let ok = false;
     try {
-      const res = await fetch(`${endpoint}?path=${encodeURIComponent(filePath)}&action=read${rootQuery}`);
+      const res = await request(`${endpoint}?path=${encodeURIComponent(filePath)}&action=read${rootQuery}`);
       const data = await res.json();
       if (res.ok && typeof data.content === "string") {
         content = data.content;
@@ -126,13 +130,13 @@ export function FileBrowser({
 
   async function saveFile() {
     // readOk, not just viewingFile: never write a buffer that isn't this file's.
-    if (!can.settingsEdit || !fileIdentity || !readOk || saving) return;
+    if (!context.contextReady || !can.settingsEdit || !fileIdentity || !readOk || saving) return;
     setSaving(true);
     try {
       const identity = fileIdentity;
       const generation = requestGeneration.current;
       const content = editContent;
-      const res = await fetch(identity.endpoint, {
+      const res = await request(identity.endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...revisionHeaders(identity.revision) },
         body: JSON.stringify({ path: identity.path, content, root: identity.root || undefined }),
@@ -157,10 +161,10 @@ export function FileBrowser({
   }
 
   async function deleteItem(item: FileEntry) {
-    if (!can.filesDelete) return;
+    if (!context.contextReady || !can.filesDelete) return;
     const what = item.isDirectory ? "folder" : "file";
     if (!confirm(`Delete ${what} "${item.name}"? This cannot be undone.`)) return;
-    const res = await fetch(`${endpoint}?path=${encodeURIComponent(item.path)}${rootQuery}`, {
+    const res = await request(`${endpoint}?path=${encodeURIComponent(item.path)}${rootQuery}`, {
       method: "DELETE",
     });
     if (res.ok) {
@@ -250,7 +254,7 @@ export function FileBrowser({
           )}
         </div>
         <div className="flex flex-shrink-0 gap-2">
-          {can.settingsEdit && viewingFile && !editing && isEditable && (
+          {context.contextReady && can.settingsEdit && viewingFile && !editing && isEditable && (
             <Button size="sm" onClick={() => setEditing(true)}>
               <Pencil className="h-3.5 w-3.5" /> Edit
             </Button>
@@ -260,7 +264,7 @@ export function FileBrowser({
               <Button size="sm" variant="outline" onClick={() => { setEditing(false); setEditContent(fileContent || ""); }}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={saveFile} disabled={saving || !readOk}>
+              <Button size="sm" onClick={saveFile} disabled={!context.contextReady || saving || !readOk}>
                 {saving ? "Saving…" : "Save"}
               </Button>
             </>
@@ -317,7 +321,7 @@ export function FileBrowser({
               </button>
               <div className="flex flex-shrink-0 items-center gap-3">
                 {!item.isDirectory && <span className="font-mono text-xs text-muted-foreground">{formatSize(item.size)}</span>}
-                {can.filesDelete && <button
+                {context.contextReady && can.filesDelete && <button
                   onClick={() => deleteItem(item)}
                   className="text-muted-foreground opacity-0 transition-all hover:text-destructive group-hover:opacity-100"
                   title="Delete"

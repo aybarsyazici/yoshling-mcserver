@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { db } from "@/lib/db";
 import { searchMods, buildFacets } from "@/lib/modrinth";
+import { withMinecraftProfileRead } from "@/lib/minecraft-active-profile";
 
 /**
  * The literal a caller sends to drop a facet on purpose.
@@ -35,6 +36,7 @@ export async function GET(request: NextRequest) {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
+  return withMinecraftProfileRead(async () => {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q") || "";
   const category = searchParams.get("category") || undefined;
@@ -72,5 +74,6 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ...results,
     filter: { mcVersion: mcVersion ?? null, loader: loader ?? null },
+  });
   });
 }

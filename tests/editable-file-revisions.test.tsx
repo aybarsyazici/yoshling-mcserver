@@ -20,7 +20,7 @@ vi.mock("@/components/sdtd-maintenance", () => ({ SdtdMaintenance: () => null })
 vi.mock("@/components/photo-footer", () => ({ PhotoFooter: () => null }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 beforeAll(() => { installBrowserStubs(); window.scrollTo = vi.fn(); }); afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-const json = (body: unknown, tag: string | null = null, status = 200) => new Response(JSON.stringify(body), { status, headers: tag ? { ETag: tag } : {} });
+const json = (body: unknown, tag: string | null = null, status = 200) => new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "fixture-active-context", ...(tag ? { ETag: tag } : {}) } });
 const tag = '"loaded-revision"';
 const property = { name: "FixtureOption", value: "12", help: "fixture" };
 const pzQuick = { properties: Object.entries({ PublicName: "Daily world", Password: "fixture", MaxPlayers: "12", Public: "true", PVP: "false", PauseEmpty: "true" }).map(([name,value]) => ({ name,value })) };

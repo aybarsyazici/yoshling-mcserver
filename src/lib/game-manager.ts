@@ -1,6 +1,5 @@
 import { readFile } from "fs/promises";
 import path from "path";
-import { gameDataPath } from "@/lib/game-data-path";
 import { GAMES, GAME_LIST, otherGames, type GameId } from "@/lib/games";
 import { CoResidencyError } from "@/lib/coresidency";
 import { sendCommand as rconSend } from "@/lib/rcon";
@@ -23,17 +22,22 @@ import {
   readEnvMap,
   readServiceEnv,
   writeEnvFile,
+  readMinecraftProfileComposeSettings,
+  writeMinecraftProfileComposeSettings,
+  MINECRAFT_JAVA_VARIANTS,
+  type MinecraftProfileComposeSettings,
+  minecraftProfileComposeSettings,
 } from "@/lib/compose";
 import { runCommand } from "@/lib/docker-cli";
 import {
   runOperation,
   type ControlAction,
-  type OperationFact,
   type OperationKind,
   type OperationResource,
   type OpHandle,
   type OpSuccess,
 } from "@/lib/operations";
+import { activeMinecraftServerPath, getMinecraftProfile, readMinecraftRuntime } from "@/lib/minecraft-profile-store";
 
 /**
  * Every `docker` fork in this module goes through the runner in `docker-cli.ts`
@@ -57,21 +61,36 @@ const execAsync = runCommand;
  * game console and churned the socket. Short TTL keeps the UI feeling live;
  * single-flight coalesces concurrent callers onto the same request.
  */
-function cachedProbe<T>(ttlMs: number, probe: () => Promise<T>): () => Promise<T> {
-  let cache: { at: number; data: T } | null = null;
-  let inflight: Promise<T> | null = null;
+const minecraftProbeRuntime = globalThis as typeof globalThis & { __yoshlingMinecraftProbeEpoch?: number };
+function minecraftProbeEpoch(): number { return minecraftProbeRuntime.__yoshlingMinecraftProbeEpoch ?? 0; }
+/** Shared across Next module graphs: a lifecycle boundary invalidates every MC reader. */
+export function invalidateMinecraftRuntimeProbes(): void {
+  minecraftProbeRuntime.__yoshlingMinecraftProbeEpoch = minecraftProbeEpoch() + 1;
+}
+class RuntimeProbeChangedError extends Error {
+  constructor() { super("Minecraft changed while its live values were being read. Reload to read the selected world."); }
+}
+
+function cachedProbe<T>(ttlMs: number, probe: () => Promise<T>, generation: () => number = () => 0): () => Promise<T> {
+  let cache: { at: number; data: T; epoch: number } | null = null;
+  let inflight: { promise: Promise<T>; epoch: number } | null = null;
   return () => {
-    if (cache && Date.now() - cache.at < ttlMs) return Promise.resolve(cache.data);
-    if (inflight) return inflight;
-    inflight = probe()
+    const epoch = generation();
+    if (cache?.epoch === epoch && Date.now() - cache.at < ttlMs) return Promise.resolve(cache.data);
+    if (inflight?.epoch === epoch) return inflight.promise;
+    const pending = probe()
       .then((data) => {
-        cache = { at: Date.now(), data };
+        // A late A response must never become B's cache or be delivered as a fresh
+        // reading after a switch, including a restart of the same selected profile.
+        if (epoch !== generation()) throw new RuntimeProbeChangedError();
+        cache = { at: Date.now(), data, epoch };
         return data;
       })
       .finally(() => {
-        inflight = null;
+        if (inflight?.promise === pending) inflight = null;
       });
-    return inflight;
+    inflight = { promise: pending, epoch };
+    return pending;
   };
 }
 
@@ -513,7 +532,8 @@ const cachedMcBoot = cachedProbe(
     if (m.fabric) return { stage: "Loading the mod loader", percent: 12, detail };
     if (m.init) return { stage: "Preparing the container", percent: 6, detail };
     return { stage: "Starting container", percent: 5, detail };
-  }
+  },
+  minecraftProbeEpoch
 );
 
 const minecraftDriver: GameDriver = {
@@ -1010,7 +1030,7 @@ export async function getAllStatus(): Promise<Record<GameId, GameStatus>> {
  * the ledger would multiply a measured problem. 3.5s is under the status poll's own
  * interval, so no consumer sees data older than it already tolerates.
  */
-export const cachedAllStatus = cachedProbe(3500, getAllStatus);
+export const cachedAllStatus = cachedProbe(3500, getAllStatus, minecraftProbeEpoch);
 
 /**
  * How long a live-settings read is reused.
@@ -1079,7 +1099,7 @@ async function readLiveSettings(game: GameId): Promise<LiveSettings> {
 }
 
 const cachedLive: Record<GameId, () => Promise<LiveSettings>> = {
-  minecraft: cachedProbe(LIVE_TTL, () => readLiveSettings("minecraft")),
+  minecraft: cachedProbe(LIVE_TTL, () => readLiveSettings("minecraft"), minecraftProbeEpoch),
   "7dtd": cachedProbe(LIVE_TTL, () => readLiveSettings("7dtd")),
   zomboid: cachedProbe(LIVE_TTL, () => readLiveSettings("zomboid")),
 };
@@ -1111,7 +1131,11 @@ export async function liveSettings(
   opts: { fresh?: boolean } = {}
 ): Promise<LiveSettings> {
   if (opts.fresh) return readLiveSettings(game);
-  return cachedLive[game]();
+  try { return await cachedLive[game](); }
+  catch (error) {
+    if (!(error instanceof RuntimeProbeChangedError)) throw error;
+    return { game, available: false, reason: error.message, values: {}, readAt: Date.now() };
+  }
 }
 
 export interface HandoffStep {
@@ -1244,7 +1268,7 @@ async function containerExit(container: string): Promise<{ state: string; exitCo
  * Returns whether a running container was actually stopped, so callers can avoid
  * recording durable side effects (an Activity row) for a no-op.
  */
-async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
+async function narratedStop(op: OpHandle, game: GameId, opts?: { requireSave?: boolean }): Promise<boolean> {
   const name = GAMES[game].name;
   if ((await stateBeforeChangingGame(game)) !== "running") {
     op.step(`Checking ${name}`, { game });
@@ -1254,7 +1278,14 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
 
   op.step(`Saving ${name}`, { game });
   const t0 = Date.now();
-  const saved = await DRIVERS[game].save();
+  // Profile replacement requires a confirmed flush before touching the current
+  // save. A timeout or an error reply must keep that server running. Ordinary
+  // emergency power-off retains its established recovery behavior.
+  const saved = opts?.requireSave && game === "minecraft"
+    ? await rconSend("save-all flush", 120_000)
+      .then(reply => /Saved the (?:game|world)/i.test(reply))
+      .catch(() => false)
+    : await DRIVERS[game].save();
   const savedMs = Date.now() - t0;
   if (saved) {
     op.settle(`Saved ${name}`);
@@ -1269,6 +1300,10 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
       verdict: "warn",
       game,
     });
+  }
+
+  if (!saved && opts?.requireSave) {
+    throw new Error(`${name} did not confirm saving its world. It is still running; stop it explicitly before changing profiles.`);
   }
 
   const grace = game === "zomboid" ? PZ_STOP_TIMEOUT : null;
@@ -1334,6 +1369,7 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
     op.settle(`Stopped ${name}`);
     op.fact({ label: "Shutdown", value: `exited cleanly (code ${exitCode})`, game });
   }
+  if (game === "minecraft") invalidateMinecraftRuntimeProbes();
   return true;
 }
 
@@ -1346,8 +1382,8 @@ async function narratedStop(op: OpHandle, game: GameId): Promise<boolean> {
  * releasing the lock twice — which left two unlocked windows in the middle of a
  * destructive operation for a Power on to interleave with.
  */
-export async function stopGameForOperation(op: OpHandle, game: GameId): Promise<boolean> {
-  return narratedStop(op, game);
+export async function stopGameForOperation(op: OpHandle, game: GameId, opts?: { requireSave?: boolean }): Promise<boolean> {
+  return narratedStop(op, game, opts);
 }
 
 export async function startGameForOperation(op: OpHandle, game: GameId): Promise<void> {
@@ -1365,6 +1401,7 @@ export async function gameContainerState(game: GameId): Promise<string> {
 
 /** Start the container and prove it came up, rather than assuming `docker start` meant it. */
 async function narratedStart(op: OpHandle, game: GameId): Promise<void> {
+  if (game === "minecraft") await assertSelectedMinecraftProfileIdentity();
   const name = GAMES[game].name;
   const runningPeers: GameId[] = [];
   for (const other of otherGames(game)) {
@@ -1387,6 +1424,7 @@ async function narratedStart(op: OpHandle, game: GameId): Promise<void> {
     throw new Error(`Couldn't verify that ${name} started: ${(e as Error).message}`);
   }
   if (state === "running") {
+    if (game === "minecraft") invalidateMinecraftRuntimeProbes();
     op.settle("Started the container");
     op.fact({ label: "Power", value: "running" });
   } else {
@@ -1697,7 +1735,7 @@ export async function containerImage(game: GameId): Promise<string> {
  * `narratedStart` returns as soon as the container is up, so the lock releases early
  * and the UI falls through to the richer per-boot progress (`snap.boot`).
  */
-export async function restartGame(game: GameId, startedBy?: string | null): Promise<void> {
+export async function restartGame(game: GameId, startedBy?: string | null, beforeStartAdmission?: () => Promise<void>): Promise<void> {
   return withPowerOperation(
     {
       kind: "power",
@@ -1707,6 +1745,7 @@ export async function restartGame(game: GameId, startedBy?: string | null): Prom
       startedBy,
     },
     async (op) => {
+      await beforeStartAdmission?.();
       // Checked here rather than inside `narratedStop`, so a restart of a world that is
       // already down records "nothing to stop" as evidence instead of a `noop` step —
       // which would drag the whole record to `partial` and a "but it did not go cleanly"
@@ -1786,6 +1825,7 @@ export async function recreateService(
   { start }: { start: boolean }
 ): Promise<void> {
   const rt = RUNTIME[game];
+  if (game === "minecraft") invalidateMinecraftRuntimeProbes();
   await execAsync(
     composeCmd(
       start
@@ -1795,6 +1835,176 @@ export async function recreateService(
     { timeout: 180000 }
   );
   await assertSingleContainer(rt.container, rt.service);
+  if (game === "minecraft") invalidateMinecraftRuntimeProbes();
+}
+
+export interface MinecraftProfileContainerIdentity {
+  state: string;
+  image: string;
+  subpath: string;
+  volumeName: string;
+  project: string;
+  service: string;
+  type: string | null;
+  version: string | null;
+  fabricLoaderVersion: string;
+  forgeVersion: string;
+  neoForgeVersion: string;
+  quiltLoaderVersion: string;
+  propertiesOverride: string;
+}
+
+/** Inspect only the identity needed for profile admission; never expose container secrets. */
+export async function inspectMinecraftProfileContainer(): Promise<MinecraftProfileContainerIdentity> {
+  const container = RUNTIME.minecraft.container;
+  const { stdout } = await execAsync(
+    `docker inspect ${container} --format '{{json .Mounts}}|{{json .HostConfig.Mounts}}|{{json .Config.Image}}|{{.State.Status}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}'`
+  );
+  const [actualRaw, definitionsRaw, imageRaw, state, project, service] = stdout.trim().split("|");
+  const actual: unknown = JSON.parse(actualRaw);
+  const definitions: unknown = JSON.parse(definitionsRaw);
+  const image: unknown = JSON.parse(imageRaw);
+  if (!Array.isArray(actual) || (definitions !== null && !Array.isArray(definitions)) || typeof image !== "string" || !state) {
+    throw new Error("Minecraft's container mount identity could not be read");
+  }
+  const mounts = actual.filter((entry: unknown): entry is Record<string, unknown> =>
+    !!entry && typeof entry === "object" && (entry as Record<string, unknown>).Destination === "/data");
+  if (mounts.length !== 1 || mounts[0].Type !== "volume" || typeof mounts[0].Name !== "string") {
+    throw new Error("Minecraft must have one named-volume mount at /data");
+  }
+  const selected = (definitions ?? []).filter((entry: unknown): entry is Record<string, unknown> =>
+    !!entry && typeof entry === "object" && (entry as Record<string, unknown>).Target === "/data");
+  if (selected.length > 1) throw new Error("Minecraft has more than one /data mount definition");
+  const volumeOptions = selected[0]?.VolumeOptions;
+  const subpath = volumeOptions && typeof volumeOptions === "object"
+    ? (volumeOptions as Record<string, unknown>).Subpath
+    : undefined;
+  if (subpath !== undefined && typeof subpath !== "string") throw new Error("Minecraft's profile subpath is unreadable");
+  const env = new Map<string, string>();
+  const publicKeys = new Set(["TYPE", "VERSION", "FABRIC_LOADER_VERSION", "FORGE_VERSION", "NEOFORGE_VERSION", "QUILT_LOADER_VERSION", "OVERRIDE_SERVER_PROPERTIES"]);
+  const { stdout: envOutput } = await execAsync(
+    `docker inspect ${container} --format '${scopedDockerEnvTemplate([...publicKeys])}'`
+  );
+  for (const line of envOutput.split("\n")) {
+    const at = line.indexOf("=");
+    if (at > 0 && publicKeys.has(line.slice(0, at))) env.set(line.slice(0, at), line.slice(at + 1).trim());
+  }
+  return {
+    state, image, subpath: subpath || ".", volumeName: mounts[0].Name, project, service,
+    type: env.get("TYPE") ?? null, version: env.get("VERSION") ?? null,
+    fabricLoaderVersion: env.get("FABRIC_LOADER_VERSION") ?? "",
+    forgeVersion: env.get("FORGE_VERSION") ?? "",
+    neoForgeVersion: env.get("NEOFORGE_VERSION") ?? "",
+    quiltLoaderVersion: env.get("QUILT_LOADER_VERSION") ?? "",
+    propertiesOverride: env.get("OVERRIDE_SERVER_PROPERTIES") ?? "true",
+  };
+}
+
+export function minecraftProfileContainerAgrees(
+  identity: MinecraftProfileContainerIdentity,
+  settings: MinecraftProfileComposeSettings
+): boolean {
+  const image = identity.image.includes(":") ? identity.image : `${identity.image}:latest`;
+  const pinAgrees = (actual: string, wanted: string) => actual === wanted ||
+    // A pre-profile container may inherit the image's floating loader defaults.
+    // Adoption resolves their actual installed build before creating a pinned profile.
+    (settings.subpath === "." && wanted === "" && /^(?:LATEST|RECOMMENDED)$/i.test(actual));
+  return identity.project === COMPOSE_PROJECT && identity.service === "minecraft" &&
+    identity.volumeName === `${COMPOSE_PROJECT}_mc-data` && identity.subpath === settings.subpath &&
+    image === `itzg/minecraft-server:${settings.javaVariant}` && identity.type === settings.type &&
+    identity.version === settings.version && pinAgrees(identity.fabricLoaderVersion, settings.fabricLoaderVersion) &&
+    pinAgrees(identity.forgeVersion, settings.forgeVersion) && pinAgrees(identity.neoForgeVersion, settings.neoForgeVersion) &&
+    pinAgrees(identity.quiltLoaderVersion, settings.quiltLoaderVersion) && identity.propertiesOverride === settings.propertiesOverride;
+}
+
+/** Read the image's declared Java major when a legacy tag did not name it. */
+export async function inspectMinecraftJavaVariant(): Promise<string | null> {
+  const image = await containerImage("minecraft");
+  const tag = image.match(/^itzg\/minecraft-server:(java(?:8|11|17|21|25))$/)?.[1];
+  if (tag) return tag;
+  const { stdout: id } = await execAsync(`docker inspect ${RUNTIME.minecraft.container} --format '{{.Image}}'`);
+  if (!/^sha256:[0-9a-f]{64}$/.test(id.trim())) throw new Error("Minecraft's existing image identity could not be read");
+  const { stdout } = await execAsync(`docker image inspect ${id.trim()} --format '${scopedDockerEnvTemplate(["JAVA_VERSION"])}'`);
+  const java = stdout.split("\n").find(line => line.startsWith("JAVA_VERSION="))?.slice("JAVA_VERSION=".length);
+  const major = java?.match(/^(?:jdk[-_]?)?(\d+)(?:[u.+_-]|$)/)?.[1];
+  const variant = major ? `java${major}` : null;
+  return variant && (MINECRAFT_JAVA_VARIANTS as readonly string[]).includes(variant) ? variant : null;
+}
+
+export async function minecraftProfileIsReady(): Promise<boolean> {
+  return rconSend("list").then(reply => /There are \d+ of a max of \d+ players online:/.test(reply)).catch(() => false);
+}
+
+/** Pull a missing allowlisted Java image while the current world is still untouched. */
+export async function prepareMinecraftProfileImage(op: OpHandle, javaVariant: string): Promise<void> {
+  if (!(MINECRAFT_JAVA_VARIANTS as readonly string[]).includes(javaVariant)) {
+    throw new Error("This Minecraft profile uses an unsupported Java image");
+  }
+  const image = `itzg/minecraft-server:${javaVariant}`;
+  op.step("Checking the Minecraft Java image", { game: "minecraft" });
+  try {
+    const { stdout } = await execAsync(`docker image inspect ${image} --format '{{.Id}}'`);
+    if (!/^sha256:[0-9a-f]{64}$/.test(stdout.trim())) throw new Error("The cached Java image identity is unverified");
+    op.settle(`The ${javaVariant} image is available`);
+  } catch {
+    op.detail(`Downloading ${javaVariant} before stopping the current world`);
+    await execAsync(`docker pull ${image}`, { timeout: 600_000, maxBuffer: 2 * 1024 * 1024 });
+    const { stdout } = await execAsync(`docker image inspect ${image} --format '{{.Id}}'`);
+    if (!/^sha256:[0-9a-f]{64}$/.test(stdout.trim())) throw new Error("The downloaded Java image could not be verified");
+    op.settle(`Downloaded and verified ${javaVariant}`);
+  }
+}
+
+/** Select one profile using Compose create, and prove its stopped mount/target before DB commit. */
+export async function recreateMinecraftProfileForOperation(
+  op: OpHandle,
+  settings: MinecraftProfileComposeSettings
+): Promise<MinecraftProfileContainerIdentity> {
+  if (op.preempted) throw new Error("The profile operation was interrupted before activation");
+  await requireGameStopped("minecraft");
+  op.step("Selecting the Minecraft profile", { game: "minecraft" });
+  await writeMinecraftProfileComposeSettings(settings);
+  op.settle("The selected profile settings were read back");
+  op.step("Creating the profile container", { game: "minecraft" });
+  await recreateService("minecraft", { start: false });
+  await requireGameStopped("minecraft");
+  const identity = await inspectMinecraftProfileContainer();
+  if (!minecraftProfileContainerAgrees(identity, settings)) {
+    throw new Error("The created Minecraft container did not match the selected profile mount, image and target");
+  }
+  const configured = await readMinecraftProfileComposeSettings();
+  if (!minecraftProfileContainerAgrees(identity, configured)) {
+    throw new Error("The Minecraft profile configuration changed during container creation");
+  }
+  op.settle("Verified the stopped container's profile mount and target");
+  op.fact({ label: "Mount", value: settings.subpath });
+  op.fact({ label: "Target", value: `${settings.version} / ${settings.type.toLowerCase()} / ${settings.javaVariant}` });
+  op.fact({ label: "Power", value: "powered off" });
+  return identity;
+}
+
+/** A running container alone is insufficient: require a valid Minecraft list reply. */
+export async function waitForMinecraftProfileReady(op: OpHandle): Promise<void> {
+  op.step("Waiting for the Minecraft world to be ready", { game: "minecraft" });
+  const deadline = Date.now() + 10 * 60_000;
+  while (Date.now() < deadline) {
+    if (op.preempted) throw new Error("The Minecraft profile startup was interrupted");
+    const state = await gameContainerState("minecraft");
+    if (state !== "running") throw new Error(`The Minecraft profile stopped during startup (container state: ${state})`);
+    const ready = await minecraftProfileIsReady();
+    if (ready) {
+      // A late exit after RCON replied is still a failed start.
+      if (await gameContainerState("minecraft") !== "running") throw new Error("Minecraft exited after answering its startup check");
+      invalidateMinecraftRuntimeProbes();
+      op.settle("The selected Minecraft world is running and answering");
+      op.fact({ label: "Boot", value: "running and answering" });
+      op.fact({ label: "Power", value: "running" });
+      return;
+    }
+    op.detail("The selected world is installing or starting; it has not answered the readiness check yet");
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+  throw new Error("Minecraft did not become ready within ten minutes. Its profile will remain stopped; inspect the server log before trying again.");
 }
 
 /**
@@ -1872,10 +2082,16 @@ function parseGb(value: string | null): number | null {
 }
 
 /** The value a key has in the container that exists right now. */
+function scopedDockerEnvTemplate(keys: readonly string[]): string {
+  if (!keys.length || keys.some(key => !/^[A-Z][A-Z_]*$/.test(key))) throw new Error("Invalid public container environment key");
+  const clauses = keys.map(key => `(eq (index (split . "=") 0) "${key}")`);
+  return `{{range .Config.Env}}{{if ${clauses.length > 1 ? `or ${clauses.join(" ")}` : clauses[0]}}}{{println .}}{{end}}{{end}}`;
+}
+
 async function liveEnv(container: string, key: string): Promise<string | null> {
   try {
     const { stdout } = await execAsync(
-      `docker inspect ${container} --format '{{range .Config.Env}}{{println .}}{{end}}'`
+      `docker inspect ${container} --format '${scopedDockerEnvTemplate([key])}'`
     );
     for (const line of stdout.split("\n")) {
       const [k, ...rest] = line.split("=");
@@ -2100,18 +2316,21 @@ async function writeServiceEnvToDotEnv(
 export async function applyServiceEnv(
   game: GameId,
   updates: Record<string, string>,
-  { stage, setting, startedBy, onApplied }: {
+  { stage, setting, startedBy, onApplied, beforeApply }: {
     stage: string;
     setting?: string;
     startedBy?: string | null;
     /** Persist dependent state only after verification, while still holding power. */
     onApplied?: () => Promise<void>;
+    /** Revalidate the request's profile context under admission, before any write or stop. */
+    beforeApply?: () => Promise<void>;
   }
 ): Promise<void> {
   const rt = RUNTIME[game];
   return withPowerOperation(
     { kind: "settings", game, action: "restart", title: stage, startedBy },
     async (op) => {
+      await beforeApply?.();
       mappedServiceEnvUpdates(game, updates);
       // The database is a record of an applied setting, never evidence the container
       // received it. In particular, retries after a failed recreate must check both.
@@ -2202,7 +2421,7 @@ export function isMemoryRangeError(e: unknown): e is MemoryRangeError {
   return e instanceof Error && (e as MemoryRangeError).isMemoryRange === true;
 }
 
-export async function setMemory(game: GameId, gb: number, startedBy?: string | null): Promise<MemoryState> {
+export async function setMemory(game: GameId, gb: number, startedBy?: string | null, beforeApply?: () => Promise<void>): Promise<MemoryState> {
   const rt = RUNTIME[game];
   if (!rt.memory) throw new Error("This server has no memory setting");
   const budget = await memoryBudget(game);
@@ -2237,6 +2456,7 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
       startedBy,
     },
     async (op) => {
+      await beforeApply?.();
       const wasRunning = (await stateBeforeChangingGame(game)) === "running";
       const value = rt.memory!.format(gb);
       const updates = Object.fromEntries(rt.memory!.keys.map((k) => [k, value]));
@@ -2280,7 +2500,7 @@ export async function setMemory(game: GameId, gb: number, startedBy?: string | n
 // ── config file readers (shared) ─────────────────────────────────────────────
 
 export async function getMinecraftProperties(): Promise<Record<string, string>> {
-  const filePath = await gameDataPath(RUNTIME.minecraft.dir, "server.properties");
+  const filePath = await activeMinecraftServerPath("server.properties");
   const content = await readFile(filePath, "utf-8");
   const properties: Record<string, string> = {};
   for (const line of content.split("\n")) {
@@ -2293,6 +2513,7 @@ export async function getMinecraftProperties(): Promise<Record<string, string>> 
 
 /** Only selected, nonsecret values leave this verified config/container comparison. */
 export async function getMinecraftTarget(): Promise<{ mcVersion: string; loader: string }> {
+  await assertSelectedMinecraftProfileIdentity();
   const compose = await readCompose();
   const env = await readEnvMap();
   const rt = RUNTIME.minecraft;
@@ -2306,4 +2527,19 @@ export async function getMinecraftTarget(): Promise<{ mcVersion: string; loader:
     throw new Error("The Minecraft version/loader is unknown or differs between configured and created-container values. Verify the settings before changing game files.");
   }
   return { mcVersion, loader };
+}
+
+/** Every sanctioned start/target-dependent writer honors the selected profile identity. */
+async function assertSelectedMinecraftProfileIdentity(): Promise<void> {
+  const { runtime } = await readMinecraftRuntime();
+  if (!runtime?.selectedProfileId) return;
+  const profile = await getMinecraftProfile(runtime.selectedProfileId);
+  if (!profile || profile.status !== "ready") throw new Error("The selected Minecraft profile is missing or is not ready");
+  const expected = minecraftProfileComposeSettings(profile.id, {
+    mcVersion: profile.mcVersion, loader: profile.loader, loaderVersion: profile.loaderVersion, javaVariant: profile.javaVariant,
+  });
+  const [configured, identity] = await Promise.all([readMinecraftProfileComposeSettings(), inspectMinecraftProfileContainer()]);
+  if (!minecraftProfileContainerAgrees(identity, configured) || !minecraftProfileContainerAgrees(identity, expected)) {
+    throw new Error("Minecraft's selected profile, configured target and created container do not agree. Profile recovery is required before starting or changing its files.");
+  }
 }

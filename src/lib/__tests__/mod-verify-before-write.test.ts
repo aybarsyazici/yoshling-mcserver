@@ -111,7 +111,7 @@ describe("a corrupt jar is never written to the mods directory", () => {
 
     const gotBytes = source.indexOf("arrayBuffer()");
     const checked = source.indexOf("checkIntegrity(");
-    const admitted = source.indexOf("await modFilePath(getModsDir(), fileName)");
+    const admitted = source.indexOf("await modFilePath(await getModsDir(), fileName, { boundaryRoot: context.root })");
     const wrote = source.indexOf("writeFile(filePath, buffer)");
     const readBack = source.indexOf("readFile(filePath)");
     const recorded = source.indexOf("await db.installedMod.create(");

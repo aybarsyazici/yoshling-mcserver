@@ -373,3 +373,8 @@ describe("the pack search is faceted on what the server runs", () => {
     expect((await search()).status).toBe(403);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => "/minecraft");
+});

@@ -1,5 +1,8 @@
 "use client";
 
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Ban, Check, Globe, User } from "lucide-react";
@@ -92,6 +95,10 @@ function shortDate(createdIso: string | null): string {
 }
 
 export function McBansCard() {
+  const context = useMinecraftProfileRequest();
+  const request = context.request;
+  const { can } = useGames(CAPABILITY_POLL_MS);
+  const canWrite = context.contextReady && can.settingsEdit === true;
   const [state, setState] = useState<BansState | null>(null);
   const [newPlayer, setNewPlayer] = useState("");
   const [newIp, setNewIp] = useState("");
@@ -101,7 +108,7 @@ export function McBansCard() {
 
   async function load() {
     try {
-      const res = await fetch("/api/server/bans");
+      const res = await request("/api/server/bans");
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error || "Couldn't read the ban list");
@@ -127,16 +134,17 @@ export function McBansCard() {
    * success, hence `toast.info`.
    */
   async function change(action: "ban" | "pardon", kind: "player" | "ip", target: string) {
+    if (!canWrite) return;
     setBusy(`${kind}:${target}`);
     try {
       const res =
         action === "ban"
-          ? await fetch("/api/server/bans", {
+          ? await request("/api/server/bans", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ kind, target, reason }),
             })
-          : await fetch(
+          : await request(
               `/api/server/bans?kind=${kind}&target=${encodeURIComponent(target)}`,
               { method: "DELETE" }
             );
@@ -212,8 +220,8 @@ export function McBansCard() {
    */
   const blockedForFile = (kind: "players" | "ips") =>
     state.path === "file" && state.malformed[kind];
-  const cannotChangePlayers = state.path === "refuse" || blockedForFile("players");
-  const cannotChangeIps = state.path === "refuse" || blockedForFile("ips");
+  const cannotChangePlayers = !canWrite || state.path === "refuse" || blockedForFile("players");
+  const cannotChangeIps = !canWrite || state.path === "refuse" || blockedForFile("ips");
 
   /** Which files are unparseable, named, so the notices can say which and what follows. */
   const badFiles = [

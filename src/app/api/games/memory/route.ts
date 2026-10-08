@@ -6,6 +6,7 @@ import { hasPermission } from "@/lib/permissions";
 import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
+import { minecraftActiveContext, assertMinecraftProfileCurrent, MinecraftActiveProfileError } from "@/lib/minecraft-active-profile";
 
 export const maxDuration = 300;
 
@@ -39,7 +40,8 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const state = await setMemory(game, Number(gb), session.user.name);
+    const minecraftContext = game === "minecraft" ? await minecraftActiveContext() : null;
+    const state = await setMemory(game, Number(gb), session.user.name, minecraftContext ? () => assertMinecraftProfileCurrent(minecraftContext) : undefined);
     await db.activity
       .create({
         data: {
@@ -52,6 +54,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json(state);
   } catch (e) {
     if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof MinecraftActiveProfileError) return NextResponse.json({ error: e.message }, { status: 409 });
     // 400, not 500: an out-of-range heap or one under the service's `-Xms` is the server
     // working correctly and declining, and nothing was changed. The message reached the
     // user either way — the card toasts `data.error` — but a 500 tells every log and

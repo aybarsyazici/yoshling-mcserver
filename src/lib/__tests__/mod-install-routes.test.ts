@@ -1476,3 +1476,8 @@ describe("an apply records which pack was applied", () => {
     expect(warnings).toMatch(/database is locked/);
   });
 });
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => "/mc");
+});

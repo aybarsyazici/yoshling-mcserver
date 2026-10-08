@@ -78,7 +78,7 @@ function stubFetch(replies: unknown[]) {
 }
 
 function json(status: number, body: unknown) {
-  return { ok: status < 400, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "fixture-active-context" } });
 }
 
 const FILTERED = {

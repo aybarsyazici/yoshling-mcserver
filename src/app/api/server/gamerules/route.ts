@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameGate } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { withGameFileWrite } from "@/lib/operation-response";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
 import { assertFileWriteActive } from "@/lib/operations";
 import { containerIsRunning } from "@/lib/game-manager";
 import { classifyRconFailure, rconFailureMessage } from "@/lib/rcon-failure";
@@ -150,6 +150,7 @@ export async function GET() {
   // the page looked like. A game rule holds nothing credential-shaped either (unlike 7DTD's
   // `ServerPassword` or PZ's `DiscordToken`, which is what `settings.read` was added for).
 
+  return withMinecraftProfileRead(async () => {
   const { sendCommand, sendCommandLong } = await import("@/lib/rcon");
 
   let listReply: string;
@@ -243,6 +244,7 @@ export async function GET() {
     discovered: discovered.length,
     ...(warning ? { warning } : {}),
   });
+  }, { verifyRuntime: true });
 }
 
 export async function PUT(request: NextRequest) {
@@ -261,7 +263,7 @@ export async function PUT(request: NextRequest) {
    * declares every file lane, so this refuses with a 409 that explains itself instead of
    * an RCON error about a world that was shutting down.
    */
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const body = await request.json().catch(() => null);
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -420,6 +422,7 @@ export async function PUT(request: NextRequest) {
             action: "set_gamerule",
             details: JSON.stringify({
               game: "minecraft",
+              profileId: context.profileId,
               rule: id,
               value: after.value,
               from: before.value,

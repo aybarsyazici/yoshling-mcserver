@@ -45,7 +45,7 @@ function navFor(game: GameId, canSettings: boolean): NavItem[] {
   const meta = GAMES[game];
   const base = meta.base;
   return [
-    { name: "Overview", href: base, icon: Gamepad2 },
+    { name: game === "minecraft" ? "Profiles" : "Overview", href: base, icon: Gamepad2 },
     ...(meta.hasMods ? [{ name: "Mods", href: `${base}/mods`, icon: Puzzle }] : []),
     { name: "Server", href: `${base}/server`, icon: Server },
     { name: "Backups", href: `${base}/backups`, icon: Archive },
@@ -133,7 +133,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
             <div className="min-w-0">
               <h1 className="truncate font-display text-base font-bold tracking-tight text-sidebar-foreground">Yoshling</h1>
               <p className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                <ChevronLeft className="h-3 w-3" /> all worlds
+                <ChevronLeft className="h-3 w-3" /> all games
               </p>
             </div>
           )}
@@ -147,7 +147,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
             worlds.length < 2 && "hidden"
           )}
         >
-          {!collapsed && <p className="eyebrow px-2 pb-2 pt-1 text-muted-foreground">World</p>}
+          {!collapsed && <p className="eyebrow px-2 pb-2 pt-1 text-muted-foreground">Game</p>}
           <div className={cn("flex gap-1", collapsed ? "flex-col" : "flex-row")}>
             {worlds.map((g) => {
               const on = games?.[g.id]?.status === "online";

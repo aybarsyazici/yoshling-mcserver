@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { readOperationResponse, unconfirmedOperationMessage } from "@/lib/operation-client";
 import { StatusFreshness } from "@/components/status-freshness";
 import { JoinPanel } from "@/components/join-panel";
+import { MinecraftProfilePicker } from "@/components/minecraft-profile-picker";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GAMES, GAME_LIST, otherGames, type GameId, type GameMeta } from "@/lib/games";
@@ -94,6 +95,7 @@ export function MissionControl({
 
   const [pending, setPending] = useState<GameId | null>(null); // game being powered on/awaiting confirm
   const [confirmFor, setConfirmFor] = useState<GameId | null>(null);
+  const [profilePicker, setProfilePicker] = useState(false);
   const [confirmPreempt, setConfirmPreempt] = useState<GameId | null>(null);
 
   // The operation to caption the core with: whatever holds the power slot, else the
@@ -244,6 +246,7 @@ export function MissionControl({
      * preemptable) setConfirm(true)`); the landing page — the one with the world cards
      * on it — did not.
      */
+    if (game === "minecraft") return setProfilePicker(true);
     if (runningOthers(game).length > 0 || preempting) {
       setConfirmFor(game);
     } else {
@@ -418,6 +421,7 @@ export function MissionControl({
             pollError={pollError}
             power={surfaceFor(g.id)}
             onPower={onPowerClick}
+            onSwitchProfile={g.id === "minecraft" ? () => setProfilePicker(true) : undefined}
             delay={0.1 + i * 0.08}
           />
         ))}
@@ -431,6 +435,7 @@ export function MissionControl({
         </p>
       )}
 
+      <MinecraftProfilePicker open={profilePicker} onOpenChange={setProfilePicker} onSubmitted={() => { void refresh(); }} />
       {/* RAM budget bar */}
       <motion.div
         className="mx-auto mt-8 max-w-2xl rounded-2xl bg-card/60 p-5 ring-1 ring-foreground/10 backdrop-blur"
@@ -733,6 +738,7 @@ function WorldCard({
   pollError,
   power,
   onPower,
+  onSwitchProfile,
   delay,
 }: {
   game: GameId;
@@ -743,6 +749,7 @@ function WorldCard({
   /** Derived in `MissionControl` by the one shared `powerState`. */
   power: PowerSurface;
   onPower: (g: GameId, containerUp: boolean) => void;
+  onSwitchProfile?: () => void;
   delay: number;
 }) {
   const meta = GAMES[game];
@@ -871,7 +878,7 @@ function WorldCard({
             Manage
           </Link>
         </div>
-
+        {game === "minecraft" && power.containerUp && <Button variant="outline" className="mt-2 min-h-11 w-full" disabled={power.busy || !power.canRestart} onClick={onSwitchProfile}>Switch profile &amp; restart</Button>}
         <div className="mt-4">
           <JoinPanel game={game} snapshot={snapshot} lastSuccessAt={lastSuccessAt} pollError={pollError} busy={isBusyThis} compact />
         </div>

@@ -95,4 +95,27 @@ describe("tracked preflight takes power only when needed", () => {
       return { value: null };
     });
   });
+
+  it("claims only the confirmed peer file lanes together with power", async () => {
+    await runOperation({ kind: "profile.switch", game: "minecraft", title: "Preparing" }, async op => {
+      claimOperationPower(op, "start", ["zomboid"]);
+      const current = listOperations().find(entry => entry.id === op.id)!;
+      expect(current.resources).toEqual(["files:minecraft", "power", "files:zomboid"]);
+      expect(current.resources).not.toContain("files:7dtd");
+      return { value: null };
+    });
+  });
+
+  it("does not partially claim power when a confirmed peer is still writing files", async () => {
+    const finish = deferred();
+    const backup = runOperation({ kind: "backup.create", game: "zomboid", title: "Copying" }, async () => { await finish.promise; return { value: null }; });
+    try {
+      await runOperation({ kind: "profile.switch", game: "minecraft", title: "Preparing" }, async op => {
+        expect(() => claimOperationPower(op, "start", ["zomboid"])).toThrow(/busy/);
+        expect(currentControlLock()).toBeNull();
+        expect(listOperations().find(entry => entry.id === op.id)?.resources).toEqual(["files:minecraft"]);
+        return { value: null };
+      });
+    } finally { finish.resolve(); await backup; }
+  });
 });

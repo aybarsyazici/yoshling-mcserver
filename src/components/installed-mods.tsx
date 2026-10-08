@@ -1,5 +1,7 @@
 "use client";
 
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ModListFilters } from "@/components/mod-list-filters";
 import { filterMinecraftMods, MINECRAFT_MOD_STATES, MINECRAFT_MOD_ORIGINS, type MinecraftModStateFilter, type MinecraftModOriginFilter } from "@/lib/mod-list-filters";
@@ -118,6 +120,8 @@ const GROUPS: Group[] = [
 ];
 
 export function InstalledMods() {
+  const context = useMinecraftProfileRequest();
+  const request = context.request;
   // `can.modsRemove` / `can.modsInstall`; see `CAPABILITY_POLL_MS` for why it is not 5 s.
   const { can } = useGames(CAPABILITY_POLL_MS);
   const [state, setState] = useState<State | null>(null);
@@ -133,11 +137,11 @@ export function InstalledMods() {
   const resetFilters = () => { setQuery(""); setStateFilter("all"); setOriginFilter("all"); };
 
   const readInstalled = useCallback(async (hash: boolean): Promise<State> => {
-    const response = await fetch(`/api/mods/installed${hash ? "?hash=1" : ""}`);
+    const response = await request(`/api/mods/installed${hash ? "?hash=1" : ""}`);
     const data = (await response.json()) as InstalledReading & { error?: string };
     if (!response.ok || !Array.isArray(data.mods)) throw new Error(data.error || "Couldn't read what is installed.");
     return { ...data, readAt: Date.now() };
-  }, []);
+  }, [request]);
   const load = useCallback(async (hash: boolean, opts: { spinner?: boolean } = {}) => {
     if (opts.spinner) setLoading(true);
     try { setState(await readInstalled(hash)); }
@@ -154,10 +158,10 @@ export function InstalledMods() {
   }, [readInstalled]);
 
   async function handleRemove(mod: InventoryEntry) {
-    if (!mod.id || !can.modsRemove) return;
+    if (!context.contextReady || !mod.id || !can.modsRemove) return;
     setRemoving(mod.id);
     try {
-      const response = await fetch(`/api/mods/${mod.id}`, { method: "DELETE" });
+      const response = await request(`/api/mods/${mod.id}`, { method: "DELETE" });
       const data = await response.json();
       if (!response.ok) {
         toast.error(typeof data?.error === "string" ? data.error : `Couldn't remove ${mod.name}`);
@@ -444,7 +448,7 @@ export function InstalledMods() {
                     key={mod.id ?? `file:${mod.fileName}`}
                     mod={mod}
                     hashed={hashed}
-                    canRemove={can.modsRemove}
+                    canRemove={can.modsRemove && context.contextReady}
                     // **`mod.id != null &&` is load-bearing.** `removing` is `null` when
                     // nothing is being removed and an untracked entry's `id` is also
                     // `null`, so a bare `removing === mod.id` is `true` for every untracked
@@ -466,6 +470,7 @@ export function InstalledMods() {
           reading of the directory, and an install or an apply that half-worked has to show
           up as drift rather than as whatever the dialog assumed. */}
       <AddModDialog
+        activeRequest={context}
         open={addOpen}
         onOpenChange={setAddOpen}
         onClosed={() => void load(withHashes)}
@@ -474,6 +479,7 @@ export function InstalledMods() {
         open={changePackOpen}
         onOpenChange={setChangePackOpen}
         counts={counts}
+        request={context}
         onApplied={() => void load(withHashes)}
       />
     </div>

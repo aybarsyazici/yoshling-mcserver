@@ -1,5 +1,10 @@
 "use client";
 
+import Link from "next/link";
+import { useMinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+import { useGames, CAPABILITY_POLL_MS } from "@/lib/use-games";
+import { MinecraftProfileContext } from "@/components/minecraft-profile-context";
+
 import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -71,8 +76,8 @@ function isNameList(value: unknown): value is WhitelistEntry[] {
   );
 }
 
-async function readSettings(url: string, fallback: string): Promise<{ data: unknown; revision: string | null }> {
-  const response = await fetch(url);
+async function readSettings(url: string, fallback: string, request: typeof fetch = fetch): Promise<{ data: unknown; revision: string | null }> {
+  const response = await request(url);
   const data: unknown = await response.json();
   if (!response.ok) {
     const error = data !== null && typeof data === "object" && "error" in data ? data.error : null;
@@ -104,6 +109,12 @@ function formatLabel(key: string): string {
 }
 
 export default function SettingsPage() {
+  const context = useMinecraftProfileRequest();
+  const request = context.request;
+  const permissions = useGames(CAPABILITY_POLL_MS);
+  const actionsReady = context.contextReady && !permissions.loading && !permissions.pollError && permissions.can.settingsEdit === true;
+  const [targetEditable, setTargetEditable] = useState(false);
+  const targetLocked = !targetEditable;
   const [config, setConfig] = useState<ServerConfig>({
     mcVersion: "1.21.4",
     modLoader: "fabric",
@@ -147,13 +158,14 @@ export default function SettingsPage() {
   const [newWl, setNewWl] = useState("");
 
   const loadConfig = useCallback(() => {
-    return readSettings("/api/settings", "Could not load the server version.").then(({ data }) => {
+    return readSettings("/api/settings", "Could not load the server version.", request).then(({ data }) => {
       if (!data || typeof data !== "object" || !("mcVersion" in data) ||
           typeof data.mcVersion !== "string" || !data.mcVersion ||
           !("modLoader" in data) || typeof data.modLoader !== "string" || !data.modLoader) {
         throw new Error("The server version response is incomplete. Reload before saving.");
       }
       const current = { mcVersion: data.mcVersion, modLoader: data.modLoader };
+      setTargetEditable("targetEditable" in data && data.targetEditable === true);
       setConfig(current);
       setSavedConfig(current);
       setConfigError(null);
@@ -164,10 +176,10 @@ export default function SettingsPage() {
     }).finally(() => {
       setConfigLoading(false);
     });
-  }, []);
+  }, [request]);
 
   const loadOps = useCallback(() => {
-    return readSettings("/api/server/ops", "Could not load operators.").then(({ data, revision }) => {
+    return readSettings("/api/server/ops", "Could not load operators.", request).then(({ data, revision }) => {
       if (!isNameList(data) || !data.every((entry) =>
         "level" in entry && typeof entry.level === "number" && Number.isInteger(entry.level) &&
         entry.level >= 1 && entry.level <= 4 && "bypassesPlayerLimit" in entry &&
@@ -183,10 +195,10 @@ export default function SettingsPage() {
     }).finally(() => {
       setOpsLoading(false);
     });
-  }, []);
+  }, [request]);
 
   const loadWhitelist = useCallback(() => {
-    return readSettings("/api/server/mc-whitelist", "Could not load the Minecraft whitelist.").then(({ data, revision }) => {
+    return readSettings("/api/server/mc-whitelist", "Could not load the Minecraft whitelist.", request).then(({ data, revision }) => {
       if (!isNameList(data)) {
         throw new Error("The Minecraft whitelist response is incomplete. Reload before editing.");
       }
@@ -198,12 +210,12 @@ export default function SettingsPage() {
     }).finally(() => {
       setWlLoading(false);
     });
-  }, []);
+  }, [request]);
 
-  const loadProperties = useCallback(() => readSettings("/api/server/properties", "Could not read server.properties.").then(({ data, revision }) => {
+  const loadProperties = useCallback(() => readSettings("/api/server/properties", "Could not read server.properties.", request).then(({ data, revision }) => {
     if (!data || typeof data !== "object" || Array.isArray(data) || "error" in data || !Object.values(data).every((v) => typeof v === "string")) throw new Error("The properties response is incomplete.");
     setProperties(data as Record<string, string>); setPropsRevision(revision); setPropsReady(true); setPropsError(null);
-  }).catch((error) => { setPropsReady(false); setPropsError(error instanceof Error ? error.message : "Could not read server.properties."); }), []);
+  }).catch((error) => { setPropsReady(false); setPropsError(error instanceof Error ? error.message : "Could not read server.properties."); }), [request]);
 
   useEffect(() => {
     void loadConfig();
@@ -226,10 +238,10 @@ export default function SettingsPage() {
    * control it replaced.
    */
   async function handleSaveConfig(confirm = false) {
-    if (!savedConfig || configLoading || saving) return;
+    if (!actionsReady || targetLocked || !savedConfig || configLoading || saving) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/settings", {
+      const res = await request("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(confirm ? { ...config, confirm: true } : config),
@@ -268,7 +280,7 @@ export default function SettingsPage() {
   }
 
   async function handleSaveProperties() {
-    if (!propsReady || propsSaving) return;
+    if (!actionsReady || !propsReady || propsSaving) return;
     // Only what was touched. An untouched key resent is indistinguishable from an edit at
     // the route, and it is what made every save log "58 settings edited".
     const changedKeys = [...dirtyProps].filter((k) => k in properties);
@@ -278,7 +290,7 @@ export default function SettingsPage() {
     }
     setPropsSaving(true);
     try {
-      const res = await fetch("/api/server/properties", {
+      const res = await request("/api/server/properties", {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...revisionHeaders(propsRevision) },
         body: JSON.stringify(Object.fromEntries(changedKeys.map((k) => [k, properties[k]]))),
@@ -317,10 +329,10 @@ export default function SettingsPage() {
   }
 
   async function handleSaveOps() {
-    if (ops === null || opsLoading || opsSaving) return;
+    if (!actionsReady || ops === null || opsLoading || opsSaving) return;
     setOpsSaving(true);
     try {
-      const res = await fetch("/api/server/ops", {
+      const res = await request("/api/server/ops", {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...revisionHeaders(opsRevision) },
         body: JSON.stringify(ops),
@@ -338,10 +350,10 @@ export default function SettingsPage() {
   }
 
   async function handleSaveWhitelist() {
-    if (whitelist === null || wlLoading || wlSaving) return;
+    if (!actionsReady || whitelist === null || wlLoading || wlSaving) return;
     setWlSaving(true);
     try {
-      const res = await fetch("/api/server/mc-whitelist", {
+      const res = await request("/api/server/mc-whitelist", {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...revisionHeaders(wlRevision) },
         body: JSON.stringify(whitelist),
@@ -357,6 +369,7 @@ export default function SettingsPage() {
   }
 
   function updateProp(key: string, value: string) {
+    if (!actionsReady) return;
     setProperties((prev) => ({ ...prev, [key]: value }));
     setDirtyProps((prev) => new Set(prev).add(key));
   }
@@ -370,12 +383,16 @@ export default function SettingsPage() {
         tint={GAMES.minecraft.tint}
       />
 
+      <MinecraftProfileContext />
+      {context.contextError && <p role="alert">{context.contextError}</p>}
+      {!actionsReady && <p className="text-sm text-muted-foreground">Minecraft editing waits for verified profile identity and current settings permission.</p>}
       {/* Server Config */}
       <Card className="border-border/50 shadow-sm">
         <CardHeader>
-          <CardTitle>Server Version &amp; Resources</CardTitle>
+          <CardTitle>Minecraft profile target</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {targetLocked && <p className="text-sm text-muted-foreground">Version and loader belong to a prepared profile. <Link href="/minecraft" className="underline">Create another profile</Link> for a different target.</p>}
           {configLoading && <p className="text-sm text-muted-foreground">Loading server version…</p>}
           {configError && (
             <div role="alert" className="space-y-2">
@@ -395,7 +412,7 @@ export default function SettingsPage() {
                   something the user was never warned about. */}
               <Select
                 value={config.mcVersion}
-                disabled={configLoading || savedConfig === null || saving}
+                disabled={!actionsReady || targetLocked || configLoading || savedConfig === null || saving}
                 onValueChange={(v) => {
                   setVersionBlock(null);
                   setConfig((p) => ({ ...p, mcVersion: v ?? p.mcVersion }));
@@ -422,7 +439,7 @@ export default function SettingsPage() {
               <Label>Mod Loader</Label>
               <Select
                 value={config.modLoader}
-                disabled={configLoading || savedConfig === null || saving}
+                disabled={!actionsReady || targetLocked || configLoading || savedConfig === null || saving}
                 onValueChange={(v) => {
                   setVersionBlock(null);
                   setConfig((p) => ({ ...p, modLoader: v ?? p.modLoader }));
@@ -430,6 +447,7 @@ export default function SettingsPage() {
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="vanilla">Vanilla</SelectItem>
                   <SelectItem value="fabric">Fabric</SelectItem>
                   <SelectItem value="forge">Forge</SelectItem>
                   <SelectItem value="neoforge">NeoForge</SelectItem>
@@ -463,7 +481,7 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted-foreground">{versionBlock}</p>
                 <div className="flex flex-wrap gap-2">
                   {/* The only place `confirm` is sent. */}
-                  <Button size="sm" variant="outline" onClick={() => handleSaveConfig(true)} disabled={saving}>
+                  <Button size="sm" variant="outline" onClick={() => handleSaveConfig(true)} disabled={!actionsReady || targetLocked || saving}>
                     {saving ? "Applying..." : "Change anyway"}
                   </Button>
                   <Button
@@ -482,7 +500,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <Button onClick={() => handleSaveConfig()} disabled={saving || configLoading || savedConfig === null}>
+          <Button onClick={() => handleSaveConfig()} disabled={!actionsReady || targetLocked || saving || configLoading || savedConfig === null}>
             {saving ? "Saving..." : "Save & Restart Server"}
           </Button>
         </CardContent>
@@ -549,7 +567,7 @@ export default function SettingsPage() {
                             <div className="flex items-center gap-2 pt-1">
                               <Switch
                                 checked={value === "true"}
-                                disabled={!!gameRule}
+                                disabled={!actionsReady || !!gameRule}
                                 onCheckedChange={(v) => updateProp(key, v ? "true" : "false")}
                               />
                               <span className="text-xs text-muted-foreground">
@@ -559,7 +577,7 @@ export default function SettingsPage() {
                           ) : type === "select" ? (
                             <Select
                               value={value}
-                              disabled={!!gameRule}
+                              disabled={!actionsReady || !!gameRule}
                               onValueChange={(v) => { if (v) updateProp(key, v); }}
                             >
                               <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
@@ -589,7 +607,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
               ))}
-              <Button onClick={handleSaveProperties} disabled={!propsReady || propsSaving || dirtyProps.size === 0}>
+              <Button onClick={handleSaveProperties} disabled={!actionsReady || !propsReady || propsSaving || dirtyProps.size === 0}>
                 {propsSaving
                   ? "Saving..."
                   : dirtyProps.size === 0
@@ -648,8 +666,8 @@ export default function SettingsPage() {
                 <span className="text-[10px] text-muted-foreground ml-1">lvl {op.level}</span>
                 <button
                   aria-label={`Remove operator ${op.name}`}
-                  disabled={opsLoading || opsSaving}
-                  onClick={() => { if (!opsLoading && !opsSaving) setOps((prev) => prev?.filter((o) => o.name !== op.name) ?? null); }}
+                  disabled={!actionsReady || opsLoading || opsSaving}
+                  onClick={() => { if (actionsReady && !opsLoading && !opsSaving) setOps((prev) => prev?.filter((o) => o.name !== op.name) ?? null); }}
                   className="text-muted-foreground hover:text-destructive ml-1"
                 >
                   x
@@ -661,19 +679,19 @@ export default function SettingsPage() {
           <div className="flex gap-2">
             <Input
               placeholder="Minecraft username"
-              disabled={ops === null || opsLoading || opsSaving}
+              disabled={!actionsReady || ops === null || opsLoading || opsSaving}
               value={newOp}
               onChange={(e) => setNewOp(e.target.value)}
               onKeyDown={(e) => {
-                if (ops !== null && !opsLoading && !opsSaving && e.key === "Enter" && newOp.trim()) {
+                if (actionsReady && ops !== null && !opsLoading && !opsSaving && e.key === "Enter" && newOp.trim()) {
                   setOps((prev) => prev && [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
                   setNewOp("");
                 }
               }}
               className="max-w-xs"
             />
-            <Button variant="outline" disabled={ops === null || opsLoading || opsSaving} onClick={() => {
-              if (ops !== null && !opsLoading && !opsSaving && newOp.trim()) {
+            <Button variant="outline" disabled={!actionsReady || ops === null || opsLoading || opsSaving} onClick={() => {
+              if (actionsReady && ops !== null && !opsLoading && !opsSaving && newOp.trim()) {
                 setOps((prev) => prev && [...prev, { name: newOp.trim(), level: 4, bypassesPlayerLimit: false }]);
                 setNewOp("");
               }
@@ -681,7 +699,7 @@ export default function SettingsPage() {
               Add Op
             </Button>
           </div>
-          <Button onClick={handleSaveOps} disabled={ops === null || opsLoading || opsSaving}>
+          <Button onClick={handleSaveOps} disabled={!actionsReady || ops === null || opsLoading || opsSaving}>
             {opsSaving ? "Saving..." : "Save Ops"}
           </Button>
         </CardContent>
@@ -714,8 +732,8 @@ export default function SettingsPage() {
                 {wl.name}
                 <button
                   aria-label={`Remove whitelisted player ${wl.name}`}
-                  disabled={wlLoading || wlSaving}
-                  onClick={() => { if (!wlLoading && !wlSaving) setWhitelist((prev) => prev?.filter((w) => w.name !== wl.name) ?? null); }}
+                  disabled={!actionsReady || wlLoading || wlSaving}
+                  onClick={() => { if (actionsReady && !wlLoading && !wlSaving) setWhitelist((prev) => prev?.filter((w) => w.name !== wl.name) ?? null); }}
                   className="text-muted-foreground hover:text-destructive ml-1"
                 >
                   x
@@ -727,19 +745,19 @@ export default function SettingsPage() {
           <div className="flex gap-2">
             <Input
               placeholder="Minecraft username"
-              disabled={whitelist === null || wlLoading || wlSaving}
+              disabled={!actionsReady || whitelist === null || wlLoading || wlSaving}
               value={newWl}
               onChange={(e) => setNewWl(e.target.value)}
               onKeyDown={(e) => {
-                if (whitelist !== null && !wlLoading && !wlSaving && e.key === "Enter" && newWl.trim()) {
+                if (actionsReady && whitelist !== null && !wlLoading && !wlSaving && e.key === "Enter" && newWl.trim()) {
                   setWhitelist((prev) => prev && [...prev, { name: newWl.trim() }]);
                   setNewWl("");
                 }
               }}
               className="max-w-xs"
             />
-            <Button variant="outline" disabled={whitelist === null || wlLoading || wlSaving} onClick={() => {
-              if (whitelist !== null && !wlLoading && !wlSaving && newWl.trim()) {
+            <Button variant="outline" disabled={!actionsReady || whitelist === null || wlLoading || wlSaving} onClick={() => {
+              if (actionsReady && whitelist !== null && !wlLoading && !wlSaving && newWl.trim()) {
                 setWhitelist((prev) => prev && [...prev, { name: newWl.trim() }]);
                 setNewWl("");
               }
@@ -747,7 +765,7 @@ export default function SettingsPage() {
               Add Player
             </Button>
           </div>
-          <Button onClick={handleSaveWhitelist} disabled={whitelist === null || wlLoading || wlSaving}>
+          <Button onClick={handleSaveWhitelist} disabled={!actionsReady || whitelist === null || wlLoading || wlSaving}>
             {wlSaving ? "Saving..." : "Save Whitelist"}
           </Button>
         </CardContent>

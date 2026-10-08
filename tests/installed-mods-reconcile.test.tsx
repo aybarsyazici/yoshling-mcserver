@@ -132,7 +132,7 @@ function applied(over: Partial<AppliedPack> = {}): AppliedPack {
 }
 
 function json(status: number, body: unknown) {
-  return { ok: status < 400, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "fixture-active-context" } });
 }
 
 function setup(over: Partial<GamesState> = {}) {

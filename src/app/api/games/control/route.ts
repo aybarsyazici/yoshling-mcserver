@@ -7,6 +7,7 @@ import { conflictResponse, isConflict } from "@/lib/operation-response";
 import { isGameId, GAMES } from "@/lib/games";
 import { db } from "@/lib/db";
 import { CoResidencyError } from "@/lib/coresidency";
+import { requireMinecraftProfileContext, assertMinecraftProfileCurrent, MinecraftActiveProfileError } from "@/lib/minecraft-active-profile";
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -60,6 +61,8 @@ export async function POST(request: NextRequest) {
    */
   let changed = true;
   try {
+    const context = game === "minecraft" && action !== "stop" ? await requireMinecraftProfileContext(request) : null;
+    if (context?.profileId && action === "start") return NextResponse.json({ error: "Select a Minecraft profile in the start picker.", profileId: context.profileId }, { status: 409 });
     switch (action) {
       case "start":
         steps = await powerOn(game, session.user.name);
@@ -86,7 +89,7 @@ export async function POST(request: NextRequest) {
         }
         break;
       case "restart":
-        await restartGame(game, session.user.name);
+        await restartGame(game, session.user.name, context ? () => assertMinecraftProfileCurrent(context) : undefined);
         break;
     }
   } catch (e) {
@@ -94,6 +97,7 @@ export async function POST(request: NextRequest) {
     // backups of the same world) is not a power-lock conflict and used to fall through
     // to a 500 with a message nobody could act on.
     if (isConflict(e)) return conflictResponse(e);
+    if (e instanceof MinecraftActiveProfileError) return NextResponse.json({ error: e.message }, { status: 409 });
     if (e instanceof CoResidencyError) {
       return NextResponse.json({ error: e.message, conflict: "coresidency", running: e.running }, { status: 409 });
     }

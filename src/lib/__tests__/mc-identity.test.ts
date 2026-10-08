@@ -3,20 +3,17 @@ import { mkdtemp, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { offlineUuid, isValidMcName, isValidUuid } from "../mc-identity";
+const active = vi.hoisted(() => ({ root: "/minecraft" }));
+vi.mock("../minecraft-profile-store", () => ({ getMinecraftDataRoot: async () => active.root }));
 
 /**
- * `MC_SERVER_DIR` is read at module load, so a test that needs a different one has
- * to reset the module registry and re-import. Worth the awkwardness: `readOnlineMode`
- * reading a real file is the branch that decides whether a UUID is computed or looked
- * up over the network, and getting it backwards writes ids the game discards.
+ * Explicit captured roots exercise real profile files without a database or a live
+ * server. The default resolver is tested separately across a profile switch.
  */
 async function withMcDir(dir: string) {
-  const previous = process.env.MC_SERVER_DIR;
-  process.env.MC_SERVER_DIR = dir;
-  vi.resetModules();
   const mod = await import("../mc-identity");
-  process.env.MC_SERVER_DIR = previous;
-  return mod;
+  return { ...mod, readOnlineMode: () => mod.readOnlineMode(dir),
+    resolveEntryUuids: <T extends { uuid: string; name: string }>(entries: T[]) => mod.resolveEntryUuids(entries, dir) };
 }
 
 /**
@@ -91,6 +88,15 @@ describe("isValidUuid", () => {
 });
 
 describe("readOnlineMode / resolveEntryUuids, against a real properties file", () => {
+  it("reads the current profile's identity mode after switching profiles", async () => {
+    const a = await mkdtemp(path.join(tmpdir(), "mc-identity-profile-a-"));
+    const b = await mkdtemp(path.join(tmpdir(), "mc-identity-profile-b-"));
+    await writeFile(path.join(a, "server.properties"), "online-mode=false\n");
+    await writeFile(path.join(b, "server.properties"), "online-mode=true\n");
+    const mod = await import("../mc-identity");
+    active.root = a; expect(await mod.readOnlineMode()).toBe(false);
+    active.root = b; expect(await mod.readOnlineMode()).toBe(true);
+  });
   it("reads online-mode off disk and resolves a blank uuid offline", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "mc-identity-"));
     // The live server's own values, so this exercises the branch production takes.

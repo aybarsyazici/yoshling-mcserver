@@ -4,8 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { ReactNode } from "react";
 import MinecraftSettings from "@/app/minecraft/settings/page";
 import SevenDtdSettings from "@/app/7dtd/settings/page";
-import { installBrowserStubs } from "./helpers/dom";
+import { gamesState, installBrowserStubs } from "./helpers/dom";
 
+vi.mock("@/lib/use-games", async original => ({ ...(await original<typeof import("@/lib/use-games")>()), useGames: () => gamesState() }));
 vi.mock("@/components/memory-card", () => ({ MemoryCard: () => null }));
 vi.mock("@/components/mc-game-rules", () => ({ McGameRules: () => null }));
 vi.mock("@/components/mc-bans-card", () => ({ McBansCard: () => null }));
@@ -27,17 +28,18 @@ afterEach(() => {
 const WAIT = { timeout: 5000 };
 const OP = { uuid: "fixture-op", name: "ExistingOp", level: 4, bypassesPlayerLimit: false };
 const PLAYER = { uuid: "fixture-player", name: "ExistingPlayer" };
-const CONFIG = { mcVersion: "26.1.2", modLoader: "fabric" };
+const CONFIG = { mcVersion: "26.1.2", modLoader: "fabric", targetEditable: true };
 const SDTD = { serverName: "Existing world", password: "fixture-lock", maxPlayers: 12, sandboxCode: "ABCD", sandboxCodeSource: "file" };
 
 function response(body: unknown, status = 200): Response {
-  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), { status, headers: { "X-Minecraft-Context": "fixture-active-context" } });
 }
 
 type Answer = Response | Error | Promise<Response>;
 function fetches(overrides: Record<string, Answer[]> = {}, putAnswer: Answer = response({})) {
   const defaults: Record<string, Response> = {
     "/api/settings": response(CONFIG),
+    "/api/minecraft/profiles": response({ profiles: [], runtime: { selectedProfileId: null, appliedProfileId: null, verified: false, state: "legacy", revision: "fixture-active-context" }, requiresAdoption: true, capabilities: { read: true, manage: true, start: false, switch: false } }),
     "/api/minecraft-versions": response({ versions: [CONFIG.mcVersion] }),
     "/api/server/properties": response({}),
     "/api/server/ops": response([OP]),
@@ -54,7 +56,7 @@ function fetches(overrides: Record<string, Answer[]> = {}, putAnswer: Answer = r
     const answer = overrides[url]?.shift() ?? defaults[url];
     if (answer instanceof Error) throw answer;
     if (!answer) throw new Error(`Unexpected request: ${url}`);
-    return answer;
+    return answer instanceof Response ? answer.clone() : answer;
   }));
   return writes;
 }
@@ -150,7 +152,7 @@ describe("Minecraft version initial read", () => {
   it("allows the first Save from a verified deployment initializer without guessing defaults", async () => {
     const initial = {
       id: "main", mcVersion: "1.21.11", modLoader: "neoforge", maxMemory: "3G",
-      worldVersion: null, initialized: false,
+      worldVersion: null, initialized: false, targetEditable: true,
     };
     const writes = fetches({
       "/api/settings": [response(initial)],
@@ -191,7 +193,7 @@ describe("Minecraft version initial read", () => {
     const save = screen.getByRole("button", { name: "Save & Restart Server" }) as HTMLButtonElement;
     await waitFor(() => expect(save.disabled).toBe(false), WAIT);
     fireEvent.click(save);
-    await waitFor(() => expect(writes).toEqual([{ url: "/api/settings", body: CONFIG }]), WAIT);
+    await waitFor(() => expect(writes).toEqual([{ url: "/api/settings", body: { mcVersion: CONFIG.mcVersion, modLoader: CONFIG.modLoader } }]), WAIT);
     await waitFor(() => expect(save.disabled).toBe(false), WAIT);
     expect(toasts.info).not.toHaveBeenCalled();
     expect(toasts.success).not.toHaveBeenCalled();
@@ -208,7 +210,7 @@ describe("Minecraft version initial read", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry server version" }));
     await waitFor(() => expect(save.disabled).toBe(false), WAIT);
     fireEvent.click(save);
-    await waitFor(() => expect(writes).toEqual([{ url: "/api/settings", body: CONFIG }]), WAIT);
+    await waitFor(() => expect(writes).toEqual([{ url: "/api/settings", body: { mcVersion: CONFIG.mcVersion, modLoader: CONFIG.modLoader } }]), WAIT);
   });
 });
 

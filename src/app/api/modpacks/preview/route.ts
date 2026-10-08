@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { db } from "@/lib/db";
 import { getProjectVersions } from "@/lib/modrinth";
+import { withMinecraftProfileRead } from "@/lib/minecraft-active-profile";
 import {
   chooseModpackVersion,
   modDepsOf,
@@ -42,6 +43,7 @@ export async function GET(request: NextRequest) {
   }
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
+  return withMinecraftProfileRead(async () => {
 
   const modrinthId = new URL(request.url).searchParams.get("modrinthId");
   if (!modrinthId) {
@@ -102,5 +104,6 @@ export async function GET(request: NextRequest) {
     unpinnedCount: deps.filter((d) => d.versionId == null).length,
     /** Capped: a popular pack lists dozens, and this is a sentence, not a table. */
     publishedMcVersions: publishedMcVersions(versions).slice(0, 12),
+  });
   });
 }

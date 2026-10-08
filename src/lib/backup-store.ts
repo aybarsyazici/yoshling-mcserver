@@ -57,6 +57,8 @@ export const BACKUP_DIRS: Record<GameId, string> = {
  *   without decompressing it. `undefined` is an archive from before this was recorded.
  */
 export interface BaseManifest {
+  /** UUID of the profile whose world/jars this Minecraft archive contains. */
+  minecraftProfileId?: string;
   createdAt: string;
   flushed?: boolean;
   sha256?: string;

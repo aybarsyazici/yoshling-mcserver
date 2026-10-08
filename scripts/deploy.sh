@@ -150,8 +150,46 @@ esac
 #     the seed runs steamcmd.sh. Needs --no-trunc; docker ps truncates commands.
 # The second is kept as a backstop because bash cannot import the label from the
 # app, so a rename there would otherwise quietly restore the never-fires bug.
+# These discover names only; a static directory or marker never proves completion.
+# Fixed depths keep ordinary game/config folders outside the staging namespace.
+minecraft_profile_staging_paths() {
+  local volume_root="$1" profiles_root="$1/profiles"
+  if [ ! -d "$volume_root" ] || [ -L "$volume_root" ]; then return 1; fi
+  if [ ! -e "$profiles_root" ] && [ ! -L "$profiles_root" ]; then return 0; fi
+  if [ ! -d "$profiles_root" ] || [ -L "$profiles_root" ]; then
+    printf '%s\n' "$profiles_root"
+    return 0
+  fi
+  find "$profiles_root" -mindepth 1 -maxdepth 1 \
+    \( -name '.operation-*' -o -name '.source-*' -o -name '.delete-*' \) -print || return 1
+  find "$profiles_root" -mindepth 2 -maxdepth 2 -name '.prepare-*' -print || return 1
+  find "$profiles_root" -mindepth 3 -maxdepth 3 \
+    -path "$profiles_root/*/checkpoints/.staging-*" -print || return 1
+}
+
+backup_staging_paths() {
+  local volume_root="$1" profile_backups="$1/backups/profiles"
+  if [ ! -d "$volume_root" ] || [ -L "$volume_root" ]; then return 1; fi
+  find "$volume_root" -mindepth 2 -maxdepth 2 \
+    \( -path "$volume_root/backups/.work-*" -o -path "$volume_root/backups-*/.work-*" \) -print || return 1
+  if [ -L "$profile_backups" ]; then printf '%s\n' "$profile_backups"; return 0; fi
+  if [ -e "$profile_backups" ]; then
+    if [ ! -d "$profile_backups" ]; then printf '%s\n' "$profile_backups"; return 0; fi
+    find "$profile_backups" -mindepth 1 -maxdepth 1 -type l -print || return 1
+    find "$profile_backups" -mindepth 2 -maxdepth 2 -name '.work-*' -print || return 1
+  fi
+}
+
+minecraft_profile_operation_paths() {
+  local volume_root="$1" operations_root="$1/minecraft-profile-operations"
+  if [ ! -d "$volume_root" ] || [ -L "$volume_root" ]; then return 1; fi
+  if [ ! -e "$operations_root" ] && [ ! -L "$operations_root" ]; then return 0; fi
+  if [ ! -d "$operations_root" ] || [ -L "$operations_root" ]; then printf '%s\n' "$operations_root"; return 0; fi
+  find "$operations_root" -mindepth 1 -maxdepth 1 -name '.operation-*' -print || return 1
+}
+
 assert_no_background_work() {
-  local containers seeds work_dirs before_bytes after_bytes
+  local containers seeds work_dirs profile_work durable_work before_bytes after_bytes
   # Separate inspection from filtering: a Docker error is unknown, never quiet.
   if ! containers=$(docker ps --no-trunc \
       --format '{{.Names}}|{{.Label "yoshling.role"}}|{{.Command}}' 2>/dev/null); then
@@ -182,7 +220,10 @@ assert_no_background_work() {
 # commit after documenting it. A `.work-*` directory is a real artefact on a real volume.
 # Growth confirms copying; static staging may still be compressing into an archive outside
 # that directory. Its presence therefore cannot establish that the backup has finished.
-  work_dirs=$(ls -d /var/lib/docker/volumes/yoshling_web-data/_data/backups-*/.work-* 2>/dev/null || true)
+  if ! work_dirs=$(backup_staging_paths /var/lib/docker/volumes/yoshling_web-data/_data 2>/dev/null); then
+    echo "deploy: cannot inspect backup staging; no service replacement attempted." >&2
+    return 1
+  fi
   if [ -n "$work_dirs" ]; then
     before_bytes=$(du -sb $work_dirs 2>/dev/null | awk '{t+=$1} END {print t+0}')
     sleep 3
@@ -199,6 +240,22 @@ assert_no_background_work() {
     fi
     [ "${FORCE_OPS:-0}" = "1" ] || return 1
     echo "        FORCE_OPS=1 set — proceeding." >&2
+  fi
+  if ! profile_work=$(minecraft_profile_staging_paths /var/lib/docker/volumes/yoshling_mc-data/_data 2>/dev/null); then
+    echo "deploy: cannot inspect Minecraft profile operations/staging; no service replacement attempted." >&2
+    return 1
+  fi
+  if ! durable_work=$(minecraft_profile_operation_paths /var/lib/docker/volumes/yoshling_web-data/_data 2>/dev/null); then
+    echo "deploy: cannot inspect private Minecraft lifecycle markers; no service replacement attempted." >&2
+    return 1
+  fi
+  profile_work=$(printf '%s\n%s\n' "$profile_work" "$durable_work" | sed '/^$/d')
+  if [ -n "$profile_work" ]; then
+    echo "deploy: Minecraft profile lifecycle/preparation staging is active or unverified:" >&2
+    printf '%s\n' "$profile_work" | sed 's/^/        /' >&2
+    echo "        Wait for completion or review leftovers; marker age/size does not establish completion." >&2
+    [ "${FORCE_OPS:-0}" = "1" ] || return 1
+    echo "        FORCE_OPS=1 set — accepting interruption after review." >&2
   fi
 }
 

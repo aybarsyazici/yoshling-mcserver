@@ -13,6 +13,7 @@ Update documentation with each meaningful change. State what was verified locall
 | Configuration and configured versus live values | [SETTINGS.md](docs/SETTINGS.md) |
 | Discord identity, invitations, revocation and legacy preparation | [AUTHENTICATION.md](docs/AUTHENTICATION.md) |
 | Minecraft mods, packs, identity, bans and rules | [MINECRAFT.md](docs/MINECRAFT.md) |
+| Minecraft profile implementation and migration | [MINECRAFT-PROFILES.md](docs/MINECRAFT-PROFILES.md) |
 | Any Project Zomboid change | [PROJECT-ZOMBOID.md](docs/PROJECT-ZOMBOID.md); mod incidents also [PZ-MOD-BACKLOG.md](docs/PZ-MOD-BACKLOG.md) |
 | 7DTD telnet, XML, worlds, reset and updates | [7-DAYS-TO-DIE.md](docs/7-DAYS-TO-DIE.md) |
 | Host setup and migration | [MIGRATION.md](MIGRATION.md) |
@@ -26,7 +27,7 @@ The dated audits are diagnosis snapshots, not current backlogs. Current remediat
 
 A Next.js App Router dashboard with React, Discord OAuth through NextAuth v5, Prisma 7 with the libSQL/SQLite adapter, Tailwind v4, shadcn/Base UI and Catppuccin themes. Docker builds use Node 22. Package versions are authoritative in `package.json` and `package-lock.json`.
 
-Three game worlds share one netcup host with 16 GB RAM. Only one game should run at a time. Power on saves and gracefully stops every other running world. Users see only their granted worlds. Project Zomboid contains real, actively played save data; treat production as live.
+Three games share one netcup host with 16 GB RAM. Only one game should run at a time. Power on saves and gracefully stops every other running game. Access is granted per game; Minecraft profiles share the Minecraft grant. Project Zomboid contains real, actively played save data; treat production as live.
 
 | World | Compose service | Container | Web data path | Control |
 | --- | --- | --- | --- | --- |
@@ -50,6 +51,7 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 - `src/lib/backup-create.ts`, `backup-store.ts`, `backup-integrity.ts`, `backup-retention.ts`, `backup-schedule.ts`: shared backup pipeline.
 - `src/lib/file-guard.ts`: lexical and physical path checks for all three browsers and upload destinations.
 - `src/lib/game-data-path.ts`: the same boundary for normal configuration, player lists and backup sources; derived paths stay anchored to the game volume.
+- `minecraft-profile-{store,path,prepare,activation,adoption}.ts` and `minecraft-active-profile.ts`: isolated profile storage, exact preparation, verified switching, legacy adoption and stale editor guards.
 - `src/lib/upload-tree-guard.ts`: rejects extracted links and special files before upload placement.
 - Prisma client is generated into gitignored `src/generated/prisma`; schema is `prisma/schema.prisma`.
 
@@ -69,11 +71,11 @@ Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/set
 - Treat upstream mod descriptions as untrusted HTML/Markdown; parse raw markup, then sanitize before rendering.
 - Use `execFile` with argument arrays for input-derived subprocess arguments. Shell quoting with `JSON.stringify` is not safe.
 - File paths must remain physically inside their configured root, including existing parents of new files. Reject root deletion and extracted links/special files. Do not treat a filename prefix as physical containment.
-- Short writes use quiet registry reservations across read-modify-write/readback. Publication/terminal checks detect forced interruption; prior writes may remain. New editors send opaque revisions to reject stale snapshots; legacy revisionless requests remain compatible.
+- Short writes use quiet registry reservations across read-modify-write/readback. Publication/terminal checks detect forced interruption; prior writes may remain. Editors send opaque revisions; selected Minecraft profiles additionally require the captured profile identity.
 
 ## Configuration and data
 
-Minecraft `TYPE`, `VERSION` and `MEMORY`, and PZ `MAX_MEMORY`, are UI-owned `.env` values referenced by Compose. `writeEnvFile` uses an atomic rename, mode 0600 and one `.env.bak`; only ENOENT means an absent file. `.env` is gitignored and contains production secrets.
+Minecraft target, heap and profile mount/Java/loader selectors, and PZ `MAX_MEMORY`, are UI-owned `.env` values referenced by Compose. `writeEnvFile` uses an atomic rename, mode 0600 and one `.env.bak`; only ENOENT means an absent file. `.env` is gitignored and contains production secrets. Profile deployment requires the additive schema migration first; never migrate or adopt on boot.
 
 Compose itself is git-owned. The 7DTD update route temporarily patches its literal `START_MODE` and restores it; deploy refuses uncommitted host Compose edits. Heap limits must respect both the host budget and each container's limit, with native overhead and PZ's `MIN_MEMORY` floor. 7DTD is native Unity and has no JVM heap setting.
 
@@ -120,7 +122,7 @@ Host: `89.58.50.155`, deploy directory `/opt/yoshling`, SSH `root` with `~/.ssh/
 
 Use `scripts/deploy.sh --service web --verify 'literal from the actual change'`. It requires committed work, ships a git bundle, guards running seeds/copying backups and dirty host Compose, builds, and checks the literal in the running built image. The host has no GitHub key. Checkout pushes use the configured repository `core.sshCommand`.
 
-Web replacement rechecks the next image's invitation policy and seed/backup staging after build. Any staging is active or unverified until reviewed; static size can mean compression. These observations do not hold a deployment lock, so keep the rollout free of concurrent work.
+Web replacement rechecks invitation policy, seeds and backup/profile staging after build. Private profile operation markers persist in `/app/data/minecraft-profile-operations`. Leftovers are active or unverified until reviewed; size/age cannot prove completion. Admission observations do not hold a deployment lock; avoid concurrent operations during rollout.
 
 For PZ image deployment, power PZ off through the dashboard first. The script refuses a running/unknown state, rechecks after build, recreates with `create`, and verifies stopped state, actual image ID and Compose identity. Power on separately through the dashboard. Do not operate game power concurrently with a PZ deployment.
 
@@ -145,11 +147,12 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 ## Current remediation status
 
-Audit repairs, the first UI batch and deployment guards are deployed to web (7 October 2026)
-and pass normal local checks; evidence is in `CLOSED.md`. The approved six-account ID policy
-is active, with existing roles/world grants preserved. PZ retained its image/start time.
+Production web runs the audit/UI release documented in `CLOSED.md`. The six-account ID
+invitation policy is active. Minecraft profiles pass complete local checks; the manual
+schema/deployment/adoption rollout is pending. Verification evidence is in `CLOSED.md`.
 
-- Remaining dependency advisories need applicability/exposure review. Existing feature limits include idempotent re-imports, confirmed pack-driven Minecraft version changes and draft review for Minecraft's custom settings cards.
+- Remaining dependency advisories need applicability/exposure review. Feature limits include idempotent saved-set re-imports, draft review for Minecraft's custom settings cards, and owner-only checkpoint/drift recovery.
+- Minecraft profile contracts and remaining rollout work are in `MINECRAFT-PROFILES.md`. Different targets use separate profiles; profile version/loader editing is unavailable after preparation.
 - Verification gaps: genuine Discord login/denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
 - Infrastructure/manual work: reproduce the host firewall unit, assess retained secret-bearing images/cache, verify old-host decommissioning, and owner-managed credential rotation.
 

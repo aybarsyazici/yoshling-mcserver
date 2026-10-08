@@ -1,5 +1,7 @@
 "use client";
 
+import type { MinecraftProfileRequest } from "@/hooks/use-minecraft-profile-request";
+
 import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +58,7 @@ export function ChangePackDialog({
   onOpenChange,
   counts,
   onApplied,
+  request,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -68,8 +71,10 @@ export function ChangePackDialog({
   counts: ProvenanceCounts;
   /** Re-read the directory after an apply: the page must not assume what landed. */
   onApplied: () => void;
+  request: MinecraftProfileRequest;
 }) {
   const { can } = useGames(CAPABILITY_POLL_MS);
+  const fetcher = request.request;
   const { refresh: refreshOperations } = useOperations();
   const [chosen, setChosen] = useState<ModpackResult | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -83,7 +88,7 @@ export function ChangePackDialog({
     setPreview(null);
     setPreviewError(null);
     try {
-      const res = await fetch(
+      const res = await fetcher(
         `/api/modpacks/preview?modrinthId=${encodeURIComponent(pack.project_id)}`
       );
       const data = await res.json().catch(() => ({}));
@@ -99,7 +104,7 @@ export function ChangePackDialog({
     } finally {
       setReading(false);
     }
-  }, []);
+  }, [fetcher]);
 
   /**
    * Choosing a pack and reading it are **one event**, not a state change plus an effect
@@ -132,12 +137,13 @@ export function ChangePackDialog({
   }
 
   async function apply() {
-    if (!chosen) return;
+    if (!chosen || !can.modsInstall || !request.contextReady) return;
     setApplying(true);
     try {
       const result = await importAndApply({
         modrinthId: chosen.project_id,
         packName: chosen.title,
+        fetcher,
       });
       if (result.kind === "unconfirmed-import") { toast.info(result.message); return; }
       if (result.kind === "error") {
@@ -232,7 +238,7 @@ export function ChangePackDialog({
                     {can.modsInstall && (
                       <Button
                         variant="destructive"
-                        disabled={applying || preview.compatibility?.ok !== true}
+                        disabled={!request.contextReady || applying || preview.compatibility?.ok !== true}
                         onClick={() => void apply()}
                       >
                         {applying ? "Applying…" : "Apply this pack"}

@@ -49,7 +49,7 @@ const row = { modrinthId: "old-project", slug: "old", name: "Old fixture", versi
 beforeEach(async () => {
   f.stops = 0; f.corruptReadback = false; f.currentVersion = "26.1.2";
   await mkdir(f.root, { recursive: true });
-  await fixtureClient.$executeRawUnsafe('CREATE TABLE IF NOT EXISTS "InstalledMod" ("id" TEXT PRIMARY KEY, "modrinthId" TEXT NOT NULL, "slug" TEXT NOT NULL, "name" TEXT NOT NULL, "version" TEXT NOT NULL, "fileName" TEXT NOT NULL, "mcVersion" TEXT NOT NULL, "loader" TEXT NOT NULL, "installedBy" TEXT NOT NULL, "installedAt" DATETIME NOT NULL, "updatedAt" DATETIME NOT NULL, "source" TEXT, "versionId" TEXT)');
+  await fixtureClient.$executeRawUnsafe('CREATE TABLE IF NOT EXISTS "InstalledMod" ("id" TEXT PRIMARY KEY, "modrinthId" TEXT NOT NULL, "slug" TEXT NOT NULL, "name" TEXT NOT NULL, "version" TEXT NOT NULL, "fileName" TEXT NOT NULL, "mcVersion" TEXT NOT NULL, "loader" TEXT NOT NULL, "installedBy" TEXT NOT NULL, "installedAt" DATETIME NOT NULL, "updatedAt" DATETIME NOT NULL, "source" TEXT, "versionId" TEXT, "profileId" TEXT)');
   await db.installedMod.deleteMany();
   await db.installedMod.create({ data: { ...row, modrinthId: "new-project", fileName: "new.jar", versionId: "new-pin", source: "pack", installedAt: new Date(row.installedAt) } });
   await rm(path.join(f.root, "game"), { recursive: true, force: true });
@@ -112,4 +112,9 @@ describe("portable rollback inventory and target", () => {
     expect(result.body.error).toContain("inventory readback failed");
     expect((await fixtureClient.installedMod.findMany())[0].versionId).toBe("new-pin");
   });
+});
+
+vi.mock("@/lib/minecraft-active-profile", async () => {
+  const { legacyMinecraftContextMock } = await import("./fixtures/legacy-minecraft-context");
+  return legacyMinecraftContextMock(() => `${f.root}/game`);
 });

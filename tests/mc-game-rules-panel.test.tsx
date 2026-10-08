@@ -19,7 +19,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { McGameRules } from "@/components/mc-game-rules";
-import { installBrowserStubs } from "./helpers/dom";
+import { gamesState, installBrowserStubs } from "./helpers/dom";
 
 const toasts: { kind: string; text: string }[] = [];
 vi.mock("sonner", () => ({
@@ -29,6 +29,8 @@ vi.mock("sonner", () => ({
     warning: (text: string) => toasts.push({ kind: "warning", text }),
   },
 }));
+
+vi.mock("@/lib/use-games", async original => ({ ...(await original<typeof import("@/lib/use-games")>()), useGames: () => gamesState() }));
 
 beforeAll(() => {
   installBrowserStubs();
@@ -68,11 +70,7 @@ function stubFetch(get: GetBody, puts: PutBody[] = []) {
     "fetch",
     vi.fn(async (_url: string, init?: RequestInit) => {
       const r = init?.method === "PUT" ? (queue.shift() ?? { body: {} }) : get;
-      return {
-        ok: (r.status ?? 200) < 400,
-        status: r.status ?? 200,
-        json: async () => r.body,
-      } as Response;
+      return new Response(JSON.stringify(r.body), { status: r.status ?? 200, headers: { "X-Minecraft-Context": "legacy@0" } });
     })
   );
 }

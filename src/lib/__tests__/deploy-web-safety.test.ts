@@ -14,10 +14,10 @@ afterEach(async () => {
 
 type Scenario = "normal" | "initial-seed" | "initial-ps-error" | "late-seed" |
   "late-command-seed" | "late-ps-error" | "late-backup" | "policy-change" |
-  "static-work" | "late-static-work";
+  "static-work" | "late-static-work" | "initial-profile" | "late-profile";
 
 /** Execute the real remote Bash and invitation validator, with no Docker or remote access. */
-async function deploy(scenario: Scenario = "normal", stream = false) {
+async function deploy(scenario: Scenario = "normal", stream = false, forceOps = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), "yoshling-web-deploy-test-"));
   scratch.push(root);
   // These paths are substituted into shell words and quoted paths in the real body.
@@ -25,7 +25,13 @@ async function deploy(scenario: Scenario = "normal", stream = false) {
   const bin = path.join(root, "bin");
   const staging = path.join(root, "data", "backups-zomboid", ".work-fixture");
   await mkdir(bin);
-  await mkdir(staging, { recursive: true });
+  await mkdir(path.dirname(staging), { recursive: true });
+  await mkdir(path.join(root, "mc-data"));
+  if (scenario === "static-work") await mkdir(staging);
+  if (scenario === "initial-profile") {
+    await mkdir(path.join(root, "data/minecraft-profile-operations"));
+    await writeFile(path.join(root, "data/minecraft-profile-operations/.operation-adopt-fixture.json"), "fixture-private-operation-content");
+  }
   const callsFile = path.join(root, "calls");
   const currentPolicy = path.join(root, "current-policy.json");
   const nextPolicy = path.join(root, "next-policy.json");
@@ -41,7 +47,8 @@ async function deploy(scenario: Scenario = "normal", stream = false) {
     .replaceAll("/tmp/deploy-build.log", path.join(root, "build.log"))
     .replaceAll("/root/yoshling-deploy-backup", path.join(root, "backup"))
     .replaceAll("/root/y.bundle", path.join(root, "bundle"))
-    .replaceAll("/var/lib/docker/volumes/yoshling_web-data/_data", path.join(root, "data"));
+    .replaceAll("/var/lib/docker/volumes/yoshling_web-data/_data", path.join(root, "data"))
+    .replaceAll("/var/lib/docker/volumes/yoshling_mc-data/_data", path.join(root, "mc-data"));
   if (/\/opt\/yoshling|\/root\/|\/var\/lib\/docker|\/tmp\/deploy-build\.log/.test(remote)) {
     throw new Error("production host path escaped fixture substitution");
   }
@@ -90,6 +97,11 @@ elif [ "$1" = compose ] && [ "$2" = build ]; then
   [ "$3" = web ] || exit 94
   record 'docker compose build web'
   : > "$FIXTURE_BUILT"
+  if [ "$FIXTURE_SCENARIO" = late-backup ] || [ "$FIXTURE_SCENARIO" = late-static-work ]; then /bin/mkdir -p "$FIXTURE_STAGING"; fi
+  if [ "$FIXTURE_SCENARIO" = late-profile ]; then
+    /bin/mkdir -p "$FIXTURE_ROOT/data/minecraft-profile-operations"
+    printf '%s' fixture-private-operation-content > "$FIXTURE_ROOT/data/minecraft-profile-operations/.operation-switch-fixture.json"
+  fi
   if [ "$FIXTURE_SCENARIO" = policy-change ]; then
     printf '["invalid-fixture-policy-name"]\\n' > "$FIXTURE_NEXT_POLICY"
   fi
@@ -116,17 +128,12 @@ case "$1" in
 esac
 `, { mode: 0o755 });
 
-  await writeFile(path.join(bin, "ls"), `#!/usr/bin/env bash
+  await writeFile(path.join(bin, "find"), `#!/usr/bin/env bash
 set -eu
 phase=before
 [ ! -f "$FIXTURE_BUILT" ] || phase=after
 printf '%s\\n' "staging listing:$phase" >> "$FIXTURE_CALLS"
-[ "$1" = -d ] || exit 98
-case "$2" in "$FIXTURE_ROOT"/data/backups-*/.work-*) ;; *) exit 99 ;; esac
-if [ "$FIXTURE_SCENARIO" = static-work ] ||
-   { [ "$phase" = after ] && { [ "$FIXTURE_SCENARIO" = late-backup ] || [ "$FIXTURE_SCENARIO" = late-static-work ]; }; }; then
-  echo "$FIXTURE_STAGING"
-fi
+exec /usr/bin/find "$@"
 `, { mode: 0o755 });
 
   await writeFile(path.join(bin, "du"), `#!/usr/bin/env bash
@@ -164,7 +171,7 @@ fi
     FIXTURE_CURRENT_POLICY: currentPolicy,
     FIXTURE_NEXT_POLICY: nextPolicy,
   };
-  delete env.FORCE_OPS;
+  if (forceOps) env.FORCE_OPS = "1"; else delete env.FORCE_OPS;
   delete env.FORCE_COMPOSE;
   let failed = false;
   let output: string;
@@ -288,5 +295,19 @@ describe("web deploy rechecks background work and the next invitation policy bef
     expect(r.calls.filter(call => call === "staging measure:-sb")).toHaveLength(2);
     expect(r.calls).not.toContain("docker compose up -d --no-deps web");
     expect(r.output).not.toContain("FORCE_OPS=1 set");
+  });
+
+  it.each(["initial-profile", "late-profile"] as const)("refuses %s operation markers without printing their contents", async scenario => {
+    const r = await deploy(scenario);
+    expect(r.failed).toBe(true); expect(r.output).toContain("profile lifecycle/preparation staging is active or unverified");
+    expect(r.output).not.toContain("fixture-private-operation-content"); expect(r.calls).not.toContain("docker compose up -d --no-deps web");
+    if (scenario === "initial-profile") expect(r.calls.some(call => call.startsWith("git checkout") || call.startsWith("docker compose build"))).toBe(false);
+    else expect(r.calls).toContain("docker compose build web");
+  });
+
+  it("honors an explicitly reviewed profile interruption override", async () => {
+    const r = await deploy("initial-profile", false, true);
+    expect(r.failed, r.output).toBe(false); expect(r.output).toContain("FORCE_OPS=1 set — accepting interruption after review");
+    expect(r.calls).toContain("docker compose up -d --no-deps web"); expect(r.output).not.toContain("fixture-private-operation-content");
   });
 });

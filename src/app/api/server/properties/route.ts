@@ -5,7 +5,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { denyGame } from "@/lib/game-gate";
 import { hasPermission } from "@/lib/permissions";
-import { withGameFileWrite, revisionRead } from "@/lib/operation-response";
+import { revisionRead } from "@/lib/operation-response";
+import { withMinecraftProfileRead, withMinecraftProfileFileWrite } from "@/lib/minecraft-active-profile";
 import { db } from "@/lib/db";
 import { gameRuleControlHint } from "@/lib/mc-gamerules";
 import {
@@ -17,8 +18,6 @@ import {
 } from "@/lib/mc-properties";
 import { readFile, writeFile } from "fs/promises";
 import { gameDataPath } from "@/lib/game-data-path";
-
-const MC_DIR = process.env.MC_SERVER_DIR || "/minecraft";
 
 /**
  * The lock set, the escaping and the "this key moved to a game rule" table all live in
@@ -35,9 +34,9 @@ export async function GET() {
   const denied = denyGame(session, "minecraft");
   if (denied) return denied;
 
-  return revisionRead(() => gameDataPath(MC_DIR, "server.properties"), async () => {
+  return withMinecraftProfileRead(context => revisionRead(() => gameDataPath(context.root, "server.properties"), async () => {
     try {
-      const content = await readFileSnapshot(await gameDataPath(MC_DIR, "server.properties"), "utf-8");
+      const content = await readFileSnapshot(await gameDataPath(context.root, "server.properties"), "utf-8");
       const properties: Record<string, string> = {};
 
       for (const line of content.split("\n")) {
@@ -59,7 +58,7 @@ export async function GET() {
       }
       return NextResponse.json({ error: errorMessage(e) }, { status: 500 });
     }
-  });
+  }));
 }
 
 export async function PUT(request: NextRequest) {
@@ -78,7 +77,7 @@ export async function PUT(request: NextRequest) {
   // needs no record of its own, but it does need the lane: a restore holds it for
   // minutes and would silently overwrite whatever was saved through it, while the page
   // toasted "Saved". Measured on production: this returned 200 in 17 ms mid-backup.
-  return withGameFileWrite("minecraft", async () => {
+  return withMinecraftProfileFileWrite(request, async context => {
 
     const body = await request.json();
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -148,7 +147,7 @@ export async function PUT(request: NextRequest) {
 
     let content: string;
     try {
-      content = await readFile(await gameDataPath(MC_DIR, "server.properties"), "utf-8");
+      content = await readFile(await gameDataPath(context.root, "server.properties"), "utf-8");
     } catch (e) {
       if (errorCode(e) === "ENOENT") {
         return NextResponse.json(
@@ -175,7 +174,7 @@ export async function PUT(request: NextRequest) {
     const ignored = [...updates.keys()].filter((k) => !applied.includes(k));
 
     try {
-      const file = await gameDataPath(MC_DIR, "server.properties");
+      const file = await gameDataPath(context.root, "server.properties");
       const written = newLines.join("\n");
       await assertFileRevision(file);
       assertFileWriteActive();
@@ -193,6 +192,7 @@ export async function PUT(request: NextRequest) {
           action: "edit_file",
           details: JSON.stringify({
             game: "minecraft",
+            profileId: context.profileId,
             file: "server.properties",
             count: applied.length,
           }),
@@ -226,5 +226,5 @@ export async function PUT(request: NextRequest) {
         : {}),
     });
 
-  }, { request, file: () => gameDataPath(MC_DIR, "server.properties") });
+  }, context => gameDataPath(context.root, "server.properties"));
 }
