@@ -8,7 +8,13 @@ import { MINECRAFT_JAVA_VARIANTS, MINECRAFT_PROFILE_LOADERS, type MinecraftProfi
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { motion } from "motion/react";
+import { ArrowRight, Check, Compass, Leaf, PackageOpen, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
+import { usePrefersReducedMotion } from "@/components/motion";
+import { ProfileDialogHero, ProfileDialogReveal, ProfileDraftPreview, ProfileFormSection } from "@/components/minecraft-profile-dialog-visuals";
+import { GAMES } from "@/lib/games";
+import styles from "@/components/minecraft-profile-dialog.module.css";
 
 interface SourceChoice { id: string; title: string; mcVersion?: string | null; loader?: string | null }
 interface PackBuild { id: string; name: string; versionNumber: string; mcVersions: string[]; loaders: string[]; publishedAt: string; supported: boolean; reason?: string }
@@ -17,6 +23,7 @@ export function MinecraftProfileCreate({ open, onOpenChange, data, adopt = false
 }
 function CreateSession({ onOpenChange, data, adopt, onPrepared }: Omit<Parameters<typeof MinecraftProfileCreate>[0], "open">) {
   const labelId = useId();
+  const reduced = usePrefersReducedMotion();
   const games = useGames(CAPABILITY_POLL_MS);
   const { refresh: refreshOperations } = useOperations();
   const [name, setName] = useState(""); const [description, setDescription] = useState("");
@@ -93,31 +100,84 @@ function CreateSession({ onOpenChange, data, adopt, onPrepared }: Omit<Parameter
     } catch (e) { setError(unconfirmedOperationMessage(adopt ? "existing world adoption" : "profile preparation", e)); setBlocked(true); onPrepared(); }
     finally { void refreshOperations(); setSending(false); }
   }
-  return <Dialog open onOpenChange={open => { if (!open && !sending) onOpenChange(false); }}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl" showCloseButton={!sending}>
-    <DialogHeader><DialogTitle>{adopt ? "Keep the existing Minecraft world" : "Create a Minecraft profile"}</DialogTitle><DialogDescription>{adopt ? "Adoption preserves the existing world, mods and settings as one profile. It saves and stops Minecraft if running, then leaves it stopped. Other games are left alone." : "Prepare a separate world with its own version, mods and settings. Creating a profile does not start it or switch the current world."}</DialogDescription></DialogHeader>
-    <fieldset disabled={sending || !allowed} className="space-y-4">
-      <div className="space-y-2"><Label htmlFor={`${labelId}-name`}>Profile name</Label><Input id={`${labelId}-name`} value={name} maxLength={80} onChange={e => setName(e.target.value)} /></div>
-      <div className="space-y-2"><Label htmlFor={`${labelId}-description`}>Description</Label><Input id={`${labelId}-description`} value={description} maxLength={1000} onChange={e => setDescription(e.target.value)} /></div>
-      {!adopt && <>
-        <div className="space-y-2"><Label htmlFor={`${labelId}-source`}>Start from</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-source`} value={kind} onChange={e => { setKind(e.target.value as typeof kind); setSource(""); setSourceLoading(true); }}><option value="vanilla">Vanilla or a custom loader</option><option value="saved-set">Saved mod set</option><option value="modrinth">Published Modrinth pack</option></select></div>
-        {kind === "vanilla" ? <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor={`${labelId}-version`}>Minecraft version</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-version`} value={version} disabled={sourceLoading || !!sourceError} onChange={e => setVersion(e.target.value)}><option value="">Choose an exact version</option>{versions.map(v => <option key={v} value={v}>{v}</option>)}</select></div><div className="space-y-2"><Label htmlFor={`${labelId}-loader`}>Loader</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-loader`} value={loader} onChange={e => setLoader(e.target.value as MinecraftProfileLoader)}>{MINECRAFT_PROFILE_LOADERS.map(v => <option key={v}>{v}</option>)}</select></div></div> : <>
-          {kind === "modrinth" && <div className="space-y-2"><Label htmlFor={`${labelId}-query`}>Search published packs</Label><Input id={`${labelId}-query`} value={query} onChange={e => { setQuery(e.target.value); setSource(""); setSourceLoading(true); }} /><p className="text-xs text-muted-foreground">Search covers all versions. The profile uses the selected pack&apos;s target, not the current server&apos;s target.</p></div>}
-          <div className="space-y-2"><Label htmlFor={`${labelId}-choice`}>{kind === "saved-set" ? "Saved mod set" : "Published pack"}</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-choice`} disabled={sourceLoading || !!sourceError} value={source} onChange={e => { setSource(e.target.value); setBuild(""); setBuildSource(null); setBuildLoading(true); setBuildError(null); }}><option value="">Choose a source</option>{choices.map(choice => <option key={choice.id} value={choice.id} disabled={kind === "saved-set" && (!choice.mcVersion || !choice.loader)}>{choice.title}{kind === "saved-set" ? choice.mcVersion && choice.loader ? ` · ${choice.mcVersion} / ${choice.loader}` : " · no exact target recorded" : ""}</option>)}</select></div>
-          {kind === "modrinth" && source && <div className="space-y-2"><Label htmlFor={`${labelId}-build`}>Published pack build</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-build`} value={build} disabled={buildLoading || !!buildError || buildSource !== source} onChange={e => setBuild(e.target.value)}><option value="">Choose an exact published build</option>{builds.map(v => <option key={v.id} value={v.id} disabled={!v.supported}>{v.name} · {v.versionNumber} · MC {v.mcVersions.join(", ")} · {v.loaders.join(", ")}{!v.supported ? ` · ${v.reason || "unsupported"}` : ""}</option>)}</select><p className="text-xs text-muted-foreground">These are the author’s declared targets. Preparation verifies the downloaded pack and pins this exact build.</p>{buildLoading && <p role="status">Reading published builds…</p>}{buildError && <p role="alert">{buildError}</p>}{!buildLoading && !buildError && buildSource === source && !builds.some(v => v.supported) && <p>No supported published builds were found for this pack.</p>}<Button variant="outline" disabled={buildLoading} onClick={() => { setBuildLoading(true); setBuildError(null); setBuildAttempt(v => v + 1); }}>Recheck pack builds</Button></div>}
-        </>}
-        {(kind === "saved-set" || kind === "vanilla" && loader !== "vanilla") && <div className="space-y-2"><Label htmlFor={`${labelId}-loader-version`}>{loader === "neoforge" ? "Exact NeoForge build (required for a custom loader)" : "Exact loader build (optional)"}</Label><Input id={`${labelId}-loader-version`} value={loaderVersion} onChange={e => setLoaderVersion(e.target.value)} /><p className="text-xs text-muted-foreground">Fabric, Forge and Quilt can be resolved and pinned automatically. A custom NeoForge profile needs an exact build.</p></div>}
-        <div className="space-y-2"><Label htmlFor={`${labelId}-seed`}>New world seed (optional)</Label><Input id={`${labelId}-seed`} value={seed} onChange={e => setSeed(e.target.value)} /><p className="text-xs text-muted-foreground">The game creates this fresh world on its first start. No existing world is replaced.</p></div>
-        <div className="space-y-2"><Label htmlFor={`${labelId}-java`}>Java runtime</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-java`} value={java} onChange={e => setJava(e.target.value as typeof java)}><option value="">Automatic from Minecraft metadata</option>{MINECRAFT_JAVA_VARIANTS.map(v => <option key={v}>{v}</option>)}</select></div>
-      </>}
-      {adopt && <details className="space-y-3 rounded-xl border p-3"><summary className="cursor-pointer text-sm">Advanced: resolve an ambiguous existing installation</summary><p className="text-xs text-muted-foreground">Only enter the exact loader build and Java variant reviewed for this existing world. These hints resolve unknown installation details; they do not select a different Minecraft version or loader.</p><Label htmlFor={`${labelId}-adopt-loader`}>Reviewed existing loader build (optional)</Label><Input id={`${labelId}-adopt-loader`} value={loaderVersion} onChange={e => setLoaderVersion(e.target.value)} /><Label htmlFor={`${labelId}-adopt-java`}>Reviewed existing Java runtime (optional)</Label><select className="h-10 w-full rounded-lg border bg-background px-3" id={`${labelId}-adopt-java`} value={java} onChange={e => setJava(e.target.value as typeof java)}><option value="">Read the existing installation automatically</option>{MINECRAFT_JAVA_VARIANTS.map(v => <option key={v}>{v}</option>)}</select></details>}
-    </fieldset>
-    {sourceLoading && !adopt && <p role="status">Reading available sources…</p>}
-    {sourceError && <><p role="alert">{sourceError}</p><Button variant="outline" onClick={() => setAttempt(v => v + 1)}>Retry profile sources</Button></>}
-    {adopt && currentRunning && <label className="flex gap-2 rounded-xl bg-muted p-3 text-sm"><input type="checkbox" disabled={sending} checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />I understand Minecraft players will be disconnected and Minecraft will remain stopped after adoption.</label>}
-    {!allowed && <p role="status">Verified profile management and Minecraft settings permission are required.</p>}
-    {error && <p role="alert">{error}</p>}
-    {blocked && <p className="text-sm">Close this dialog and recheck the profile list and operation strip before another attempt.</p>}
-    {!adopt && <p className="text-xs text-muted-foreground">You can add a world screenshot from the profile details after preparation.</p>}
-    <DialogFooter><Button variant="outline" disabled={sending} onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={!allowed || !name.trim() || !validSource || sending || blocked || (adopt && currentRunning && !confirmed)} onClick={() => void submit()}>{sending ? "Submitting…" : adopt ? "Keep existing world" : "Prepare profile"}</Button></DialogFooter>
-  </DialogContent></Dialog>;
+  const selectedBuild = kind === "modrinth" && source && buildSource === source && !buildLoading && !buildError ? builds.find(item => item.id === build && item.supported) : undefined;
+  const previewSource = adopt ? "Existing world, mods & settings" : kind === "vanilla" ? loader === "vanilla" ? "Vanilla · Make it your own" : `Custom ${loader} world` : chosen?.title || (kind === "saved-set" ? "Choose a saved mod set" : "Choose a published pack");
+  const previewTarget = adopt ? "Keeps your existing version and loader." : kind === "vanilla" ? `${version || "Choose a Minecraft version"} · ${loader}` : kind === "saved-set" ? `${chosen?.mcVersion || "Target not selected"} · ${chosen?.loader || "Loader not selected"}` : selectedBuild ? `Declared MC ${selectedBuild.mcVersions.join(", ")} · ${selectedBuild.loaders.join(", ")} · ${selectedBuild.versionNumber}` : "Choose an exact published build";
+  const sourceTiles = [
+    { value: "vanilla" as const, title: "Vanilla", detail: "A fresh start. Add a loader if you like.", icon: Leaf },
+    { value: "saved-set" as const, title: "Saved mod set", detail: "A recipe you've already put together.", icon: PackageOpen },
+    { value: "modrinth" as const, title: "Published pack", detail: "Discover a new way to play.", icon: Compass },
+  ];
+  function changeSource(value: typeof kind) {
+    if (!allowed || sending || value === kind) return;
+    setKind(value); setSource(""); setSourceLoading(true);
+  }
+  return (
+    <Dialog open onOpenChange={open => { if (!open && !sending) onOpenChange(false); }}>
+      <DialogContent className={`${styles.dialog} sm:max-w-4xl`} showCloseButton={!sending} style={{ ["--tint" as string]: GAMES.minecraft.tint }}>
+        <ProfileDialogHero
+          variant={adopt ? "adopt" : kind}
+          eyebrow={adopt ? "Minecraft · Keep your world" : "Minecraft · World builder"}
+          title={adopt ? "Keep the existing Minecraft world" : "Create a Minecraft profile"}
+          description={adopt ? "Adoption preserves the existing world, mods and settings as one profile. It saves and stops Minecraft if running, then leaves it stopped. Other games are left alone." : "Prepare a separate world with its own version, mods and settings. Creating a profile does not start it or switch the current world."}
+        />
+        <div className={styles.body}>
+          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_15rem]">
+            <fieldset disabled={sending || !allowed} className="min-w-0 space-y-4">
+              <ProfileDialogReveal delay={.05}>
+                <ProfileFormSection step="01" title={adopt ? "Give this world a home" : "Name your next adventure"} hint="You'll see this name whenever you choose a world.">
+                  <div className="space-y-4">
+                    <div className="space-y-2"><Label htmlFor={`${labelId}-name`}>Profile name</Label><Input id={`${labelId}-name`} className="h-11 bg-background/70" placeholder={adopt ? "Our original world" : "Sunday survival, a fresh adventure…"} value={name} maxLength={80} onChange={e => setName(e.target.value)} /></div>
+                    <div className="space-y-2"><Label htmlFor={`${labelId}-description`}>Description</Label><Input id={`${labelId}-description`} className="h-11 bg-background/70" placeholder="What makes this world yours?" value={description} maxLength={1000} onChange={e => setDescription(e.target.value)} /></div>
+                  </div>
+                </ProfileFormSection>
+              </ProfileDialogReveal>
+              {!adopt && <>
+                <ProfileDialogReveal delay={.1}>
+                  <ProfileFormSection step="02" title="Pick your starting point" hint="A blank canvas, a familiar recipe, or something new.">
+                    <div className="mb-5 grid gap-2 sm:grid-cols-3" role="group" aria-label="Start from">
+                      {sourceTiles.map(tile => <motion.button key={tile.value} type="button" aria-label={tile.title} aria-describedby={`${labelId}-hint-${tile.value}`} aria-pressed={kind === tile.value} disabled={sending || !allowed} onClick={() => changeSource(tile.value)} whileHover={reduced ? undefined : { y: -3 }} whileTap={reduced ? undefined : { scale: .98 }} className={`${styles.sourceTile} sm:flex-col`}>
+                        <span className={styles.sourceIcon}><tile.icon className="size-4" aria-hidden="true" /></span><span className="min-w-0"><span className="block text-xs font-semibold">{tile.title}</span><span id={`${labelId}-hint-${tile.value}`} className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">{tile.detail}</span></span>{kind === tile.value && <Check className="absolute right-2 top-2 size-3.5 text-foreground" aria-hidden="true" />}
+                      </motion.button>)}
+                    </div>
+                    <ProfileDialogReveal key={kind}>
+                      {kind === "vanilla" ? <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2"><Label htmlFor={`${labelId}-version`}>Minecraft version</Label><select className={styles.select} id={`${labelId}-version`} value={version} disabled={sourceLoading || !!sourceError} onChange={e => setVersion(e.target.value)}><option value="">Choose an exact version</option>{versions.map(v => <option key={v} value={v}>{v}</option>)}</select></div>
+                        <div className="space-y-2"><Label htmlFor={`${labelId}-loader`}>Loader</Label><select className={styles.select} id={`${labelId}-loader`} value={loader} onChange={e => setLoader(e.target.value as MinecraftProfileLoader)}>{MINECRAFT_PROFILE_LOADERS.map(v => <option key={v}>{v}</option>)}</select></div>
+                      </div> : <div className="space-y-4">
+                        {kind === "modrinth" && <div className="space-y-2"><Label htmlFor={`${labelId}-query`}>Search published packs</Label><Input id={`${labelId}-query`} className="h-11" placeholder="Find a pack to build your world around…" value={query} onChange={e => { setQuery(e.target.value); setSource(""); setSourceLoading(true); }} /><p className="text-xs leading-relaxed text-muted-foreground">Search covers all versions. The profile uses the selected pack&apos;s target, not the current server&apos;s target.</p></div>}
+                        <div className="space-y-2"><Label htmlFor={`${labelId}-choice`}>{kind === "saved-set" ? "Saved mod set" : "Published pack"}</Label><select className={styles.select} id={`${labelId}-choice`} disabled={sourceLoading || !!sourceError} value={source} onChange={e => { setSource(e.target.value); setBuild(""); setBuildSource(null); setBuildLoading(true); setBuildError(null); }}><option value="">Choose a source</option>{choices.map(choice => <option key={choice.id} value={choice.id} disabled={kind === "saved-set" && (!choice.mcVersion || !choice.loader)}>{choice.title}{kind === "saved-set" ? choice.mcVersion && choice.loader ? ` · ${choice.mcVersion} / ${choice.loader}` : " · no exact target recorded" : ""}</option>)}</select></div>
+                        {kind === "modrinth" && source && <div className="space-y-2 rounded-xl bg-muted/40 p-3"><Label htmlFor={`${labelId}-build`}>Published pack build</Label><select className={styles.select} id={`${labelId}-build`} value={build} disabled={buildLoading || !!buildError || buildSource !== source} onChange={e => setBuild(e.target.value)}><option value="">Choose an exact published build</option>{builds.map(v => <option key={v.id} value={v.id} disabled={!v.supported}>{v.name} · {v.versionNumber} · MC {v.mcVersions.join(", ")} · {v.loaders.join(", ")}{!v.supported ? ` · ${v.reason || "unsupported"}` : ""}</option>)}</select><p className="text-xs leading-relaxed text-muted-foreground">These are the author’s declared targets. Preparation verifies the downloaded pack and pins this exact build.</p>{buildLoading && <p role="status">Reading published builds…</p>}{buildError && <p role="alert">{buildError}</p>}{!buildLoading && !buildError && buildSource === source && !builds.some(v => v.supported) && <p>No supported published builds were found for this pack.</p>}<Button variant="outline" disabled={buildLoading} onClick={() => { setBuildLoading(true); setBuildError(null); setBuildAttempt(v => v + 1); }}>Recheck pack builds</Button></div>}
+                      </div>}
+                      {(kind === "saved-set" || kind === "vanilla" && loader !== "vanilla") && <div className="mt-4 space-y-2"><Label htmlFor={`${labelId}-loader-version`}>{loader === "neoforge" ? "Exact NeoForge build (required for a custom loader)" : "Exact loader build (optional)"}</Label><Input id={`${labelId}-loader-version`} className="h-11" value={loaderVersion} onChange={e => setLoaderVersion(e.target.value)} /><p className="text-xs leading-relaxed text-muted-foreground">Fabric, Forge and Quilt can be resolved and pinned automatically. A custom NeoForge profile needs an exact build.</p></div>}
+                    </ProfileDialogReveal>
+                    {sourceLoading && <p role="status" className="mt-3 text-xs text-muted-foreground">Reading available sources…</p>}
+                    {sourceError && <div className="mt-3 space-y-2"><p role="alert">{sourceError}</p><Button variant="outline" onClick={() => setAttempt(v => v + 1)}>Retry profile sources</Button></div>}
+                  </ProfileFormSection>
+                </ProfileDialogReveal>
+                <ProfileDialogReveal delay={.15}>
+                  <ProfileFormSection step="03" title="Make it yours" hint="Optional details for a world that starts fresh.">
+                    <div className="space-y-4"><div className="space-y-2"><Label htmlFor={`${labelId}-seed`}>New world seed (optional)</Label><Input id={`${labelId}-seed`} className="h-11 font-mono" placeholder="Let Minecraft surprise you" value={seed} onChange={e => setSeed(e.target.value)} /><p className="text-xs leading-relaxed text-muted-foreground">The game creates this fresh world on its first start. No existing world is replaced.</p></div><div className="space-y-2"><Label htmlFor={`${labelId}-java`}>Java runtime</Label><select className={styles.select} id={`${labelId}-java`} value={java} onChange={e => setJava(e.target.value as typeof java)}><option value="">Automatic from Minecraft metadata</option>{MINECRAFT_JAVA_VARIANTS.map(v => <option key={v}>{v}</option>)}</select></div></div>
+                  </ProfileFormSection>
+                </ProfileDialogReveal>
+              </>}
+              {adopt && <ProfileDialogReveal delay={.1}><div className={styles.note}><ShieldCheck className="mt-px size-4 shrink-0 text-[var(--mc)]" aria-hidden="true" /><p>Your world gets its own profile. Its progress, mods and settings stay together; you choose when to start it again.</p></div><details className="mt-4 space-y-3 rounded-xl border border-border/70 bg-card/40 p-4"><summary className="flex cursor-pointer items-center gap-2 text-xs font-medium"><SlidersHorizontal className="size-3.5 text-muted-foreground" aria-hidden="true" />Advanced: resolve an ambiguous existing installation</summary><p className="text-xs leading-relaxed text-muted-foreground">Only enter the exact loader build and Java variant reviewed for this existing world. These hints resolve unknown installation details; they do not select a different Minecraft version or loader.</p><Label htmlFor={`${labelId}-adopt-loader`}>Reviewed existing loader build (optional)</Label><Input id={`${labelId}-adopt-loader`} className="h-11" value={loaderVersion} onChange={e => setLoaderVersion(e.target.value)} /><Label htmlFor={`${labelId}-adopt-java`}>Reviewed existing Java runtime (optional)</Label><select className={styles.select} id={`${labelId}-adopt-java`} value={java} onChange={e => setJava(e.target.value as typeof java)}><option value="">Read the existing installation automatically</option>{MINECRAFT_JAVA_VARIANTS.map(v => <option key={v}>{v}</option>)}</select></details></ProfileDialogReveal>}
+            </fieldset>
+            <ProfileDialogReveal delay={.2} className="lg:sticky lg:top-2"><ProfileDraftPreview name={name} description={description} source={previewSource} target={previewTarget} variant={adopt ? "adopt" : kind} adopt={adopt} /></ProfileDialogReveal>
+          </div>
+          <div className="mt-5 space-y-3">
+            {adopt && currentRunning && <label className={`${styles.note} ${styles.warning} cursor-pointer`}><input type="checkbox" className="mt-1 size-4 shrink-0 accent-[var(--mc)]" disabled={sending} checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /><span>I understand Minecraft players will be disconnected and Minecraft will remain stopped after adoption.</span></label>}
+            {!allowed && <p role="status" className={styles.note}>Verified profile management and Minecraft settings permission are required.</p>}
+            {error && <p role="alert" className={`${styles.note} ${styles.warning}`}>{error}</p>}
+            {blocked && <p className="text-xs leading-relaxed text-muted-foreground">Close this dialog and recheck the profile list and operation strip before another attempt.</p>}
+            {!adopt && <p className="flex items-center gap-2 text-xs text-muted-foreground"><Sparkles className="size-3.5 shrink-0 text-[var(--mc)]" aria-hidden="true" />You can add a world screenshot from the profile details after preparation.</p>}
+          </div>
+        </div>
+        <DialogFooter className={`${styles.footer} items-center sm:justify-between`}>
+          <p className="mr-auto hidden items-center gap-2 text-xs text-muted-foreground sm:flex"><ShieldCheck className="size-3.5 text-[var(--mc)]" aria-hidden="true" />{adopt ? "Keeps your world · Leaves Minecraft stopped" : "Prepare now · Start when you're ready"}</p>
+          <div className="flex w-full gap-2 sm:w-auto"><Button className="h-11 flex-1 sm:flex-none" variant="outline" disabled={sending} onClick={() => onOpenChange(false)}>Cancel</Button><Button className="h-11 flex-1 gap-2 sm:flex-none" disabled={!allowed || !name.trim() || !validSource || sending || blocked || (adopt && currentRunning && !confirmed)} onClick={() => void submit()}>{sending ? "Submitting…" : adopt ? "Keep existing world" : "Prepare profile"}<ArrowRight className="size-4" aria-hidden="true" /></Button></div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }

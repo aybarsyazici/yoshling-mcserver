@@ -24,6 +24,15 @@ remains available. Recovery logs carry no action-granting identity when unverifi
 Profile selection, exact pack builds, adoption and inactive settings are documented
 in [MINECRAFT-PROFILES.md](MINECRAFT-PROFILES.md).
 
+Profile polling separates initial `loading` from background `refreshing`. An
+in-flight refresh retains the last validated snapshot and does not disable its
+controls. Failed, malformed or denied reads disable actions until a valid recovery;
+older replies cannot replace a newer profile identity. The picker still expires
+server status after fifteen seconds and respects power/file-operation admission.
+Explicit recovery rechecks keep an unconfirmed action blocked until profile,
+status and validated operation reads each report acceptance. Failed or superseded
+reads cannot clear that block; timer polls do not overlap the current ledger read.
+
 PZ quick/maps/mods/updates validate their response shapes and distinguish initial failure
 from stale prior data. Mod drafts/cancel/save retain actual enabled/disabled variant tokens;
 an unchanged save cannot enable disabled variants or erase unrelated loaded tokens.

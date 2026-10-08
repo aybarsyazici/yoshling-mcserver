@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { parseOperationsPoll } from "@/lib/operations-poll";
 import {
   isStale,
   type OperationView,
@@ -48,13 +49,15 @@ interface OperationsState {
    */
   skewMs: number;
   loading: boolean;
-  refresh: () => Promise<void>;
+  /** True only when this request published a validated reading; legacy callers may ignore it. */
+  refresh: () => Promise<boolean | void>;
 }
 
 const Ctx = createContext<OperationsState | null>(null);
 
 const FAST_MS = 1500;
 const IDLE_MS = 6000;
+const REQUEST_TIMEOUT_MS = 15_000;
 const DISMISS_KEY = "yoshling.ops.dismissed";
 
 function readDismissed(): string[] {
@@ -85,6 +88,8 @@ export function OperationsProvider({
   /** True once a payload has arrived over the network, as opposed to from the seed. */
   const [fetched, setFetched] = useState(false);
   const alive = useRef(true);
+  const generation = useRef(0);
+  const pending = useRef<{ request: number; controller: AbortController; timeout: ReturnType<typeof setTimeout> } | null>(null);
   /**
    * `serverNow - receivedAt`. Every comparison against a server epoch is corrected
    * with this, because `Date.now() - startedAt` mixes a browser clock with a server
@@ -105,24 +110,33 @@ export function OperationsProvider({
   }, []);
 
   const refresh = useCallback(async () => {
+    if (pending.current) { clearTimeout(pending.current.timeout); pending.current.controller.abort(); }
+    const request = ++generation.current;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    pending.current = { request, controller, timeout };
     try {
       const receivedAt = Date.now();
-      const res = await fetch("/api/operations", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = (await res.json()) as OperationsPayload;
-      if (!alive.current) return;
+      const res = await fetch("/api/operations", { cache: "no-store", signal: controller.signal });
+      if (!res.ok) return false;
+      const data = parseOperationsPoll(await res.json());
+      if (!data || controller.signal.aborted || !alive.current || request !== generation.current) return false;
       // Only replace the skew when it moved by more than a second: a re-render per poll
       // for 40ms of network jitter is pure churn, and the ledger ticks anyway.
       const next = data.serverNow - receivedAt;
       setSkewMs((prev) => (Math.abs(next - prev) > 1000 ? next : prev));
       setPayload(data);
       setFetched(true);
+      return true;
     } catch {
-      /* keep the last known state; a dropped poll is not news */
+      return false; // Historical display remains, but this read cannot confirm a retry.
     } finally {
-      if (alive.current) setLoading(false);
+      clearTimeout(timeout);
+      if (pending.current?.request === request) pending.current = null;
+      if (alive.current && request === generation.current) setLoading(false);
     }
   }, []);
+  const poll = useCallback(() => { if (!pending.current) void refresh(); }, [refresh]);
 
   // A *stalled* projected boot is not progress to watch: the container has been up and
   // unreachable for over twelve minutes and nothing about it is going to change on a
@@ -131,24 +145,28 @@ export function OperationsProvider({
 
   useEffect(() => {
     alive.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh();
+    return () => {
+      alive.current = false;
+      if (pending.current) { clearTimeout(pending.current.timeout); pending.current.controller.abort(); pending.current = null; }
+    };
+  }, []);
+  useEffect(() => {
+    poll();
     const id = setInterval(() => {
       // Paused entirely in a hidden tab. `useGames` polls hidden tabs forever today
       // and that is a measured cost on a box that is CPU-bound during a boot.
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void refresh();
+      poll();
     }, running > 0 ? FAST_MS : IDLE_MS);
     const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState === "visible") poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      alive.current = false;
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh, running]);
+  }, [poll, running]);
 
   const dismiss = useCallback((id: string) => {
     setDismissed((prev) => {
@@ -201,7 +219,7 @@ export function useOperations(): OperationsState {
     elapsedMs: () => 0,
     skewMs: 0,
     loading: false,
-    refresh: async () => {},
+    refresh: async () => false,
   };
 }
 

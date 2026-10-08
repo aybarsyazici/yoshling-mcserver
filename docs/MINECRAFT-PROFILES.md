@@ -1,14 +1,15 @@
 # Minecraft profiles
 
-## Current implementation work
+## Current implementation
 
 Profiles are the playable unit: a name, cover image, complete server directory,
 Minecraft version, exact loader build, Java image, mods and world settings. There
 is still one Minecraft server address and one running Minecraft container.
 
 The feature is deployed to production web and passes complete project checks.
-The reviewed additive schema is applied and verified. No profile has been selected
-or adopted; the existing world awaits the explicit dashboard adoption operation.
+The reviewed additive schema is applied and verified. The existing world has been
+adopted as a ready profile with its installed mods scoped to it. Read live selection
+and run state from the dashboard; this document does not track changing game power.
 
 ### User flow
 
@@ -28,6 +29,17 @@ or adopted; the existing world awaits the explicit dashboard adoption operation.
 - Inactive profiles can be deleted after a named confirmation. World backups are
   retained separately. An interrupted preparation may need deletion and recreation;
   a persisted `preparing` row is not proof that a worker is still running.
+
+The gallery and dialogs use decorative pixel landscapes, source choices and
+motion that respects reduced-motion preferences. Illustrations are labeled and
+never represent actual world contents. Background profile refreshes retain a
+validated snapshot; failed reads and real permission/runtime changes still block
+actions. Preparation and player-disconnection confirmations remain separate.
+
+Covers currently come from authenticated manual screenshot uploads. The owner
+chose actual player-camera captures for the next enhancement: a client companion
+for Fabric 26.1.2 with explicit, short-lived profile pairing. Client capture is not
+deployed yet; the server has no camera or renderer.
 
 ### Storage and identity
 
@@ -110,8 +122,7 @@ need reviewed owner intervention.
 ### Production rollout
 
 Production received `prisma/migrations/20261007180000_add_minecraft_profiles/migration.sql`
-and the web deployment on 8 October 2026. Both new tables are empty; inventory IDs
-remain NULL. Existing records, integrity and foreign keys were verified against
+and the web deployment on 8 October 2026. Existing records, integrity and foreign keys were verified against
 private pre-migration snapshots. Do not replay this migration. Evidence and backup
 locations are in `CLOSED.md`.
 
@@ -120,17 +131,18 @@ backup and verify schema/data before deploying the generated client. Use
 `scripts/deploy.sh` with a literal verification string and keep game/profile work
 idle during deployment. No migration or adoption runs automatically on boot.
 
-Adopt through the dashboard afterward, reviewing any loader/Java hints required
+On a fresh legacy installation, adopt through the dashboard afterward, reviewing any loader/Java hints required
 by an ambiguous legacy install. Adoption keeps original data at the volume root,
 copies and verifies the complete server, transfers legacy inventory without changing
 its history, selects the stopped profile and leaves Minecraft stopped. Start and
-verify a real game join separately. Adoption, real game joins, controlled restores
-and authenticated browser verification remain unexercised. No browser verification
+verify a real game join separately. A read-only production check confirms completed
+legacy adoption; real game joins, controlled restores and authenticated browser
+verification remain unexercised by the agent. No browser verification
 surface was available during deployment; anonymous route checks do not prove sign-in.
 
 ### Remaining delivery work
 
-- Explicit legacy adoption and real Minecraft joins for multiple profiles.
+- Real Minecraft joins for multiple profiles.
 - Controlled restore/checkpoint recovery and full browser visual/mobile verification.
 
 Local verification and mutation evidence are recorded in [CLOSED.md](CLOSED.md).

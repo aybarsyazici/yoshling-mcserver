@@ -78,7 +78,7 @@ describe("shared status poll freshness", () => {
     const old = deferred<Response>(); let count = 0;
     vi.stubGlobal("fetch", vi.fn(async () => count++ === 0 ? old.promise : json(payload())));
     const { result } = renderHook(() => useGames(5000));
-    await act(async () => vi.advanceTimersByTime(5000));
+    await act(async () => { await result.current.refresh(); });
     const latest = result.current.lastSuccessAt;
     await act(async () => old.resolve(json({}, 500)));
     expect(result.current.pollError).toBeNull(); expect(result.current.lastSuccessAt).toBe(latest);

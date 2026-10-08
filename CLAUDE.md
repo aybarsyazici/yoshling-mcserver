@@ -147,10 +147,6 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 ## Current remediation status
 
-Minecraft profiles are deployed to web (8 October 2026). The additive schema is applied
-and verified; profile tables remain empty and the existing Minecraft world awaits explicit
-dashboard adoption. The six-account ID invitation policy is active. Evidence is in `CLOSED.md`.
-
 - Remaining dependency advisories need applicability/exposure review. Feature limits include idempotent saved-set re-imports, draft review for Minecraft's custom settings cards, and owner-only checkpoint/drift recovery.
 - Minecraft profile contracts and remaining rollout work are in `MINECRAFT-PROFILES.md`. Different targets use separate profiles; profile version/loader editing is unavailable after preparation.
 - Verification gaps: genuine Discord login/denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.

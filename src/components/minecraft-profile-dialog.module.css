@@ -1,0 +1,38 @@
+.dialog { padding: 0; gap: 0; border-radius: 1.5rem; overflow: auto; max-height: 92dvh; box-shadow: 0 28px 100px color-mix(in oklab, var(--foreground) 15%, transparent); }
+.hero { position: relative; isolation: isolate; overflow: hidden; padding: 1.75rem 2rem; min-height: 11rem; border-bottom: 1px solid color-mix(in oklab, var(--mc) 18%, transparent); background: color-mix(in oklab, var(--mc) 5%, var(--popover)); }
+.scene { position: absolute; inset: 0 0 0 27%; z-index: -2; opacity: .95; }
+.scrim { position: absolute; inset: 0; z-index: -1; background: linear-gradient(90deg, var(--popover) 5%, color-mix(in oklab, var(--popover) 94%, transparent) 30%, color-mix(in oklab, var(--popover) 62%, transparent) 64%, transparent 100%); }
+.kicker { display: inline-flex; align-items: center; gap: .45rem; font-size: .65rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--foreground); margin-bottom: .7rem; }
+.title { font-family: var(--font-display, inherit); font-size: clamp(1.5rem, 3.5vw, 2rem); font-weight: 700; letter-spacing: -.045em; line-height: 1.1; max-width: 30rem; }
+.description { max-width: 31rem; font-size: .8rem; line-height: 1.7; color: var(--muted-foreground); margin-top: .6rem; }
+.body { padding: 1.5rem 2rem; }
+.section { border: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent); border-radius: 1rem; background: color-mix(in oklab, var(--card) 65%, transparent); padding: 1.15rem; }
+.sectionHeader { display: flex; align-items: center; gap: .65rem; margin-bottom: 1rem; }
+.step { display: grid; place-items: center; flex: none; width: 1.75rem; height: 1.75rem; border-radius: .55rem; color: var(--foreground); background: color-mix(in oklab, var(--mc) 12%, var(--card)); font: 600 .65rem var(--font-mono, monospace); }
+.sectionTitle { font-weight: 600; font-size: .9rem; letter-spacing: -.01em; }
+.sectionSub { font-size: .7rem; color: var(--muted-foreground); margin-top: .15rem; }
+.sourceTile { position: relative; display: flex; gap: .65rem; align-items: flex-start; min-width: 0; padding: 1rem; border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent); border-radius: .85rem; background: var(--popover); text-align: left; cursor: pointer; transition: border-color 160ms, background-color 160ms, box-shadow 160ms; }
+.sourceTile:hover { border-color: color-mix(in oklab, var(--mc) 50%, transparent); }
+.sourceTile[aria-pressed=true] { border-color: color-mix(in oklab, var(--mc) 70%, transparent); background: color-mix(in oklab, var(--mc) 8%, var(--popover)); box-shadow: 0 0 0 1px color-mix(in oklab, var(--mc) 14%, transparent), 0 8px 22px color-mix(in oklab, var(--mc) 6%, transparent); }
+.sourceTile:focus-visible, .profileTile:focus-visible { outline: 2px solid var(--foreground); outline-offset: 3px; }
+.sourceTile:disabled, .profileTile:disabled { cursor: not-allowed; opacity: .5; }
+.sourceIcon { display: grid; place-items: center; width: 2rem; height: 2rem; flex: none; border-radius: .6rem; color: var(--mc); background: color-mix(in oklab, var(--mc) 10%, var(--card)); }
+.select { width: 100%; min-height: 2.65rem; padding: .55rem .75rem; border-radius: .65rem; border: 1px solid var(--border); background: var(--background); color: var(--foreground); font-size: .8rem; outline-offset: 3px; }
+.select:focus-visible { outline: 2px solid var(--foreground); }
+.select:disabled { opacity: .5; }
+.preview { overflow: hidden; border: 1px solid color-mix(in oklab, var(--mc) 20%, transparent); border-radius: 1rem; background: color-mix(in oklab, var(--mc) 5%, var(--card)); }
+.previewScene { height: 7rem; border-bottom: 1px solid color-mix(in oklab, var(--mc) 15%, transparent); }
+.previewContent { padding: 1rem; overflow-wrap: anywhere; }
+.previewLabel { font-size: .6rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--foreground); }
+.previewName { font-size: 1.1rem; font-weight: 650; letter-spacing: -.025em; overflow-wrap: anywhere; margin-top: .35rem; }
+.note { display: flex; gap: .6rem; align-items: flex-start; border: 1px solid color-mix(in oklab, var(--mc) 16%, transparent); background: color-mix(in oklab, var(--mc) 5%, var(--card)); border-radius: .85rem; padding: .9rem 1rem; font-size: .75rem; line-height: 1.6; }
+.warning { border-color: color-mix(in oklab, var(--chart-5) 28%, transparent); background: color-mix(in oklab, var(--chart-5) 6%, var(--card)); }
+.footer { position: sticky; bottom: 0; z-index: 2; margin-inline: 0; margin-bottom: 0; border-radius: 0; padding: 1rem 2rem; background: color-mix(in oklab, var(--popover) 94%, transparent); backdrop-filter: blur(16px); border-top: 1px solid var(--border); }
+.profileTile { position: relative; overflow: hidden; min-width: 0; border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent); border-radius: 1rem; background: var(--card); cursor: pointer; text-align: left; transition: border-color 160ms, box-shadow 160ms; }
+.profileTile[aria-pressed=true] { border-color: var(--mc); box-shadow: 0 0 0 2px color-mix(in oklab, var(--mc) 15%, transparent); }
+.profileScene { position: relative; height: 5rem; overflow: hidden; background: var(--muted); }
+.profileText { padding: .9rem 1rem; }
+.selectedMark { position: absolute; right: .6rem; top: .6rem; display: grid; place-items: center; width: 1.45rem; height: 1.45rem; border-radius: .4rem; color: var(--background); background: var(--foreground); }
+@media (max-width: 639px) { .hero { padding: 1.4rem 1.25rem; min-height: 10rem; } .body { padding: 1.1rem 1rem; } .footer { padding: 1rem; } .scene { inset-inline-start: 10%; opacity: .7; } .sourceTile { padding: .75rem; } }
+@media (max-height: 640px) { .hero { min-height: 0; padding-block: 1rem; } .description { line-height: 1.5; } }
+@media (prefers-reduced-motion: reduce) { .sourceTile, .profileTile { transition: none; } }

@@ -644,3 +644,41 @@ image inputs.
 
 Current instructions/remaining work are in `CLAUDE.md` and
 `MINECRAFT-PROFILES.md`; this is historical rollout evidence.
+
+## Legacy adoption observed after rollout — 2026-10-08
+
+Following the owner's dashboard adoption, read-only production queries showed one
+ready legacy Fabric 26.1.2 profile, one runtime row with a selected profile, and
+three installed mods with no remaining NULL profile identities. Minecraft was in
+Docker's created/stopped state. This supersedes the initial rollout's empty-table
+snapshot; it does not establish a real Minecraft start or client join. Current
+docs no longer describe adoption as pending. No agent lifecycle action was taken.
+
+## Profile polling stability and visual redesign — 2026-10-08
+
+- Profile collection loading now describes an initial/unaccepted read; background
+  refreshes retain validated data. Actual gallery Start/Create controls and open
+  create/adopt drafts stay usable during a delayed poll. Errors, denied access,
+  permission changes, stale status and obsolete response identities still refuse
+  actions. Re-enabling a hook session requires a fresh accepted read.
+- Recovery Retry remains blocked until profile, status and complete validated
+  ledger reads each confirm acceptance. Status/ledger timer polls do not overlap;
+  manual supersession aborts the prior request, fifteen-second deadlines bound
+  reads, and an old completion cannot clear the newest pending request.
+- Gallery/cards and create/adopt/picker dialogs have themed decorative landscapes,
+  source tiles, a live draft preview, screenshot thumbnails, clearer sections and
+  responsive sticky actions. Reduced motion disables the new ambient/reveal/lift
+  animations. Illustrations are labeled; exact builds and disconnection review
+  contracts are retained. Re-selecting a source is a no-op; stale pack builds cannot
+  appear in the current draft preview.
+- Before work: 171 files / 2,927 tests, types and production build/artifact passed;
+  lint zero errors, seven existing warnings. After changes: 174 files / 2,984 tests,
+  full types, normal production build/artifact and lint passed with the same seven
+  warnings. Types also passed after build. The 57 new cases include
+  real polling/consumer integrations, strict ledger parsing and visual/source
+  controls. Twenty-three distinct guard mutations were observed failing and
+  restored (15 polling/retry variants, eight visual/source variants).
+- Authenticated Firefox showed the existing adopted profile before release, then
+  its native window became unavailable. Component/source checks do not establish
+  new-layout browser/mobile focus, a real game join, or a client screenshot capture.
+  Production rollout evidence is recorded after the guarded deployment.

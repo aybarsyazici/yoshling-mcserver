@@ -130,7 +130,8 @@ export interface GamesState {
   /** Identity verified with this accepted status body; power controls may rebind on polls. */
   minecraftContext?: string | null;
   pollError?: string | null;
-  refresh: () => Promise<void>;
+  /** True only if this request supplied the accepted snapshot; old callers may ignore it. */
+  refresh: () => Promise<boolean | void>;
 }
 
 /**
@@ -213,15 +214,20 @@ export function useGames(interval = 5000): GamesState {
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
   const requestGeneration = useRef(0);
+  const pending = useRef<{ generation: number; controller: AbortController; timeout: ReturnType<typeof setTimeout> } | null>(null);
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [minecraftContext, setMinecraftContext] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (pending.current) { clearTimeout(pending.current.timeout); pending.current.controller.abort(); }
     const generation = ++requestGeneration.current;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    pending.current = { generation, controller, timeout };
     try {
       const receivedAt = Date.now();
-      const res = await fetch("/api/games/status", { cache: "no-store" });
+      const res = await fetch("/api/games/status", { cache: "no-store", signal: controller.signal });
       if (!res.ok) throw new Error(`Status refresh failed (HTTP ${res.status})`);
       const data = await res.json();
       if (!data?.games || !["minecraft", "7dtd", "zomboid"].every((g) => {
@@ -229,7 +235,7 @@ export function useGames(interval = 5000): GamesState {
         return snap && ["online", "offline", "starting", "stopping", "installing"].includes(snap.status) && snap.players &&
           typeof snap.players.online === "number" && typeof snap.players.max === "number" && Array.isArray(snap.players.players);
       })) throw new Error("Status response is incomplete");
-      if (!alive.current || generation !== requestGeneration.current) return;
+      if (controller.signal.aborted || !alive.current || generation !== requestGeneration.current) return false;
       setMinecraftContext(res.headers?.get("X-Minecraft-Context") || null);
       setLastSuccessAt(Date.now()); setPollError(null);
       if (typeof data.serverNow === "number") setClockSkewMs(data.serverNow - receivedAt);
@@ -244,42 +250,49 @@ export function useGames(interval = 5000): GamesState {
       setBusy(data.busy ?? null);
       setAccess(Array.isArray(data.access) ? data.access : []);
       // A response from an older build cannot vouch for newly added capabilities.
-      if (data.can)
-        setCan({
-          ...data.can,
-          settings: data.can.settings ?? false,
-          modsInstall: data.can.modsInstall ?? false,
-          modsRemove: data.can.modsRemove ?? false,
-          settingsEdit: data.can.settingsEdit ?? false,
-          consoleExecute: data.can.consoleExecute ?? false,
-          filesDelete: data.can.filesDelete ?? false,
-          usersManage: data.can.usersManage ?? false,
-        });
+      setCan({
+        start: data.can?.start === true,
+        stop: data.can?.stop === true,
+        restart: data.can?.restart === true,
+        settings: data.can?.settings === true,
+        modsInstall: data.can?.modsInstall === true,
+        modsRemove: data.can?.modsRemove === true,
+        settingsEdit: data.can?.settingsEdit === true,
+        consoleExecute: data.can?.consoleExecute === true,
+        filesDelete: data.can?.filesDelete === true,
+        usersManage: data.can?.usersManage === true,
+      });
       setMemoryGb(data.memoryGb ?? {});
       setHostGb(typeof data.hostGb === "number" ? data.hostGb : null);
       setMaxGb(typeof data.maxGb === "number" ? data.maxGb : null);
+      return true;
     } catch (error) {
       if (alive.current && generation === requestGeneration.current) { setMinecraftContext(null); setPollError(error instanceof Error ? error.message : "Couldn't refresh server status"); }
+      return false;
     } finally {
-      if (alive.current) setLoading(false);
+      clearTimeout(timeout);
+      if (pending.current?.generation === generation) pending.current = null;
+      if (alive.current && generation === requestGeneration.current) setLoading(false);
     }
   }, []);
+  const poll = useCallback(() => { if (!pending.current) void refresh(); }, [refresh]);
 
   useEffect(() => {
     alive.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh();
+    return () => {
+      alive.current = false;
+      if (pending.current) { clearTimeout(pending.current.timeout); pending.current.controller.abort(); pending.current = null; }
+    };
+  }, []);
+  useEffect(() => {
+    poll();
     if (interval > 0) {
-      const id = setInterval(refresh, interval);
+      const id = setInterval(poll, interval);
       return () => {
-        alive.current = false;
         clearInterval(id);
       };
     }
-    return () => {
-      alive.current = false;
-    };
-  }, [refresh, interval]);
+  }, [poll, interval]);
 
   return {
     games,
