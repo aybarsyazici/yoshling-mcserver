@@ -753,3 +753,30 @@ containers, server mods or the database schema.
   was exercised. Storage checks cannot attest to an authorized client's image scene.
   Other client versions/loaders require separate supported builds. Installation and
   current contracts are in `MINECRAFT-SCREENSHOTS.md`.
+
+### Capture release deployment
+
+- Commit `761df51db96c5141e7ed485b7648343fe0e75f7d` was pushed to `origin/main`
+  and deployed with `scripts/deploy.sh --service web --verify 'The managing account is no longer authorized for Minecraft capture'`.
+  The running bundle contained the literal. Built/running image IDs both equal
+  `sha256:9ddc6ba5227dc3797f2ceb822c53c451c2a4c17e8dfa6f87a6bd61ed3618b983`;
+  web started `2026-10-08T11:41:40.966734789Z`, restart count zero.
+- Game IDs/images/start times/restart counts/run states and `.env` SHA256/size/mode
+  matched the pre-release snapshot above. PZ remained running; no schema migration,
+  game lifecycle, client installation, pairing mint or production capture occurred.
+- Origin HTTP login/session returned 200. Anonymous profile/companion reads and
+  context/upload POSTs returned 401 JSON. Origin-served JAR bytes and manifest were
+  compared to the committed artifact: 37,189 bytes and the SHA256 above, also verified
+  inside the running image. The production host has no Node CLI; its running web
+  container supplied Node for artifact verification.
+- Local public HTTPS verification became blocked by corporate DNS:
+  `yoshling.xyz` resolved to `sinkhole.esl.cisco.com` / `173.38.207.15`, presenting a
+  Cisco sinkhole certificate whose names do not include the requested domain. TLS
+  verification correctly refused. No network protection or certificate check was
+  bypassed. Public download/reachability and the new capture panel were not verified
+  from this laptop after deployment; origin checks are distinct evidence.
+- The previous running UI image metadata had disappeared by preflight, so a new
+  image tag could not be created. A later export attempt found the old container
+  already replaced; it produced no backup. The existing verified profile-aware
+  rollback `yoshling-web:rollback-574a2f1-ui-20261008` remains the available preserved
+  predecessor. Do not claim the attempted `rollback-b7954e3-capture-20261008` exists.
