@@ -7,6 +7,14 @@ Settings. The **Take tour** button stays available on Minecraft pages, including
 small screens. The old `/minecraft/guide` URL redirects to `/minecraft?tour=1`
 for an explicit replay; the retired chapter guide is recorded in memory history.
 
+## Tour wording
+
+Keep each step short and speak directly to the visitor. Explain what the feature
+is for and name the relevant button. Avoid account-level commentary, internal
+checks and explanations about what an action proves. Missing sections and errors
+use simple next steps such as returning later, refreshing or trying again.
+Keep the operational protections in code; the tour's copy is a user walkthrough.
+
 ## Automatic entry and completion
 
 `User.minecraftTourDone` is an account preference, default false. Authenticated

@@ -61,7 +61,7 @@ function requests(done = false, options: { get?: (count: number) => Promise<Resp
   vi.stubGlobal("fetch", vi.fn(async (input, init) => { const method = init.method ?? "GET"; calls.push({ method, url: String(input), body: init.body ? JSON.parse(init.body) : null, actor: new Headers(init.headers).get("X-Minecraft-Tour-User") }); return method === "POST" ? options.post?.() ?? json("alice", true) : options.get?.(++gets) ?? json("alice", done); })); return calls;
 }
 const activeDriver = () => (boundary.drivers as FakeDriver[]).at(-1)!;
-async function launched() { await waitFor(() => expect(boundary.drivers).toHaveLength(1)); await screen.findByRole("dialog", { name: "A quick tour of Minecraft" }); }
+async function launched() { await waitFor(() => expect(boundary.drivers).toHaveLength(1)); await screen.findByRole("dialog", { name: "Let’s look around" }); }
 async function replay() { fireEvent.click(screen.getByRole("button", { name: "Take tour" })); await launched(); }
 async function next() { fireEvent.click(screen.getByRole("button", { name: "Next" })); await waitFor(() => expect((screen.queryByRole("button", { name: "Next" }) ?? screen.getByRole("button", { name: "Finish tour" })).getAttribute("disabled")).toBeNull()); }
 
@@ -75,7 +75,7 @@ describe("spotlight first visit and replay", () => {
     render(<Host />); await waitFor(() => expect(calls).toHaveLength(1)); await act(async () => {}); expect(boundary.drivers).toHaveLength(0); expect(screen.getByRole("button", { name: "Take tour" })).toBeTruthy(); await replay(); expect(calls.every(call => call.method === "GET")).toBe(true);
   });
   it("replays a completed account without resetting or rewriting its DB flag", async () => {
-    const calls = requests(true); render(<Host />); await replay(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await screen.findByText(/Tour complete/); expect(calls.every(call => call.method === "GET")).toBe(true);
+    const calls = requests(true); render(<Host />); await replay(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await screen.findByText(/You’re all set/); expect(calls.every(call => call.method === "GET")).toBe(true);
   });
   it.each(["Close tour", "Escape"])("dismisses this visit with %s without marking done", async close => {
     const calls = requests(); render(<Host />); await launched(); if (close === "Escape") fireEvent.keyUp(document, { key: "Escape" }); else fireEvent.click(screen.getByRole("button", { name: close }));
@@ -90,18 +90,18 @@ describe("spotlight first visit and replay", () => {
   });
   it("keeps unknown timed-out preference state from triggering auto while replay remains available", async () => {
     vi.useFakeTimers(); requests(false, { get: () => new Promise<Response>(() => {}) }); await act(async () => render(<Host />)); await act(async () => vi.advanceTimersByTimeAsync(15000));
-    expect(boundary.drivers).toHaveLength(0); expect(screen.getByText(/preference could not be read/)).toBeTruthy(); await act(async () => fireEvent.click(screen.getByRole("button", { name: "Take tour" })));
+    expect(boundary.drivers).toHaveLength(0); expect(screen.getByText(/tour progress couldn’t load/)).toBeTruthy(); await act(async () => fireEvent.click(screen.getByRole("button", { name: "Take tour" })));
     expect(boundary.drivers).toHaveLength(1);
   });
   it("waits for initial capabilities before auto launch and uses only read-only steps after a failed capability read", async () => {
     boundary.games = gamesState({ loading: true }); requests(); const view = render(<Host />); await act(async () => {}); expect(boundary.drivers).toHaveLength(0);
     boundary.games = gamesState({ loading: false, pollError: "unavailable" }); view.rerender(<Host />); await launched();
-    expect(screen.getByText(/management permissions could not be verified/)).toBeTruthy(); expect(activeDriver().config.steps!.some(step => step.popover?.title === "Review settings in context")).toBe(false);
-    expect(activeDriver().config.steps!.some(step => step.popover?.title === "Prepare another adventure")).toBe(false);
+    expect(screen.getByText(/Some options aren’t ready yet/)).toBeTruthy(); expect(activeDriver().config.steps!.some(step => step.popover?.title === "Make the world yours")).toBe(false);
+    expect(activeDriver().config.steps!.some(step => step.popover?.title === "Make a new world")).toBe(false);
   });
   it("protects a busy capture panel from auto and manual launch, then permits deliberate replay after it clears", async () => {
     const panel = document.createElement("section"); panel.setAttribute("data-minecraft-tour-busy", ""); panel.textContent = "Private pairing session"; document.body.append(panel);
-    try { requests(); render(<Host />); await act(async () => {}); expect(boundary.drivers).toHaveLength(0); fireEvent.click(screen.getByRole("button", { name: "Take tour" })); expect(screen.getByText(/Finish or close the current screenshot pairing task/)).toBeTruthy();
+    try { requests(); render(<Host />); await act(async () => {}); expect(boundary.drivers).toHaveLength(0); fireEvent.click(screen.getByRole("button", { name: "Take tour" })); expect(screen.getByText(/Finish or cancel your screenshot pairing/)).toBeTruthy();
       panel.removeAttribute("data-minecraft-tour-busy"); await replay(); }
     finally { panel.remove(); }
   });
@@ -120,17 +120,17 @@ describe("screen navigation and interaction containment", () => {
   it("waits for a delayed real target before claiming it was highlighted", async () => {
     requests(true); const view = render(<Host missing={["worlds"]} />); await replay(); fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await screen.findByText("Opening the next tour screen…"); expect(activeDriver().api.getActiveElement()).not.toBe(document.querySelector('[data-minecraft-tour="worlds"]'));
-    view.rerender(<Host missing={[]} />); await screen.findByRole("dialog", { name: "Your worlds, kept together" }); expect(activeDriver().api.getActiveElement()).toBe(document.querySelector('[data-minecraft-tour="worlds"]'));
+    view.rerender(<Host missing={[]} />); await screen.findByRole("dialog", { name: "Your worlds" }); expect(activeDriver().api.getActiveElement()).toBe(document.querySelector('[data-minecraft-tour="worlds"]'));
   });
   it("uses an honest unavailable explanation after the bounded target wait", async () => {
     vi.useFakeTimers(); requests(true); await act(async () => render(<Host missing={["worlds"]} />)); await act(async () => fireEvent.click(screen.getByRole("button", { name: "Take tour" })));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Next" }))); await act(async () => vi.advanceTimersByTimeAsync(8000));
-    expect(screen.getByText(/world list is not available/)).toBeTruthy(); expect(activeDriver().api.getActiveElement()).toBeUndefined();
+    expect(screen.getByText(/Your worlds aren’t showing here/)).toBeTruthy(); expect(activeDriver().api.getActiveElement()).toBeUndefined();
   });
   it("blocks a dirty launch and refuses a route change when the discard confirmation is declined", async () => {
-    requests(true); const view = render(<Host dirty />); fireEvent.click(screen.getByRole("button", { name: "Take tour" })); await screen.findByText(/Save or discard/); expect(boundary.drivers).toHaveLength(0);
+    requests(true); const view = render(<Host dirty />); fireEvent.click(screen.getByRole("button", { name: "Take tour" })); await screen.findByText(/Save or discard your changes/); expect(boundary.drivers).toHaveLength(0);
     view.rerender(<Host dirty={false} />); await replay(); view.rerender(<Host dirty />); vi.spyOn(window, "confirm").mockReturnValue(false);
-    const steps = activeDriver().config.steps!; const routeIndex = steps.findIndex(step => step.popover?.title === "See what this world uses");
+    const steps = activeDriver().config.steps!; const routeIndex = steps.findIndex(step => step.popover?.title === "Explore your mods");
     for (let i = 1; i < routeIndex; i++) await next(); fireEvent.click(screen.getByRole("button", { name: "Next" })); await waitFor(() => expect(window.confirm).toHaveBeenCalled());
     expect(boundary.push).not.toHaveBeenCalledWith("/minecraft/mods"); expect((screen.getByRole("textbox", { name: "Draft" }) as HTMLInputElement).value).toBe("Unsaved fixture");
   });
@@ -148,20 +148,20 @@ describe("screen navigation and interaction containment", () => {
   });
   it("closes cleanly if current Minecraft membership is revoked", async () => {
     requests(); const view = render(<Host />); await launched(); boundary.games = gamesState({ access: ["zomboid"] }); view.rerender(<Host />);
-    await waitFor(() => expect(document.querySelector(".driver-popover")).toBeNull()); expect(screen.getByText(/screen or access changed/)).toBeTruthy();
+    await waitFor(() => expect(document.querySelector(".driver-popover")).toBeNull()); expect(screen.getByText(/^The page changed[.,].*Take tour to start again\.$/)).toBeTruthy();
   });
   it("closes a privileged step if its current capability is revoked", async () => {
-    requests(); const view = render(<Host />); await launched(); await next(); await next(); expect(screen.getByRole("dialog", { name: "Prepare another adventure" })).toBeTruthy();
+    requests(); const view = render(<Host />); await launched(); await next(); await next(); expect(screen.getByRole("dialog", { name: "Make a new world" })).toBeTruthy();
     boundary.games = gamesState({ can: NO_POWERS }); view.rerender(<Host />); await waitFor(() => expect(document.querySelector(".driver-popover")).toBeNull());
   });
   it("closes when a retained hidden modal becomes visible and never marks that dismissal complete", async () => {
     const modal = document.createElement("section"); modal.setAttribute("role", "dialog"); modal.hidden = true; document.body.append(modal);
-    try { const calls = requests(); render(<Host />); await launched(); modal.hidden = false; await waitFor(() => expect(document.querySelector(".driver-popover")).toBeNull()); expect(screen.getByText(/another dialog opened/)).toBeTruthy(); expect(calls.every(call => call.method === "GET")).toBe(true); }
+    try { const calls = requests(); render(<Host />); await launched(); modal.hidden = false; await waitFor(() => expect(document.querySelector(".driver-popover")).toBeNull()); expect(screen.getByText(/The tour closed when another window opened/)).toBeTruthy(); expect(calls.every(call => call.method === "GET")).toBe(true); }
     finally { modal.remove(); }
   });
   it("stops claiming a highlight when its accepted target is hidden", async () => {
     requests(); render(<Host />); await launched(); const target = document.querySelector<HTMLElement>('[data-minecraft-tour="profiles"]')!; target.hidden = true;
-    await waitFor(() => expect(activeDriver().api.getActiveElement()).toBeUndefined()); expect(screen.getByText(/heading is not available/)).toBeTruthy();
+    await waitFor(() => expect(activeDriver().api.getActiveElement()).toBeUndefined()); expect(screen.getByText(/We’ll start with your worlds/)).toBeTruthy();
   });
   it("waits for the destination route and heading even for the final immediate-fallback step", async () => {
     vi.useFakeTimers(); requests(true); await act(async () => render(<Host />)); await act(async () => fireEvent.click(screen.getByRole("button", { name: "Take tour" })));
@@ -169,7 +169,7 @@ describe("screen navigation and interaction containment", () => {
     expect(boundary.pathname).toBe("/minecraft/settings"); boundary.navigate = () => {};
     const staleTarget = document.createElement("section"); staleTarget.dataset.minecraftTour = "operation-strip"; document.body.append(staleTarget);
     try { await act(async () => fireEvent.click(screen.getByRole("button", { name: "Next" }))); expect(screen.getByText("Opening the next tour screen…")).toBeTruthy();
-      await act(async () => vi.advanceTimersByTimeAsync(8000)); expect(activeDriver().api.getActiveElement()).toBeUndefined(); expect(screen.getByText(/next screen could not be opened or verified/)).toBeTruthy(); }
+      await act(async () => vi.advanceTimersByTimeAsync(8000)); expect(activeDriver().api.getActiveElement()).toBeUndefined(); expect(screen.getByText(/We couldn’t open the next page/)).toBeTruthy(); }
     finally { staleTarget.remove(); }
   });
   it("disconnects target observers and removes matching document input guards on unmount", async () => {
@@ -184,47 +184,49 @@ describe("screen navigation and interaction containment", () => {
 describe("tour completion and user lifetime", () => {
   it("confirms explicit Skip with the exact own completion write and GET readback", async () => {
     const calls = requests(false, { get: count => json("alice", count > 1) }); render(<Host />); await launched(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" }));
-    await screen.findByText("Tour completion verified for your account."); expect(calls).toEqual([{ method: "GET", url: "/api/minecraft/tour", body: null, actor: "alice" }, { method: "POST", url: "/api/minecraft/tour", body: { version: 1, done: true }, actor: "alice" }, { method: "GET", url: "/api/minecraft/tour", body: null, actor: "alice" }]);
+    await screen.findByText("Tour saved. You can replay it with Take tour."); expect(calls).toEqual([{ method: "GET", url: "/api/minecraft/tour", body: null, actor: "alice" }, { method: "POST", url: "/api/minecraft/tour", body: { version: 1, done: true }, actor: "alice" }, { method: "GET", url: "/api/minecraft/tour", body: null, actor: "alice" }]);
   });
   it("confirms Finish only at the final step without feature API calls", async () => {
     const calls = requests(false, { get: count => json("alice", count > 1) }); render(<Host />); await launched(); const length = activeDriver().config.steps!.length;
-    for (let i = 1; i < length; i++) await next(); fireEvent.click(screen.getByRole("button", { name: "Finish tour" })); await screen.findByText("Tour completion verified for your account."); expect(calls.filter(call => call.method === "POST")).toHaveLength(1); expect(calls.every(call => call.url === "/api/minecraft/tour")).toBe(true);
+    for (let i = 1; i < length; i++) await next(); fireEvent.click(screen.getByRole("button", { name: "Finish tour" })); await screen.findByText("Tour saved. You can replay it with Take tour."); expect(calls.filter(call => call.method === "POST")).toHaveLength(1); expect(calls.every(call => call.url === "/api/minecraft/tour")).toBe(true);
   });
   it("reconciles an ambiguous POST through GET before allowing any retry", async () => {
     const calls = requests(false, { post: () => Promise.reject(new Error("network")), get: count => json("alice", count > 1) }); render(<Host />); await launched(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" }));
-    await screen.findByText("Tour completion verified for your account."); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+    await screen.findByText("Tour saved. You can replay it with Take tour."); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
-  it("keeps failed completion unconfirmed and checks GET first on Retry save/read", async () => {
+  it("keeps failed completion unconfirmed and checks GET first on Try again", async () => {
     let done = false; const calls = requests(false, { post: () => new Response("gateway", { status: 524 }), get: () => json("alice", done) }); render(<Host />); await launched(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" }));
-    await screen.findByRole("dialog", { name: "Tour completion is unconfirmed" }); expect(screen.queryByText("Tour completion verified for your account.")).toBeNull(); done = true;
-    fireEvent.click(screen.getByRole("button", { name: "Retry save/read" })); await screen.findByText("Tour completion verified for your account."); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+    await screen.findByRole("dialog", { name: "Couldn’t finish saving" }); expect(screen.queryByText("Tour saved. You can replay it with Take tour.")).toBeNull(); done = true;
+    expect(screen.getByText("Try again, or close for now and come back later.")).toBeTruthy(); expect(screen.getByRole("button", { name: "Close for now" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" })); await screen.findByText("Tour saved. You can replay it with Take tour."); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
   it("ignores an old user's delayed preference when identity changes", async () => {
     let resolve!: (r: Response) => void; const old = new Promise<Response>(ok => { resolve = ok; }); let gets = 0;
     requests(false, { get: () => ++gets === 1 ? old : json("bob", true) }); const view = render(<Host />); view.rerender(<Host userId="bob" />); await waitFor(() => expect(gets).toBe(2)); await act(async () => resolve(json("alice", false)));
-    expect(boundary.drivers).toHaveLength(0); expect(screen.queryByText(/Tour completion verified/)).toBeNull();
+    expect(boundary.drivers).toHaveLength(0); expect(screen.queryByText(/Tour saved/)).toBeNull();
   });
   it("does not claim completion for mismatched POST and GET identities", async () => {
     const calls = requests(false, { post: () => json("bob", true), get: count => count === 1 ? json() : json("bob", true) }); render(<Host />); await launched(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" }));
-    await screen.findByRole("dialog", { name: "Tour completion is unconfirmed" }); expect(screen.queryByText(/completion verified/)).toBeNull(); expect(calls.every(call => call.actor === "alice")).toBe(true);
+    await screen.findByRole("dialog", { name: "Couldn’t finish saving" }); expect(screen.queryByText(/Tour saved/)).toBeNull(); expect(calls.every(call => call.actor === "alice")).toBe(true);
   });
   it("keeps timed-out completion unconfirmed and dismisses its pending lifetime without a second POST", async () => {
     vi.useFakeTimers(); const calls = requests(false, { post: () => new Promise<Response>(() => {}) }); await act(async () => render(<Host />));
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Skip tour" }))); await act(async () => vi.advanceTimersByTimeAsync(15000));
-    expect(screen.getByRole("dialog", { name: "Tour completion is unconfirmed" })).toBeTruthy(); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close for now" }))); expect(screen.queryByText(/completion verified/)).toBeNull(); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Skip tour" }))); expect(screen.getByRole("dialog", { name: "Saving your tour" })).toBeTruthy(); expect(screen.getByText("One moment while we save your progress.")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(15000));
+    expect(screen.getByRole("dialog", { name: "Couldn’t finish saving" })).toBeTruthy(); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close for now" }))); expect(screen.queryByText(/Tour saved/)).toBeNull(); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
   it("drops old completion events and delayed responses after a new user session mounts", async () => {
     let resolve!: (r: Response) => void; const old = new Promise<Response>(ok => { resolve = ok; }); let gets = 0;
     const calls = requests(false, { post: () => old, get: () => ++gets === 1 ? json() : json("bob", true) }); const view = render(<Host />); await launched(); const oldConfig = activeDriver().config;
     fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await waitFor(() => expect(calls.some(call => call.method === "POST")).toBe(true)); view.rerender(<Host userId="bob" />);
     await act(async () => resolve(json("alice", true))); oldConfig.onDoneClick?.(undefined, {}, { config: oldConfig, state: {}, driver: activeDriver().api, index: 0 });
-    expect(screen.queryByText(/completion verified/)).toBeNull(); expect(calls.filter(call => call.method === "POST")).toHaveLength(1); expect(calls.filter(call => call.actor === "alice")).toHaveLength(2);
+    expect(screen.queryByText(/Tour saved/)).toBeNull(); expect(calls.filter(call => call.method === "POST")).toHaveLength(1); expect(calls.filter(call => call.actor === "alice")).toHaveLength(2);
   });
   it("keeps verified completion when a pre-save preference read settles late with false", async () => {
     let resolve!: (r: Response) => void; const early = new Promise<Response>(ok => { resolve = ok; }); const calls = requests(false, { get: count => count === 1 ? early : json("alice", true) });
-    render(<Host />); await replay(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await screen.findByText("Tour completion verified for your account.");
+    render(<Host />); await replay(); fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await screen.findByText("Tour saved. You can replay it with Take tour.");
     await act(async () => resolve(json("alice", false))); fireEvent.click(screen.getByRole("button", { name: "Take tour" })); await waitFor(() => expect(boundary.drivers).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await screen.findByText(/Tour complete/); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Skip tour" })); await screen.findByText(/You’re all set/); expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
 });

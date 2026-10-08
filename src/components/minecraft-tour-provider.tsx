@@ -83,12 +83,12 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
     const current = () => mounted.current && !controller.signal.aborted && request === saveGeneration.current;
     setSave("saving"); setSaveError(null); setMessage(null);
     try {
-      if (knownDone.current) { if (current()) { setSave("idle"); setMessage("Tour complete. Replay with Take tour any time."); } return; }
+      if (knownDone.current) { if (current()) { setSave("idle"); setMessage("You’re all set. Take tour is here whenever you need it."); } return; }
       if (reconcile) {
         const before = await requestMinecraftTourState(userId, "GET", controller.signal);
         if (!current()) return;
         setReadError(null); setProgress(before);
-        if (before.done) { knownDone.current = true; setProgress(before); setSave("idle"); setMessage("Tour completion verified for your account."); return; }
+        if (before.done) { knownDone.current = true; setProgress(before); setSave("idle"); setMessage("Tour saved. You can replay it with Take tour."); return; }
       }
       // A lost/malformed write may have committed. Read current state before any retry.
       try { const receipt = await requestMinecraftTourState(userId, "POST", controller.signal); if (!receipt.done) throw new Error("Completion receipt was not confirmed"); } catch { if (!current()) return; }
@@ -96,17 +96,17 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
       if (!current()) return;
       setReadError(null); setProgress(verified);
       if (!verified.done) throw new Error("Tour completion was not confirmed");
-      knownDone.current = true; setProgress(verified); setSave("idle"); setMessage("Tour completion verified for your account.");
-    } catch (error) { if (current()) { setSave("unconfirmed"); if (error instanceof MinecraftTourRequestError && [401, 409].includes(error.status)) setSaveError("Your signed-in account could not be matched to this page. Reload the page before retrying."); } }
+      knownDone.current = true; setProgress(verified); setSave("idle"); setMessage("Tour saved. You can replay it with Take tour.");
+    } catch (error) { if (current()) { setSave("unconfirmed"); if (error instanceof MinecraftTourRequestError && [401, 409].includes(error.status)) setSaveError("Your sign-in has changed. Refresh this page and try again."); } }
     finally { if (saveRequest.current === controller) saveRequest.current = null; }
   }, [closeTour, userId]);
   const launch = useCallback(async (automatic = false) => {
     if (!mounted.current) return;
     if (runRef.current || launchRequest.current || saveRequest.current) return;
     autoConsidered.current = true;
-    if (hasUnsavedSettings()) { if (!automatic) setMessage("Save or discard your settings changes before taking the tour."); return; }
-    if ([...document.querySelectorAll("[data-minecraft-tour-busy]")].some(visible)) { if (!automatic) setMessage("Finish or close the current screenshot pairing task before taking the tour."); return; }
-    if (accessRevoked.current) { if (!automatic) setMessage("Your Minecraft access could not be confirmed. Recheck the screen before taking the tour."); return; }
+    if (hasUnsavedSettings()) { if (!automatic) setMessage("Save or discard your changes before starting the tour."); return; }
+    if ([...document.querySelectorAll("[data-minecraft-tour-busy]")].some(visible)) { if (!automatic) setMessage("Finish or cancel your screenshot pairing before starting the tour."); return; }
+    if (accessRevoked.current) { if (!automatic) setMessage("Refresh this page before starting the tour."); return; }
     const controller = new AbortController(), id = ++generation.current; launchRequest.current = controller;
     const current = () => mounted.current && !controller.signal.aborted && id === generation.current;
     setBusy(true); setMessage(null);
@@ -118,12 +118,12 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
         if (automatic) { autoConsidered.current = false; return; }
         if (!hasModal() && !hasUnsavedSettings()) target = minecraftTourTarget(minecraftTourHeading(startPath));
       }
-      if (!target || hasModal() || hasUnsavedSettings() || automatic && earlyInteraction.current) { if (!automatic) setMessage("The screen is not ready for a tour. Close other dialogs and recheck the page, then try Take tour again."); return; }
+      if (!target || hasModal() || hasUnsavedSettings() || automatic && earlyInteraction.current) { if (!automatic) setMessage("Wait for the page to load and close any open dialog, then try Take tour again."); return; }
       const { driver } = await loadTourDriver(controller.signal);
       if (!current() || accessRevoked.current || hasModal() || hasUnsavedSettings() || automatic && earlyInteraction.current) return;
-      if (pathRef.current !== startPath || !target.isConnected || !visible(target)) { if (!automatic) setMessage("The screen changed while the tour loaded. Take tour again on the current page."); return; }
+      if (pathRef.current !== startPath || !target.isConnected || !visible(target)) { if (!automatic) setMessage("The page changed. Select Take tour to start again."); return; }
       const steps = minecraftTourSteps(startPath, capabilities.current);
-      if (!capabilitiesKnown.current) steps[0] = { ...steps[0], description: "Your management permissions could not be verified. This visit explains the read-only screens; replay Take tour after a successful permission recheck to see management controls. " + steps[0].description };
+      if (!capabilitiesKnown.current) steps[0] = { ...steps[0], description: "Some options aren’t ready yet. You can look around and try the tour again later. " + steps[0].description };
       const run = { id, index: 0, steps, controller, expectedPath: startPath, pending: false, target: null, inert: new Map(), focus: document.activeElement instanceof HTMLElement ? document.activeElement : null } as Run;
       const live = () => current() && runRef.current === run;
       const complete = () => { if (live() && !run.pending) void saveCompletion(); };
@@ -144,7 +144,7 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
       const move = async (position: number) => {
         if (!live() || run.pending || position < 0 || position >= steps.length) return;
         const item = steps[position];
-        if (item.capability && !capabilities.current[item.capability]) { closeTour("Your access changed. Replay Take tour to see the screens currently available to you."); return; }
+        if (item.capability && !capabilities.current[item.capability]) { closeTour("This page is no longer available. Use Take tour to start again."); return; }
         run.pending = true; setBusy(true);
         const until = Date.now() + MINECRAFT_TOUR_TARGET_MS;
         const popover = run.driver.getState("popover") as PopoverDOM | undefined;
@@ -161,9 +161,9 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
         const acknowledged = await waitMinecraftTourTarget(minecraftTourHeading(destination), controller.signal, () => pathRef.current === destination && !hasModal(), until - Date.now());
         let element = acknowledged && !missingDetail ? item.immediateFallback ? minecraftTourTarget(item.selector!) : await waitMinecraftTourTarget(item.selector!, controller.signal, () => pathRef.current === destination && !hasModal(), until - Date.now()) : null;
         if (!live()) return;
-        if (item.capability && !capabilities.current[item.capability]) { closeTour("Your access changed. The tour did not open a new privileged screen."); return; }
+        if (item.capability && !capabilities.current[item.capability]) { closeTour("This page is no longer available. Use Take tour to start again."); return; }
         if (pathRef.current !== destination) { element = null; run.expectedPath = pathRef.current; }
-        run.pending = false; setBusy(false); run.present(position, element, acknowledged ? undefined : "The next screen could not be opened or verified. You can continue the explanation, go back, or close the tour and recheck the page.");
+        run.pending = false; setBusy(false); run.present(position, element, acknowledged ? undefined : "We couldn’t open the next page. You can go back, continue the tour or try again later.");
       };
       run.driver = driver({ animate: !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches, smoothScroll: false,
         allowClose: true, allowScroll: true, overlayClickBehavior: "none", disableActiveInteraction: true, advanceOnClick: false,
@@ -174,7 +174,7 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
       runRef.current = run;
       const guardDOM = () => {
         if (!live()) return;
-        if (hasModal()) { closeTour("The tour paused because another dialog opened. Replay it when you are ready."); return; }
+        if (hasModal()) { closeTour("The tour closed when another window opened. Use Take tour when you’re ready."); return; }
         for (const child of document.body.children) {
           if (child.matches("script,style,link,.driver-popover,.driver-overlay,#driver-dummy-element")) continue;
           if (!run.inert.has(child)) run.inert.set(child, child.getAttribute("inert"));
@@ -184,7 +184,7 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
       };
       guardDOM(); run.mutation = new MutationObserver(guardDOM); run.mutation.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden", "role", "aria-modal", "data-open"] });
       setActive(true); run.present(0, target);
-    } catch { if (current()) { closeTour(); setMessage("The tour could not load. Recheck this page and try Take tour again."); } }
+    } catch { if (current()) { closeTour(); setMessage("The tour couldn’t load. Refresh the page and try again."); } }
     finally { if (launchRequest.current === controller) launchRequest.current = null; if (mounted.current && id === generation.current) setBusy(false); }
   }, [closeTour, router, saveCompletion]);
   useEffect(() => {
@@ -194,12 +194,12 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
     capabilities.current = { settings: confirmed && games.access.includes("minecraft") && games.can.settings, manageProfiles: confirmed && games.access.includes("minecraft") && games.can.settingsEdit === true, power: confirmed && games.access.includes("minecraft") && games.can.start };
     accessRevoked.current = confirmed && !games.access.includes("minecraft");
     const run = runRef.current, capability = run?.steps[run.index]?.capability;
-    if (run && (accessRevoked.current || capability && !capabilities.current[capability] || path !== run.expectedPath && !run.pending)) closeTour("Your screen or access changed. Replay Take tour when you are ready.");
+    if (run && (accessRevoked.current || capability && !capabilities.current[capability] || path !== run.expectedPath && !run.pending)) closeTour("The page changed, so we closed the tour. Use Take tour to start again.");
   }, [path, games.loading, games.pollError, games.access, games.can, closeTour]);
   useEffect(() => {
     mounted.current = true;
     const controller = new AbortController(); readRequest.current = controller;
-    void requestMinecraftTourState(userId, "GET", controller.signal).then(state => { if (!mounted.current || controller.signal.aborted) return; knownDone.current = state.done; setProgress(state); }).catch(() => { if (mounted.current && !controller.signal.aborted) setReadError("Your tour preference could not be read. Take tour is still available for this visit."); });
+    void requestMinecraftTourState(userId, "GET", controller.signal).then(state => { if (!mounted.current || controller.signal.aborted) return; knownDone.current = state.done; setProgress(state); }).catch(() => { if (mounted.current && !controller.signal.aborted) setReadError("Your tour progress couldn’t load. You can still use Take tour."); });
     const interacted = (event: Event) => { if (!(event.target instanceof Element) || !event.target.closest(".driver-popover")) earlyInteraction.current = true; };
     const preventAppInput = (event: Event) => {
       if (runRef.current && event instanceof KeyboardEvent && event.key === "Tab") {
@@ -237,8 +237,8 @@ function TourSession({ userId, children }: { userId: string; children: ReactNode
   }, [progress, readError, path, search, router, launch, games.loading, games.pollError]);
   return <Context.Provider value={{ launch: () => void launch(false), active, busy }}>{children}
     {(message || readError) && <p role="status" className="fixed bottom-4 left-1/2 z-40 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-xl border border-border bg-popover px-4 py-3 text-sm text-popover-foreground shadow-lg">{message || readError}</p>}
-    <Dialog open={save !== "idle"} onOpenChange={open => { if (!open) { saveGeneration.current++; saveRequest.current?.abort(); setSave("idle"); setMessage("Tour closed for now. Completion has not been confirmed."); } }}>
-      <DialogContent><DialogHeader><DialogTitle>{save === "saving" ? "Saving tour completion" : "Tour completion is unconfirmed"}</DialogTitle><DialogDescription>{save === "saving" ? "Checking the saved preference for your account…" : saveError || "The request may have reached the server. Read the current preference before retrying; no completion is being claimed."}</DialogDescription></DialogHeader><DialogFooter><Button disabled={save === "saving"} onClick={() => void saveCompletion(true)}>Retry save/read</Button><Button variant="outline" onClick={() => { saveGeneration.current++; saveRequest.current?.abort(); setSave("idle"); setMessage("Tour closed for now. Completion has not been confirmed."); }}>Close for now</Button></DialogFooter></DialogContent>
+    <Dialog open={save !== "idle"} onOpenChange={open => { if (!open) { saveGeneration.current++; saveRequest.current?.abort(); setSave("idle"); setMessage("Closed for now. You can return with Take tour."); } }}>
+      <DialogContent><DialogHeader><DialogTitle>{save === "saving" ? "Saving your tour" : "Couldn’t finish saving"}</DialogTitle><DialogDescription>{save === "saving" ? "One moment while we save your progress." : saveError || "Try again, or close for now and come back later."}</DialogDescription></DialogHeader><DialogFooter><Button disabled={save === "saving"} onClick={() => void saveCompletion(true)}>Try again</Button><Button variant="outline" onClick={() => { saveGeneration.current++; saveRequest.current?.abort(); setSave("idle"); setMessage("Closed for now. You can return with Take tour."); }}>Close for now</Button></DialogFooter></DialogContent>
     </Dialog>
   </Context.Provider>;
 }

@@ -162,3 +162,5 @@ Update these groups after each verified change; do not append closed stories her
 ## UI conventions
 
 Use existing shared components and `cn()`. Identity comes from `GAMES` and `GameMark`; colors use `--tint` and Catppuccin tokens. Keep operational copy plain and direct. Photos remain in MC/7DTD footers; PZ/shared pages have none. The deliberate Miku corner reveal and Roadhog drawer remain UI elements. Prefer shared behavior over per-game copies and verify responsive/error/permission states when changing controls.
+
+Tour copy should be short, direct and practical: explain features and button names, without role-level commentary or internal proof/verification language.

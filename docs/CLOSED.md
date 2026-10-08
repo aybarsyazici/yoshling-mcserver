@@ -1018,3 +1018,32 @@ and states: Minecraft created/stopped, 7DTD exited, PZ running. `.env` remained
 The generated profile overview remained ready with matching revision/PNG hash
 `76535651d004ad26a714dfbadee6e5ca6176d165fc6cc4fded0c7ab6bb3f480a`.
 Main memory remains bounded at 164 lines / 2,195 words / 17,003 bytes.
+
+## 2026-10-08 — Plain-language Minecraft tour copy
+
+Rewrote all twelve spotlight explanations and their unavailable-section text at
+the user's request. Descriptions now explain the feature and relevant controls
+in short, direct language. Removed role-level commentary and internal proof,
+verification and status-report wording from the tour. Loading, recovery, saved
+and retry messages use the same plain style. Routes, permission gates, account
+pins, completion persistence and interaction guards remain unchanged.
+
+Baseline and final Node 22 checks passed. Final: **191 files / 3,290 tests**, types,
+normal build/artifact guard; lint **0 errors / 7 existing warnings**. Five new
+rendered-copy cases cover both capability sets, all unavailable fallbacks, real
+control names, plain text and <=200-character descriptions (actual max 162).
+Reinserting the previous installed-mod description made both copy checks fail on
+jargon; exact restored source passed. Existing tour behavior checks were retained.
+
+Browser control became available for this task. The authenticated Firefox page
+showed the old tour and its verbose welcome text; its replay was closed with
+Escape without changing a saved preference. Post-deploy browser observations
+are recorded below after the changed copy is loaded.
+
+Preserved the previous running web rootfs at
+`/root/yoshling-deploy-backup/tour-copy-20261008/web-rootfs.tar`, mode 0600,
+SHA256 `f9564d39f8b13575760549943021c47819ae8dc4d89966d03a64da38721e4d69`.
+Rollback tag `yoshling-web:rollback-9406ace-before-tour-copy-20261008`, image
+`sha256:bcfa9e4bed62539ef95b8594ca15a4e6a553967d6696b971b811f728b2cac102`.
+Server/BUILD_ID hashes matched and artifact guard passed. This is a preserved
+rollback artifact, not a rollback exercise. No schema changes were needed.
