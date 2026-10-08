@@ -11,6 +11,9 @@ import { gameRuleReplacing } from "@/lib/mc-properties";
 import { fileRevision, revisionHeaders } from "@/lib/file-revision-client";
 import type { MinecraftProfileDetailDTO, MinecraftProfileWorldSettingsDTO } from "@/lib/minecraft-profile-types";
 import { MinecraftProfilePicker } from "@/components/minecraft-profile-picker";
+import { MinecraftProfileCapture } from "@/components/minecraft-profile-capture";
+import { sameCaptureMetadata } from "@/lib/minecraft-capture-client";
+import type { MinecraftProfileDTO } from "@/lib/minecraft-profile-types";
 import { GAMES } from "@/lib/games";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +30,8 @@ function DetailSession({ id }: { id: string }) {
   const settingsGeneration = useRef(0); const [settingsLoading, setSettingsLoading] = useState(true);
   const [cover, setCover] = useState<File | null>(null); const [notice, setNotice] = useState<string | null>(null); const generation = useRef(0);
   const [deleting, setDeleting] = useState(false); const [deleteName, setDeleteName] = useState(""); const [deleted, setDeleted] = useState(false);
+  const captureSnapshot = useRef<{ data: MinecraftProfileDetailDTO | null; saving: boolean }>({ data: null, saving: false });
+  useEffect(() => { captureSnapshot.current = { data, saving }; }, [data, saving]);
   const endpoint = `/api/minecraft/profiles/${encodeURIComponent(id)}`;
   const dirtyMetadata = !!data && (name !== data.profile.name || description !== data.profile.description);
   const dirtySettings = !!settings && Object.entries(draft).some(([key, value]) => value !== settings.properties[key]);
@@ -42,10 +47,28 @@ function DetailSession({ id }: { id: string }) {
     const parsed = parseMinecraftProfileDetail(raw, id); if (!parsed || !parsed.capabilities.read) throw new Error("The profile response is incomplete or cannot be read by this account.");
     return parsed;
   }, [endpoint, id]);
+  const acceptCapture = useCallback(async (captured: MinecraftProfileDTO, baseline: MinecraftProfileDTO) => {
+    const request = generation.current;
+    try {
+    const current = await readDetail();
+    if (request !== generation.current) throw new Error("The profile changed while checking the capture. Reload it before another edit.");
+    const latest = captureSnapshot.current;
+    if (!latest.data || latest.saving || latest.data.profile.revision !== baseline.revision || !sameCaptureMetadata(latest.data.profile, baseline) || !sameCaptureMetadata(captured, baseline) || !sameCaptureMetadata(current.profile, captured) || current.profile.revision !== captured.revision || captured.revision !== baseline.revision + 1 || current.profile.coverUrl !== captured.coverUrl || !captured.coverUrl) {
+      const message = "The profile or cover changed while checking the screenshot. Your drafts are preserved; reload before another edit.";
+      setError(message); throw new Error(message);
+    }
+    setData(current);
+    setNotice("Screenshot cover read back and saved. Unsaved profile details, world settings and selected uploads are preserved.");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "The screenshot cover readback is unconfirmed. Your drafts are preserved; reload before another edit.";
+      if (request === generation.current) setError(message);
+      throw new Error(message);
+    }
+  }, [readDetail]);
   const load = useCallback(async () => {
     const request = ++generation.current; setLoading(true);
-    try { const parsed = await readDetail(); if (request !== generation.current) return; setData(parsed); setName(parsed.profile.name); setDescription(parsed.profile.description); setError(null); setCover(null); }
-    catch (e) { if (request === generation.current) setError(e instanceof Error ? e.message : "The profile could not be read."); }
+    try { const parsed = await readDetail(); if (request !== generation.current) return false; setData(parsed); setName(parsed.profile.name); setDescription(parsed.profile.description); setError(null); setCover(null); return true; }
+    catch (e) { if (request === generation.current) setError(e instanceof Error ? e.message : "The profile could not be read."); return false; }
     finally { if (request === generation.current) setLoading(false); }
   }, [readDetail]);
   const loadSettings = useCallback(async () => {
@@ -61,7 +84,7 @@ function DetailSession({ id }: { id: string }) {
   useEffect(() => { let current = true; void Promise.resolve().then(() => { if (current) return load(); }); return () => { current = false; invalidate(); }; }, [load, invalidate]);
   const loadedProfileId = data?.profile.id;
   useEffect(() => { if (loadedProfileId) void Promise.resolve().then(loadSettings); }, [loadedProfileId, loadSettings]);
-  async function reload() { if ((dirtyMetadata || dirtySettings || cover) && !window.confirm("Reload this profile and discard your unsaved changes?")) return; setNotice(null); await load(); await loadSettings(); }
+  async function reload(): Promise<boolean> { if ((dirtyMetadata || dirtySettings || cover) && !window.confirm("Reload this profile and discard your unsaved changes?")) return false; setNotice(null); const accepted = await load(); if (accepted) await loadSettings(); return accepted; }
   async function saveMetadata() {
     if (!canEdit || !data || !dirtyMetadata || !name.trim()) return; setSaving(true); setNotice(null);
     try {
@@ -121,7 +144,7 @@ function DetailSession({ id }: { id: string }) {
     {data && <>
       <header className="space-y-2"><h1 className="font-display text-3xl font-bold">{data.profile.name}</h1><p>{data.profile.target.mcVersion} · {data.profile.target.loader}{data.profile.target.loaderVersion ? ` ${data.profile.target.loaderVersion}` : ""} · {data.profile.target.javaVariant} · Created from {profileSourceLabel(data.profile)}</p><p className="text-sm text-muted-foreground">{data.profile.status === "preparing" ? "Preparation incomplete; check the operation strip" : data.profile.status} · Last played: {profileLastPlayed(data.profile)}</p><p className="text-sm">{active ? "This profile is selected or applied. Use its current Mods, Settings and Backups pages for game changes." : "This is an inactive profile. Editing it leaves the current Minecraft world untouched."}</p><Button disabled={data.runtime.verified && data.runtime.appliedProfileId === id && ["running", "starting"].includes(data.runtime.state) || loading || !!error || data.profile.status !== "ready" || !data.capabilities.start || games.loading || !!games.pollError || !games.can.start} onClick={() => setPlay(true)}>{data.runtime.verified && data.runtime.appliedProfileId === id && ["running", "starting"].includes(data.runtime.state) ? "Already running" : "Choose this profile to play"}</Button></header>
       <section className="space-y-3 rounded-2xl bg-card/70 p-5"><h2 className="font-display text-lg font-semibold">Profile details</h2><Label htmlFor={`${labels}-name`}>Name</Label><Input id={`${labels}-name`} disabled={!canEdit} value={name} maxLength={80} onChange={e => setName(e.target.value)} /><Label htmlFor={`${labels}-description`}>Description</Label><Input id={`${labels}-description`} disabled={!canEdit} value={description} maxLength={1000} onChange={e => setDescription(e.target.value)} /><Button disabled={!canEdit || !dirtyMetadata || !name.trim()} onClick={() => void saveMetadata()}>Save profile details</Button></section>
-      <section className="space-y-3 rounded-2xl bg-card/70 p-5"><h2 className="font-display text-lg font-semibold">World screenshot</h2>{data.profile.coverUrl ? <div className="relative aspect-video overflow-hidden rounded-xl"><Image src={data.profile.coverUrl} alt={`Cover for ${data.profile.name}`} fill className="object-cover" sizes="100vw" unoptimized /></div> : <p className="text-sm text-muted-foreground">No screenshot yet. Upload a screenshot you took in this world.</p>}<Label htmlFor={`${labels}-cover`}>JPEG, PNG or WebP cover</Label><Input id={`${labels}-cover`} type="file" accept="image/jpeg,image/png,image/webp" disabled={!canEdit} onChange={e => { const file = e.target.files?.[0]; if (file && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setNotice("Choose a JPEG, PNG or WebP image."); setCover(null); } else setCover(file ?? null); }} /><div className="flex flex-wrap gap-2"><Button disabled={!canEdit || !cover} onClick={() => void saveCover()}>Upload cover</Button>{data.profile.coverUrl && <Button variant="outline" disabled={!canEdit} onClick={() => void saveCover(true)}>Remove cover</Button>}</div></section>
+      <section className="space-y-3 rounded-2xl bg-card/70 p-5"><h2 className="font-display text-lg font-semibold">World screenshot</h2>{data.profile.coverUrl ? <div className="relative aspect-video overflow-hidden rounded-xl"><Image src={data.profile.coverUrl} alt={`Cover for ${data.profile.name}`} fill className="object-cover" sizes="100vw" unoptimized /></div> : <p className="text-sm text-muted-foreground">No screenshot yet. Upload a screenshot you took in this world.</p>}<Label htmlFor={`${labels}-cover`}>JPEG, PNG or WebP cover</Label><Input id={`${labels}-cover`} type="file" accept="image/jpeg,image/png,image/webp" disabled={!canEdit} onChange={e => { const file = e.target.files?.[0]; if (file && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setNotice("Choose a JPEG, PNG or WebP image."); setCover(null); } else setCover(file ?? null); }} /><div className="flex flex-wrap gap-2"><Button disabled={!canEdit || !cover} onClick={() => void saveCover()}>Upload cover</Button>{data.profile.coverUrl && <Button variant="outline" disabled={!canEdit} onClick={() => void saveCover(true)}>Remove cover</Button>}</div><MinecraftProfileCapture profile={data.profile} runtime={data.runtime} canEdit={canEdit} onCaptured={acceptCapture} onRecheck={reload} /></section>
       <section className="space-y-3 rounded-2xl bg-card/70 p-5"><h2 className="font-display text-lg font-semibold">World settings</h2>{active && <p className="text-sm"><Link className="underline" href="/minecraft/settings">Open the applied profile&apos;s settings</Link>. Inactive editing is unavailable for the selected or applied profile.</p>}{settingsError && <div role="alert"><p>{settingsError}</p><Button variant="outline" disabled={saving || settingsLoading} onClick={() => { if (!dirtySettings || window.confirm("Reload world settings and discard the draft?")) void loadSettings(); }}>Reload world settings</Button></div>}{settings && <><div className="grid gap-4 sm:grid-cols-2">{[...new Set([...Object.keys(settings.properties), ...settings.editableKeys])].filter(key => !settings.lockedKeys.includes(key)).map(key => { const value = settings.properties[key]; const creationLocked = settings.worldGenerated && settings.creationOnlyKeys.includes(key); const inert = gameRuleReplacing(key, data.profile.target.mcVersion); const editable = canEditWorld && settings.editableKeys.includes(key) && !settings.lockedKeys.includes(key) && !creationLocked && !inert; return <div key={key} className="space-y-1"><Label htmlFor={`${labels}-${key}`}>{key}</Label><Input id={`${labels}-${key}`} value={draft[key] ?? value ?? ""} placeholder={value === undefined ? "Not set; game default" : undefined} disabled={!editable} onChange={e => { if (editable) setDraft(prev => ({ ...prev, [key]: e.target.value })); }} />{inert && <p className="text-xs text-muted-foreground">This Minecraft version uses the {inert} game rule instead. Edit it after this profile starts.</p>}{creationLocked && <p className="text-xs text-muted-foreground">Used only when creating a new world; this world already exists.</p>}</div>; })}</div><Button disabled={!canEditWorld || !dirtySettings} onClick={() => void saveWorld()}>Save world settings</Button></>}</section>
       <p className="text-sm text-muted-foreground">The prepared Minecraft version, loader and mod source belong to this profile. Create another profile for a different target. Shared host resources and server access remain global.</p>
       {active && <nav className="flex flex-wrap gap-4 text-sm"><Link className="underline" href="/minecraft/mods">Applied profile mods</Link><Link className="underline" href="/minecraft/settings">Applied profile settings</Link><Link className="underline" href="/minecraft/backups">Applied profile backups</Link></nav>}

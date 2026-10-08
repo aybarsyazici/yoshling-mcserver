@@ -713,3 +713,43 @@ docs no longer describe adoption as pending. No agent lifecycle action was taken
   stayed visible. Picker named the running PZ peer and kept Start disabled without
   disconnection consent. No form submission or start occurred. These are basic
   browser observations, not complete accessibility, OAuth, gameplay or capture QA.
+
+## Player-camera screenshot companion and publication — 2026-10-08
+
+The owner chose real player-camera capture. A client-only Fabric companion and
+dashboard pairing/publication flow were implemented without changing game worlds,
+containers, server mods or the database schema.
+
+- Companion 0.1.0: Minecraft 26.1.2, Fabric Loader 0.19.5+, Java 25, no Fabric API.
+  Pairing commands are intercepted before chat history/network; codes remain in
+  memory. One image is requested after world/pairing readiness, with bounded PNG
+  encoding, one-frame HUD suppression/restoration, current-session guards and
+  bounded/cancellable HTTPS exchanges. SDK bytecode inspection corrected the hook
+  to the actual `renderFrame` extraction/render owner before publication.
+- Private, durable web-volume grants contain only a secret hash, expire in fifteen
+  minutes and authorize one profile/image. New grants invalidate older live grants.
+  Current account/grants/invitation policy, target, runtime identity and numeric
+  profile revision are checked again before publication. Raw body/decoder ingress
+  is globally bounded independently of the short Minecraft file-write lease.
+- Publication stores intent before writes and verifies image bytes, cover key and
+  canonical revision. Lost acknowledgments can return the verified original receipt;
+  different images, newer manual covers, changed contexts and unresolved publication
+  intents refuse overwrite. Only an owned live worker can report Uploading; an
+  orphan intent remains unverified. Parent draft/reload and clipboard outcomes stay
+  explicit, including named refusals and declined discard confirmations.
+- Local project checks: 176 files / 3,054 tests, full types before/after the normal
+  production build/artifact check and lint passed (zero
+  errors, seven existing warnings). Seventy new dashboard cases include 36 actual
+  SQLite/filesystem backend cases and 34 UI/parser cases. Ninety distinct capture
+  guard mutants failed and were restored: 24 backend, 22 UI/parser, 44 compiled
+  companion guards. Client guards also passed 92 offline assertions without graphics,
+  network or a running game. Two clean offline builds produced identical jars.
+- Public artifact `yoshling-screenshots-0.1.0+mc26.1.2.jar`: 37,189 bytes, SHA256
+  `78027c8b13086cb8717a5d28fa74458b0efbefa92cfc6ffca5ac36784860c133`.
+  Its manifest matches readback. Client-only entrypoints/Java 25 bytecode and absence
+  of bundled Minecraft classes, Fabric API, guard tests, env/database/key files were
+  checked. Source/build provenance is in `clients/minecraft-screenshots/PROVENANCE.md`.
+- No real client, framebuffer/HUD trial, game join, live pairing or screenshot upload
+  was exercised. Storage checks cannot attest to an authorized client's image scene.
+  Other client versions/loaders require separate supported builds. Installation and
+  current contracts are in `MINECRAFT-SCREENSHOTS.md`.

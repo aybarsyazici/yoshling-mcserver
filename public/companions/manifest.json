@@ -1,0 +1,11 @@
+{
+  "version": "0.1.0",
+  "minecraftVersions": [
+    "26.1.2"
+  ],
+  "loader": "fabric",
+  "fileName": "yoshling-screenshots-0.1.0+mc26.1.2.jar",
+  "downloadUrl": "/companions/yoshling-screenshots-0.1.0+mc26.1.2.jar",
+  "sha256": "78027c8b13086cb8717a5d28fa74458b0efbefa92cfc6ffca5ac36784860c133",
+  "bytes": 37189
+}

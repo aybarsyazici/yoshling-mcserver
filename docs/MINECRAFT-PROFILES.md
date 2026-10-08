@@ -36,10 +36,11 @@ never represent actual world contents. Background profile refreshes retain a
 validated snapshot; failed reads and real permission/runtime changes still block
 actions. Preparation and player-disconnection confirmations remain separate.
 
-Covers currently come from authenticated manual screenshot uploads. The owner
-chose actual player-camera captures for the next enhancement: a client companion
-for Fabric 26.1.2 with explicit, short-lived profile pairing. Client capture is not
-deployed yet; the server has no camera or renderer.
+Covers use authenticated manual uploads or opt-in player-camera capture through
+the Fabric 26.1.2 client companion. Short-lived pairing authorizes one image for
+one applied profile, with exact revision/context checks and explicit replacement
+consent. See [MINECRAFT-SCREENSHOTS.md](MINECRAFT-SCREENSHOTS.md) for installation,
+limits and verification. The server has no camera or renderer.
 
 ### Storage and identity
 

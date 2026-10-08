@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "xyz.yoshling.screenshots.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["ChatScreenMixin", "ClientPacketListenerMixin", "MinecraftMixin", "NativeImageInvoker"],
+  "injectors": { "defaultRequire": 1 }
+}

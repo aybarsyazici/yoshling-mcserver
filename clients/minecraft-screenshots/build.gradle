@@ -1,0 +1,45 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.3'
+}
+
+group = 'xyz.yoshling'
+version = '0.1.0+mc26.1.2'
+
+loom {
+    splitEnvironmentSourceSets()
+    mods {
+        'yoshling_screenshots' {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.client
+        }
+    }
+}
+
+dependencies {
+    minecraft 'com.mojang:minecraft:26.1.2'
+    implementation 'net.fabricmc:fabric-loader:0.19.5'
+    compileOnly 'io.github.llamalad7:mixinextras-common:0.5.5'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+sourceSets {
+    guardTest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.client.runtimeClasspath
+    }
+}
+tasks.register('verifyGuards', JavaExec) {
+    dependsOn guardTestClasses, clientClasses
+    classpath = sourceSets.guardTest.runtimeClasspath
+    mainClass = 'xyz.yoshling.screenshots.CaptureGuardTests'
+}
+check.dependsOn verifyGuards

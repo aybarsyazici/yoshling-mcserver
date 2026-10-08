@@ -14,6 +14,7 @@ Update documentation with each meaningful change. State what was verified locall
 | Discord identity, invitations, revocation and legacy preparation | [AUTHENTICATION.md](docs/AUTHENTICATION.md) |
 | Minecraft mods, packs, identity, bans and rules | [MINECRAFT.md](docs/MINECRAFT.md) |
 | Minecraft profile implementation and migration | [MINECRAFT-PROFILES.md](docs/MINECRAFT-PROFILES.md) |
+| Player screenshot pairing and client companion | [MINECRAFT-SCREENSHOTS.md](docs/MINECRAFT-SCREENSHOTS.md) |
 | Any Project Zomboid change | [PROJECT-ZOMBOID.md](docs/PROJECT-ZOMBOID.md); mod incidents also [PZ-MOD-BACKLOG.md](docs/PZ-MOD-BACKLOG.md) |
 | 7DTD telnet, XML, worlds, reset and updates | [7-DAYS-TO-DIE.md](docs/7-DAYS-TO-DIE.md) |
 | Host setup and migration | [MIGRATION.md](MIGRATION.md) |
@@ -149,6 +150,7 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 - Remaining dependency advisories need applicability/exposure review. Feature limits include idempotent saved-set re-imports, draft review for Minecraft's custom settings cards, and owner-only checkpoint/drift recovery.
 - Minecraft profile contracts and remaining rollout work are in `MINECRAFT-PROFILES.md`. Different targets use separate profiles; profile version/loader editing is unavailable after preparation.
+- Player-camera capture uses an opt-in Fabric 26.1.2 client companion; additional client targets and a real graphical capture trial remain open. Read `MINECRAFT-SCREENSHOTS.md` before changing pairing/publication.
 - Verification gaps: genuine Discord login/denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
 - Infrastructure/manual work: reproduce the host firewall unit, assess retained secret-bearing images/cache, verify old-host decommissioning, and owner-managed credential rotation.
 

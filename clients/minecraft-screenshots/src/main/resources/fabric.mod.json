@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "yoshling_screenshots",
+  "version": "0.1.0",
+  "name": "Yoshling Screenshots",
+  "description": "One explicitly paired player-view screenshot for a Yoshling Minecraft profile.",
+  "environment": "client",
+  "entrypoints": { "client": ["xyz.yoshling.screenshots.YoshlingScreenshotsClient"] },
+  "mixins": ["yoshling_screenshots.client.mixins.json"],
+  "depends": { "fabricloader": ">=0.19.5", "minecraft": "26.1.2", "java": ">=25" }
+}

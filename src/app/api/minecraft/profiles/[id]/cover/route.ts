@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import sharp from "sharp";
+import { normalizeMinecraftProfileCover } from "@/lib/minecraft-profile-cover";
 import { getMinecraftProfile, updateProfileRecord, MinecraftProfileError } from "@/lib/minecraft-profile-store";
 import { minecraftCoverPath, minecraftProfileCoverRoot } from "@/lib/minecraft-profile-path";
 import { boundedProfileBody, minecraftProfileDTO, minecraftProfileGate, minecraftProfileResponse, profileIdentifier, profileJSON, profileRevision, rejectProfileKeys } from "@/lib/minecraft-profile-http";
@@ -52,15 +52,7 @@ export async function POST(request: Request, context: Context) {
     const file = form.get("cover");
     if (!(file instanceof File) || file.size === 0 || file.size > MAX_IMAGE) throw new MinecraftProfileError("Choose an image smaller than 5 MiB", 413, "invalid_cover");
     const input = Buffer.from(await file.arrayBuffer());
-    const magic = input.subarray(0, 12);
-    if (!(magic.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || (magic[0] === 255 && magic[1] === 216 && magic[2] === 255) || (magic.subarray(0, 4).toString() === "RIFF" && magic.subarray(8, 12).toString() === "WEBP"))) throw new MinecraftProfileError("Choose a PNG, JPEG or WebP image", 400, "invalid_cover");
-    let output: Buffer;
-    try {
-      const image = sharp(input, { limitInputPixels: 16_000_000, animated: false });
-      const metadata = await image.metadata();
-      if (!["png", "jpeg", "webp"].includes(metadata.format || "") || !metadata.width || !metadata.height) throw new Error("Invalid image");
-      output = await image.rotate().resize({ width: 1600, height: 1000, fit: "inside", withoutEnlargement: true }).png().toBuffer();
-    } catch { throw new MinecraftProfileError("The image could not be decoded safely", 400, "invalid_cover"); }
+    const output = await normalizeMinecraftProfileCover(input);
     assertFileWriteActive();
     await mkdir(minecraftProfileCoverRoot(), { recursive: true, mode: 0o700 });
     const key = `${randomUUID()}.png`;

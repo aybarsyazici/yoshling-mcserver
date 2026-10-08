@@ -33,6 +33,12 @@ Explicit recovery rechecks keep an unconfirmed action blocked until profile,
 status and validated operation reads each report acceptance. Failed or superseded
 reads cannot clear that block; timer polls do not overlap the current ledger read.
 
+Client screenshot pairing preserves profile drafts and accepts completion only
+after canonical cover readback. Unknown/stale pairing reads offer a guarded
+explicit profile recheck; declined discard or failed reads keep the action blocked.
+The companion supports Fabric clients on Minecraft 26.1.2; see
+[MINECRAFT-SCREENSHOTS.md](MINECRAFT-SCREENSHOTS.md).
+
 PZ quick/maps/mods/updates validate their response shapes and distinguish initial failure
 from stale prior data. Mod drafts/cancel/save retain actual enabled/disabled variant tokens;
 an unchanged save cannot enable disabled variants or erase unrelated loaded tokens.
