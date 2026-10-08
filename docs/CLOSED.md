@@ -682,3 +682,34 @@ docs no longer describe adoption as pending. No agent lifecycle action was taken
   its native window became unavailable. Component/source checks do not establish
   new-layout browser/mobile focus, a real game join, or a client screenshot capture.
   Production rollout evidence is recorded after the guarded deployment.
+
+### UI release deployment and browser observations
+
+- Commit `a78d3774e53a4d9cb008b9ae9d6b93c8068d2691` was pushed to `origin/main`
+  and deployed with `scripts/deploy.sh --service web --verify 'Name your next adventure'`.
+  The literal was found in the running compiled image. Built and running image IDs
+  both equal `sha256:31592607a389b95f6cb1c9a2c57a105d36e65830f0e89f0df3c7f7dffecfc99d`;
+  web started `2026-10-08T10:23:12.08022014Z`, restart count zero.
+- All three game container IDs, images, start times, restart counts and run states
+  matched the pre-deploy snapshot. PZ remained running; Minecraft remained created/
+  stopped and 7DTD stopped. `.env` retained SHA256
+  `495f33b0e80249bedb755f1216e4322401f713a1967110ba38b234aad4845ca7`,
+  size 1,380 bytes and mode 0600. No schema migration or game power action occurred.
+- The old running web image metadata was unavailable again. Its root filesystem
+  was exported with mounted data excluded and imported with neutral public runtime
+  defaults. Rollback tag `yoshling-web:rollback-574a2f1-ui-20261008`, image
+  `sha256:1185095c1cd5c9393a54d0fe27005813c214dfa297bd7bc7974983b218bd0c18`,
+  passed the assembled artifact guard; server.js and BUILD_ID hashes matched the
+  running original. Private archive:
+  `/root/yoshling-deploy-backup/ui-stability-20261008/web-rootfs.tar`.
+  This predecessor is profile-aware; the older pre-profile rollback is unsuitable
+  after adoption.
+- Public `/login` returned 200 HTML; origin login/session returned 200 and anonymous
+  profile/status routes returned 401 JSON. Native Firefox reconnected afterward and
+  showed the authenticated gallery and new create/picker layouts. An unsaved named
+  draft and exact version remained available across polls and repeated source
+  selection. Source keyboard navigation and Escape/focus return worked. At a
+  375×812 viewport, the create form scrolled to seed/runtime fields while its actions
+  stayed visible. Picker named the running PZ peer and kept Start disabled without
+  disconnection consent. No form submission or start occurred. These are basic
+  browser observations, not complete accessibility, OAuth, gameplay or capture QA.

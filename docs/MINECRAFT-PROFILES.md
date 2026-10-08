@@ -136,9 +136,10 @@ by an ambiguous legacy install. Adoption keeps original data at the volume root,
 copies and verifies the complete server, transfers legacy inventory without changing
 its history, selects the stopped profile and leaves Minecraft stopped. Start and
 verify a real game join separately. A read-only production check confirms completed
-legacy adoption; real game joins, controlled restores and authenticated browser
-verification remain unexercised by the agent. No browser verification
-surface was available during deployment; anonymous route checks do not prove sign-in.
+legacy adoption. Authenticated Firefox gallery/create/picker views were reviewed
+on desktop and at a 375×812 viewport without submitting or starting a game. Real
+game joins, controlled restores, genuine OAuth transitions and complete browser
+accessibility coverage remain unexercised by the agent.
 
 ### Remaining delivery work
 
