@@ -877,3 +877,38 @@ No schema migration, game boot, join, restore or player-camera trial occurred.
 The local public-domain DNS/TLS filter still limits public-browser verification;
 private file/artifact and origin checks are not a complete authenticated browser
 flow. `CLAUDE.md` remains bounded at 163 lines / 2,182 words / 16,874 bytes.
+
+## 2026-10-08 — Minecraft website walkthrough
+
+Added `/minecraft/guide`, discoverable through the Minecraft sidebar and a
+Profiles welcome card. Eight practical chapters cover navigation, profiles,
+starting/switching/joining, mods, backups, settings/player access, covers and
+server tools/recovery. The tutorial uses real button names, local screen links,
+member/manager distinctions and current generated-cover/companion limits. It
+performs no game action and uses ordinary links with the existing draft guard.
+
+Reading progress is a bounded versioned browser preference per signed-in user;
+chapter jumps do not mark lessons read, explicit continuation does, and reset
+asks first. Storage failures preserve an in-memory guide. A saved-progress claim
+requires exact write/readback; old-account progress is not carried into another
+user's guide. Settings links require confirmed capabilities. Small-screen layout,
+keyboard heading focus, reduced-motion classes and high-contrast foreground
+text/focus indicators are implemented; full browser coverage remains separate.
+
+Restored Node 22 checks: **186 files / 3,247 tests passed**, types passed, normal
+build/artifact verification passed, lint **0 errors / 7 existing warnings**.
+The new scope has **34 helper + 18 DOM cases**, and all **23 guard mutants** failed
+assertions and were restored. Tests cover hydration, account isolation,
+read-versus-navigation, save/readback, storage failures, reset confirmation,
+all-chapter completion, settings capability loss, route gates and entry points.
+Component fixtures do not establish a genuine login, full accessibility audit or
+any Minecraft join. Current instructions live in `MINECRAFT-GUIDE.md`.
+
+Before rollout the current running web image again lacked Docker image metadata.
+Preserved its rootfs as
+`/root/yoshling-deploy-backup/before-guide-20261008/web-rootfs.tar`, mode 0600,
+SHA256 `edeac8c7be5a3c3b5447ad80c8be74cfd57a6118c4c793cd35d5f00e0b413270`.
+Imported as `yoshling-web:rollback-364b85c-before-guide-20261008`, image
+`sha256:b5bef333f2c4ba2ad3883a7d424a04c02227494582c4b22829a3216368001a49`.
+The imported server/BUILD_ID hashes matched and artifact guard passed. This is a
+rollback artifact, not a restore exercise. No game or schema changes were needed.

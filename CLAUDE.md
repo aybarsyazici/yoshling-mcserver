@@ -9,6 +9,7 @@ Update documentation with each meaningful change. State what was verified locall
 | Work | Read |
 | --- | --- |
 | Long operations, status, toasts, background work | [OPERATIONS.md](docs/OPERATIONS.md) |
+| Minecraft user tutorial | [MINECRAFT-GUIDE.md](docs/MINECRAFT-GUIDE.md) |
 | Frontend readiness, permissions, stale data and result handling | [FRONTEND.md](docs/FRONTEND.md) |
 | Configuration and configured versus live values | [SETTINGS.md](docs/SETTINGS.md) |
 | Discord identity, invitations, revocation and legacy preparation | [AUTHENTICATION.md](docs/AUTHENTICATION.md) |
@@ -57,7 +58,7 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 - `src/lib/upload-tree-guard.ts`: rejects extracted links and special files before upload placement.
 - Prisma client is generated into gitignored `src/generated/prisma`; schema is `prisma/schema.prisma`.
 
-Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
+Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft `/minecraft/guide`, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
 
 ## Required safety and success rules
 

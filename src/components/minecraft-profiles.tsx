@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FolderHeart, Layers3, Plus, RefreshCw } from "lucide-react";
+import { BookOpen, ChevronRight, FolderHeart, Layers3, Plus, RefreshCw } from "lucide-react";
 import { useMinecraftProfiles } from "@/lib/use-minecraft-profiles";
 import { useGames } from "@/lib/use-games";
 import { GAMES } from "@/lib/games";
@@ -32,6 +32,9 @@ export function MinecraftProfiles() {
   const canPlay = list.ready && currentPermission && !list.data?.requiresAdoption && list.data?.runtime.state !== "unknown" && (currentRunning ? status.can.restart && list.data?.capabilities.switch === true : status.can.start && list.data?.capabilities.start === true);
   return <div className="space-y-6" style={{ ["--tint" as string]: GAMES.minecraft.tint }}>
     <SectionHeading eyebrow="Minecraft · Worlds" title="Minecraft profiles" sub="Keep each world with its own version, mods and settings. Choose a prepared profile when you start Minecraft." tint={GAMES.minecraft.tint} />
+    <Link href="/minecraft/guide" className="group flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--tint)]/20 bg-[var(--tint)]/5 px-4 py-3 outline-none transition-colors hover:bg-[var(--tint)]/10 focus-visible:ring-2 focus-visible:ring-foreground">
+      <BookOpen aria-hidden="true" className="size-5 shrink-0 text-[var(--tint)]" /><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">New here? Take the Minecraft walkthrough</span><span className="block text-xs text-muted-foreground">Profiles, joining, mods, backups and your world&apos;s cover.</span></span><ChevronRight aria-hidden="true" className="size-4 transition-transform motion-safe:group-hover:translate-x-1" />
+    </Link>
     {list.error && <div role="alert" className="space-y-2 rounded-xl bg-card p-4"><p>{list.error} Any displayed profiles are from the last successful read.</p><Button variant="outline" onClick={() => void list.refresh()}>Retry Minecraft profiles</Button></div>}
     {list.loading && !list.data && <p role="status">Reading Minecraft profiles…</p>}
     {list.data && <>

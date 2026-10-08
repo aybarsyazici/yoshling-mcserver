@@ -118,3 +118,11 @@ The 7DTD backend maps stable to Steam public and reads the configured Compose br
 
 Regression evidence lives in `CLOSED.md`. Full mobile, keyboard and contrast coverage and
 real client joins remain separate validation; component fixtures are not live gameplay.
+
+## Minecraft walkthrough
+
+The Profiles welcome card and Minecraft sidebar open `/minecraft/guide`. Eight
+short chapters explain the actual screens; reading progress is a versioned
+preference per user in this browser. Navigation uses ordinary links with the
+existing settings-draft guard. The guide submits no game actions and distinguishes
+member reading/joining from manager controls. See [MINECRAFT-GUIDE.md](MINECRAFT-GUIDE.md).
