@@ -6,9 +6,9 @@ Profiles are the playable unit: a name, cover image, complete server directory,
 Minecraft version, exact loader build, Java image, mods and world settings. There
 is still one Minecraft server address and one running Minecraft container.
 
-The feature is implemented locally and passes complete project checks. Production
-has not received the new schema or an adopted profile. A reviewed manual migration
-and deployment must precede the explicit adoption operation.
+The feature is deployed to production web and passes complete project checks.
+The reviewed additive schema is applied and verified. No profile has been selected
+or adopted; the existing world awaits the explicit dashboard adoption operation.
 
 ### User flow
 
@@ -109,23 +109,27 @@ need reviewed owner intervention.
 
 ### Production rollout
 
-Apply `prisma/migrations/20261007180000_add_minecraft_profiles/migration.sql`
-manually after a consistent verified SQLite backup. The migration adds two empty
-tables and a nullable indexed inventory identity; it does not adopt or start games.
-Verify schema, integrity/foreign keys and unchanged user/grant/inventory data before
-deploying the generated client. Follow `CLAUDE.md` and `scripts/deploy.sh` for the
-web deployment. Keep game power and profile work idle during deployment.
+Production received `prisma/migrations/20261007180000_add_minecraft_profiles/migration.sql`
+and the web deployment on 8 October 2026. Both new tables are empty; inventory IDs
+remain NULL. Existing records, integrity and foreign keys were verified against
+private pre-migration snapshots. Do not replay this migration. Evidence and backup
+locations are in `CLOSED.md`.
+
+For a fresh host, apply reviewed SQL manually after a consistent verified SQLite
+backup and verify schema/data before deploying the generated client. Use
+`scripts/deploy.sh` with a literal verification string and keep game/profile work
+idle during deployment. No migration or adoption runs automatically on boot.
 
 Adopt through the dashboard afterward, reviewing any loader/Java hints required
 by an ambiguous legacy install. Adoption keeps original data at the volume root,
 copies and verifies the complete server, transfers legacy inventory without changing
 its history, selects the stopped profile and leaves Minecraft stopped. Start and
-verify a real game join separately. No production migration, adoption, game boot,
-join or restore has been exercised by this local implementation.
+verify a real game join separately. Adoption, real game joins, controlled restores
+and authenticated browser verification remain unexercised. No browser verification
+surface was available during deployment; anonymous route checks do not prove sign-in.
 
 ### Remaining delivery work
 
-- Reviewed manual production schema migration and web deployment.
 - Explicit legacy adoption and real Minecraft joins for multiple profiles.
 - Controlled restore/checkpoint recovery and full browser visual/mobile verification.
 

@@ -576,3 +576,71 @@ The older single-world pack-switch proposal moved to `MEMORY-HISTORY.md`.
 
 Production rollout remains open in `MINECRAFT-PROFILES.md`. Current web remains the
 previous deployed release; local test/build success is not deployment evidence.
+
+
+## Minecraft profile production rollout — 2026-10-08
+
+User explicitly authorized Git push and deployment. Feature commit
+`e94d0b2343334e7dd319374af8a03346b25b7d53` was pushed to `origin/main` and
+shipped with `scripts/deploy.sh --service web --verify 'The current runtime revision and exact reviewed hand-off worlds are required'`.
+The running compiled image contains that literal. Documentation synchronization
+follows through the same guarded deployment path; documentation is excluded from
+image inputs.
+
+### Database evidence
+
+- The original database passed integrity/FK checks. `VACUUM INTO` produced a
+  consistent private snapshot, copied to the host and hash-compared; a trial
+  migration on its copy passed before live SQL was applied.
+- Exact migration SQL SHA256:
+  `92f2f5564864f376871581d988a9e1279b25a886f6f5a00dabc7046462164896`.
+  Live SQL used libSQL `transaction('write')`, with comparisons/readbacks on that
+  same transaction, followed by fresh-connection verification after commit.
+- Both profile tables are empty; all three `InstalledMod.profileId` values remain
+  NULL. No GET seeded a selection or profile. Integrity is `ok`, foreign-key
+  violations zero, nullable column/index and Runtime constraints verified.
+- Full original-column equality was checked privately across User, InstalledMod,
+  ServerConfig, Modpack, ModpackMod, GameState, SevenDaysConfig and ZomboidMod.
+  Counts: 6 users, 3 installed mods, 1 server config, 10 saved sets, 569 set entries,
+  1 game state, 1 7DTD config and 75 PZ cached mod rows. Roles/grants, provenance,
+  version pins, ownership and timestamps were preserved.
+- Snapshot/evidence directory in the web volume:
+  `/app/data/profile-rollout-ehObgN` (0700, files 0600). Independent host copy:
+  `/root/yoshling-deploy-backup/profile-rollout-20261008/before.db`.
+  Snapshot SHA256:
+  `64a16eabe0378444200a85e504be07a914b50ea38acf5cea97ed35415179a867`.
+  Existing-record projection SHA256:
+  `5ccd2280e10736bb7ed898c2e0891cb5037a23697fd674f09619ae08004f38b3`.
+  Raw rows/credentials were not printed.
+
+### Deployment evidence
+
+- Host Engine 29.8.0, Compose 5.5.1; incoming Compose validated quietly. Tracked
+  checkout/Compose were clean; invitation policy and seed/backup/profile staging
+  admission passed before build and before replacement.
+- Running web image equals built image:
+  `sha256:4201c8f1f81c8d198ad32d6f78bbb26849e363b3679f06baab0b735161ad44cf`.
+  Node 22.23.3; web started `2026-10-08T08:26:40.663122421Z`, restart count zero.
+  Local supported-Node checks again passed 171 files / 2,927 tests, types,
+  production build/artifact and lint (zero errors, seven existing warnings).
+- PZ retained container ID, image, start time `2026-10-06T18:23:46.534790239Z`
+  and restart count zero; it remained running. Minecraft and 7DTD retained their
+  container IDs/images/start timestamps and stopped state. No game power,
+  adoption, start/switch, seed or restore action was invoked.
+- `.env` retained byte identity and mode 0600. The original web's image metadata
+  was unavailable even though its container was running; rollback preservation
+  therefore exported its root filesystem (volumes excluded), imported a private
+  neutral-config web image and compared server.js/BUILD_ID checksums to the running
+  original. Tag `yoshling-web:rollback-a21e10e-profiles-20261008`, image
+  `sha256:4f3284c97177e9995312b73fa937fb8d50f18ee787ae59b437f275c29ce1d6ff`;
+  rootfs archive is in the private host backup directory. No runtime secrets were
+  copied into image configuration. Old web rollback is safe only before adoption
+  or profile use; it lacks profile scoping afterward.
+- Origin and public HTTPS: `/login` 200 HTML, `/api/auth/session` 200 null;
+  anonymous `/api/minecraft/profiles` 401 JSON. Origin providers 200 and protected
+  active-profile/status routes 401. These checks establish reachable authentication
+  boundaries, not genuine OAuth or authenticated profile behavior. Browser inventory
+  was empty; real adoption, joins, restores and authenticated visual QA remain open.
+
+Current instructions/remaining work are in `CLAUDE.md` and
+`MINECRAFT-PROFILES.md`; this is historical rollout evidence.
