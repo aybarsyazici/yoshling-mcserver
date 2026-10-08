@@ -912,3 +912,23 @@ Imported as `yoshling-web:rollback-364b85c-before-guide-20261008`, image
 `sha256:b5bef333f2c4ba2ad3883a7d424a04c02227494582c4b22829a3216368001a49`.
 The imported server/BUILD_ID hashes matched and artifact guard passed. This is a
 rollback artifact, not a restore exercise. No game or schema changes were needed.
+
+### Production verification for the walkthrough
+
+Feature `296172995117184c868b3f221ab40a432665c65f` was pushed and deployed with
+`scripts/deploy.sh --service web --verify 'Your first world, and the next'`.
+The script found that literal in the running bundle. Web container
+`3267617c45f1b898a42fcab4869fae394b883bb1159d1898c74801064c75af84` uses image
+`sha256:a3578e79af4889aa4a818c7443734de27c365cdf9297febc78798baf9ef9643a`,
+started at 16:31:13 UTC with restart count zero. Origin `/minecraft/guide` without
+a session returned **307 → /login**. Minecraft, 7DTD and PZ kept their exact
+container/image IDs, start times, restart counts and states. `.env` stayed mode
+0600, 1,380 bytes with its previous checksum. The existing generated cover
+remained ready with hash
+`76535651d004ad26a714dfbadee6e5ca6176d165fc6cc4fded0c7ab6bb3f480a`.
+
+The local public-domain TLS check remained blocked by the existing DNS/filter
+certificate mismatch; no bypass was attempted. Authenticated browser walkthrough,
+complete mobile/keyboard/contrast coverage and real game joins remain outside this
+verification. `CLAUDE.md` stays at 164 lines / 2,191 words / 16,980 bytes; dated
+evidence is retained here instead of expanding the main memory file.
