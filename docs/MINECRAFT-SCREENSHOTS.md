@@ -6,7 +6,12 @@ The profile detail page offers an optional **Capture from your game** panel besi
 the existing manual JPEG, PNG and WebP cover controls. It uses a player's Minecraft
 client camera, not a server renderer. The first companion targets Minecraft 26.1.2
 with Fabric Loader 0.19.5+ and Java 25; it can join a compatible Fabric or vanilla server profile.
-Other targets retain manual cover upload.
+Other targets retain manual cover upload and supported generated defaults.
+
+Profiles use [automatic saved-world overviews](MINECRAFT-OVERVIEWS.md) by default.
+A companion screenshot becomes a custom cover and takes priority. Pairing asks
+for replacement consent only when a custom cover already exists; removing the
+custom cover reveals the generated overview.
 
 Install the downloaded companion in the **client** mods folder before launching
 Minecraft. Fabric API is not required by this companion. The dashboard shows its version, file size and SHA-256 from a validated,
@@ -17,7 +22,7 @@ same-origin manifest. This does not provide a complete client modpack.
 1. Start the desired profile through the ordinary profile picker and join its world.
 2. On that profile's detail page, request a pairing session. Management permission,
    a ready supported profile and verified running/applied identity are required.
-   Replacing an existing cover needs an explicit checkbox.
+   Replacing an existing custom cover needs an explicit checkbox.
 3. Enter the dashboard's local `/yoshling pair CODE` command in the client. The
    private code authorizes one image for this profile and expires after 15 minutes.
    Copy is explicit and reports success only after the Clipboard promise resolves.

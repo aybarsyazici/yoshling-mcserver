@@ -122,6 +122,8 @@ export async function checkpointMinecraftProfile(profile: MinecraftProfileRecord
     op.settle(`Preserved and verified ${copy.files} files for ${profile.name}`, { count: { done: copy.files, total: copy.files, noun: "files" } });
     op.fact({ label: "Checkpoint", value: `${profile.name}: ${checkpointId}` });
     await pruneMinecraftProfileCheckpoints(profile.id);
+    const { notifyMinecraftProfileOverviewReady } = await import("./minecraft-profile-overview-queue");
+    await notifyMinecraftProfileOverviewReady(profile.id, op);
     return checkpointId;
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => {});

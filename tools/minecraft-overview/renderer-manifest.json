@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "workerVersion": "0.1.0",
+  "renderer": {"name": "bluemap", "version": "5.28"},
+  "minecraftVersions": ["26.1.2", "1.21.1"],
+  "dimension": "overworld",
+  "radius": 64,
+  "width": 1280,
+  "height": 800,
+  "entrypoint": ["node", "/opt/overview/run.mjs"],
+  "inputPath": "/input",
+  "outputPath": "/output",
+  "imageFile": "overview.png",
+  "receiptFile": "receipt.json",
+  "limits": {
+    "cpu": 1,
+    "memoryBytes": 1610612736,
+    "memorySwapBytes": 1610612736,
+    "tmpBytes": 268435456,
+    "sourceBytes": 268435456,
+    "sourceFiles": 4096,
+    "imageBytes": 5242880,
+    "jobSeconds": 120,
+    "cliSeconds": 90
+  },
+  "requiresPrivateImage": true
+}

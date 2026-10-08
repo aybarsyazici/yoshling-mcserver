@@ -684,21 +684,23 @@ happen, so each guarantee is pinned from both sides: a clean apply answers 200 w
 skips and no failures opens **no** dialog and raises **no** toast. Without that last one,
 "always open the report" passes every other test in the file.
 
-## Background work — three timers, all in `src/instrumentation.ts`
+## Background work — four timers in `src/instrumentation.ts`
 
-Nothing else in this app runs on a clock, **two of the three can stop or start a game
-container**, and until 2026-10-06 only one was documented anywhere — so this is the first
-place to look when something moved by itself. All three use a plain `setInterval`; the
-watcher and backup timer have re-entry guards. **Corrected 2026-10-06:** the stats collector
-does not have one and still lacks command timeouts, so the former claim that all three
-were guarded was wrong. A tick that re-armed from a `finally` died permanently on one hung
-watcher call (2026-09-15).
+The Workshop watcher and backup/overview timers have re-entry guards. The stats
+collector has neither a re-entry guard nor command timeouts. Workshop updates can
+restart PZ; overview generation performs no game lifecycle action. Historical
+timer corrections are recorded in the dated audit.
 
 | Timer | Cadence | Off switch |
 |-------|---------|-----------|
-| `collectStats` (`:66`) — the monitor graphs | 5 s | — |
+| `collectStats` — the monitor graphs | 5 s | — |
 | PZ Workshop watcher (`src/lib/zomboid-updates.ts`) — **restarts PZ itself when empty** | defaults: `PZ_UPDATE_PENDING_POLL_MS` 15 s tick, `PZ_UPDATE_POLL_MS` 5 min full check | `PZ_UPDATE_WATCH=false` in `.env`, then recreate web |
-| `backupTick` (`:168`, `src/lib/backup-schedule.ts`) | `BACKUP_CHECK_MS` 5 min; first run 5 min after boot | **`BACKUP_SCHEDULE=off`** |
+| `backupTick` (`src/lib/backup-schedule.ts`) | `BACKUP_CHECK_MS` 5 min; first run 5 min after boot | **`BACKUP_SCHEDULE=off`** |
+| Minecraft overview queue (`minecraft-profile-overview-queue.ts`) | 60 s; first 90 s after boot | `MC_OVERVIEWS=false` |
+
+Overview rendering holds `render:minecraft-overview`, with short Minecraft file
+reservations for snapshots/publication. Docker labels also block overlapping
+workers after web replacement. See [MINECRAFT-OVERVIEWS.md](MINECRAFT-OVERVIEWS.md).
 
 The watcher switch and both cadences are interpolated from the operator environment.
 Changing `.env` requires web recreation; restart cannot change container env. Local source

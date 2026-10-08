@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { withMinecraftProfileOperationMarker } from "@/lib/minecraft-profile-operation-marker";
+import { assertMinecraftProfileOverviewDeletable, deleteMinecraftProfileOverview } from "@/lib/minecraft-profile-overview-queue";
 import { rename, rm, lstat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { getMinecraftProfileRuntimeStatus } from "@/lib/minecraft-profile-activation";
@@ -52,6 +53,7 @@ export async function DELETE(request: Request, context: Context) {
           if (!profile) throw new MinecraftProfileError("Profile not found", 404, "profile_not_found");
           if (profile.revision !== expected) throw new MinecraftProfileError("This profile changed; reload before deleting", 409, "profile_stale");
           requireInactiveMinecraftProfile(await getMinecraftProfileRuntimeStatus(), id);
+          await assertMinecraftProfileOverviewDeletable(id);
           const source = await minecraftProfilePath(id, "", { allowMissing: false });
           const covers = await minecraftCoverDirectory(id, { allowMissing: false }).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
           const parent = await minecraftProfilesRoot();
@@ -74,6 +76,7 @@ export async function DELETE(request: Request, context: Context) {
           refuseIfPreempted(op, "profile deletion");
           await rm(quarantine, { recursive: true, force: true });
           if (covers) { refuseIfPreempted(op, "profile cover deletion"); await rm(covers, { recursive: true, force: true }); }
+          await deleteMinecraftProfileOverview(id);
           const remains = await lstat(quarantine).then(() => true).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error; });
           const coversRemain = covers ? await lstat(covers).then(() => true).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return false; throw error; }) : false;
           if (remains || coversRemain || await getMinecraftProfile(id)) throw new Error("Profile deletion could not be verified");

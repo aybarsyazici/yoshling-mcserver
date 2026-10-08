@@ -131,6 +131,7 @@ const DEFAULT_RESOURCES: Record<OperationKind, (g: GameId | null) => OperationRe
   "mods.install": (g) => (g ? [`files:${g}`] : []),
   "world.upload": (g) => (g ? [`files:${g}`] : []),
   "profile.prepare": (g) => (g ? [`files:${g}`] : []),
+  "profile.overview": () => ["render:minecraft-overview"],
   "profile.adopt": (g) => (g ? [`files:${g}`] : []),
   "profile.switch": (g) => (g ? [`files:${g}`] : []),
   "profile.delete": (g) => (g ? [`files:${g}`] : []),
@@ -940,6 +941,8 @@ function summarize(entry: Entry, outcome: Outcome): string {
   }
 
   switch (entry.kind) {
+    case "profile.overview":
+      return `${factValue(entry, "Overview") ?? "Minecraft world overview checked"} in ${took}.${sideNote(entry, ["Overview"])}`;
     case "profile.prepare":
       return `Prepared ${factValue(entry, "Profile") ?? "the Minecraft profile"} in ${took}.${sideNote(entry, [])}`;
     case "profile.delete":
@@ -1152,6 +1155,8 @@ function summarize(entry: Entry, outcome: Outcome): string {
 
 function verbFor(entry: Entry): string {
   switch (entry.kind) {
+    case "profile.overview":
+      return "Rendering the Minecraft world overview";
     case "profile.prepare":
       return "Preparing the Minecraft profile";
     case "profile.delete":
@@ -1190,6 +1195,7 @@ function verbFor(entry: Entry): string {
 /** The surface that would actually show whether this worked. */
 function describeTarget(entry: Entry): string {
   switch (entry.kind) {
+    case "profile.overview":
     case "profile.prepare":
     case "profile.delete":
     case "profile.adopt":

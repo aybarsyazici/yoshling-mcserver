@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { FolderHeart, Layers3, Plus, RefreshCw } from "lucide-react";
 import { useMinecraftProfiles } from "@/lib/use-minecraft-profiles";
 import { useGames } from "@/lib/use-games";
@@ -11,6 +10,7 @@ import { MinecraftProfileCard } from "@/components/minecraft-profile-card";
 import { MinecraftProfileCreate } from "@/components/minecraft-profile-create";
 import { MinecraftProfilePicker } from "@/components/minecraft-profile-picker";
 import { MinecraftProfileScene } from "@/components/minecraft-profile-scene";
+import { MinecraftProfileImage } from "@/components/minecraft-profile-image";
 import { GameControls } from "@/components/game-controls";
 import { JoinPanel } from "@/components/join-panel";
 import { SectionHeading } from "@/components/ui-bits";
@@ -46,8 +46,7 @@ export function MinecraftProfiles() {
         <details><summary className="cursor-pointer py-2 text-sm">Server controls and recovery</summary><GameControls game="minecraft" /></details>
         </div>
         <div aria-hidden="true" className="relative hidden aspect-video self-start overflow-hidden rounded-2xl bg-muted ring-1 ring-foreground/10 lg:block">
-          {active?.coverUrl ? <Image src={active.coverUrl} alt="" fill sizes="256px" className="object-cover" unoptimized /> : <MinecraftProfileScene variant="adopt" className="size-full" />}
-          <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-4 pb-3 pt-8 text-xs text-white/90">{active?.coverUrl ? "Your world" : "World illustration"}</span>
+          {active ? <MinecraftProfileImage profile={active} decorative compact sizes="256px" /> : <><MinecraftProfileScene variant="adopt" className="size-full" /><span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-4 pb-3 pt-8 text-xs text-white/90">World illustration</span></>}
         </div>
         </div>
       </section>

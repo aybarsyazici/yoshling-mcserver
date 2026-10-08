@@ -14,7 +14,7 @@ afterEach(async () => {
 
 type Scenario = "normal" | "initial-seed" | "initial-ps-error" | "late-seed" |
   "late-command-seed" | "late-ps-error" | "late-backup" | "policy-change" |
-  "static-work" | "late-static-work" | "initial-profile" | "late-profile";
+  "static-work" | "late-static-work" | "initial-profile" | "late-profile" | "renderer-build-failed";
 
 /** Execute the real remote Bash and invitation validator, with no Docker or remote access. */
 async function deploy(scenario: Scenario = "normal", stream = false, forceOps = false) {
@@ -40,16 +40,20 @@ async function deploy(scenario: Scenario = "normal", stream = false, forceOps = 
   await writeFile(path.join(root, "docker-compose.yml"), "services:\n  web:\n    image: fixture/web:current\n");
 
   const source = await readFile(path.resolve(__dirname, "../../../scripts/deploy.sh"), "utf8");
+  const scanner = (await readFile(path.resolve(__dirname, "../../../scripts/check-minecraft-overview-staging.mjs"), "utf8")).replace('scanMinecraftOverviewStaging("/app/data/minecraft-profile-overviews")', `scanMinecraftOverviewStaging(${JSON.stringify(path.join(root, "data/minecraft-profile-overviews"))})`);
+  await writeFile(path.join(root, "overview-scan.mjs"), scanner);
   const body = source.match(/<<'REMOTE'\n([\s\S]*?)\nREMOTE/)?.[1];
   if (!body) throw new Error("remote deploy body missing");
   const remote = body
     .replaceAll("/opt/yoshling", root)
     .replaceAll("/tmp/deploy-build.log", path.join(root, "build.log"))
+    .replaceAll("/tmp/deploy-overview-build.log", path.join(root, "overview-build.log"))
+    .replaceAll("/root/yoshling-overview-deploy-scan.mjs", path.join(root, "overview-scan.mjs"))
     .replaceAll("/root/yoshling-deploy-backup", path.join(root, "backup"))
     .replaceAll("/root/y.bundle", path.join(root, "bundle"))
     .replaceAll("/var/lib/docker/volumes/yoshling_web-data/_data", path.join(root, "data"))
     .replaceAll("/var/lib/docker/volumes/yoshling_mc-data/_data", path.join(root, "mc-data"));
-  if (/\/opt\/yoshling|\/root\/|\/var\/lib\/docker|\/tmp\/deploy-build\.log/.test(remote)) {
+  if (/\/opt\/yoshling|\/root\/|\/var\/lib\/docker|\/tmp\/deploy-(?:overview-)?build\.log/.test(remote)) {
     throw new Error("production host path escaped fixture substitution");
   }
   await writeFile(path.join(root, "remote.sh"), remote);
@@ -73,6 +77,8 @@ if [ "$1" = ps ]; then
     elif [ "$phase" = after ] && [ "$FIXTURE_SCENARIO" = late-command-seed ]; then
       echo 'fixture-seed|other-role|steamcmd.sh fixture-private-marker'
     fi
+  elif [ "$2" = -aq ]; then
+    record 'docker ps overview workers'
   else
     record 'docker ps final'
     echo 'fixture-web Up'
@@ -94,6 +100,11 @@ elif [ "$1" = compose ] && [ "$2" = -p ]; then
   WHITELIST_FILE="$policy" ALLOWED_DISCORD_IDS='' ALLOWED_DISCORD_USERS='' \\
     "$TEST_NODE" "\${args[\${#args[@]}-2]}" "\${args[\${#args[@]}-1]}"
 elif [ "$1" = compose ] && [ "$2" = build ]; then
+  if [ "$3" = minecraft-overview ]; then
+    record 'docker compose build minecraft-overview'
+    if [ "$FIXTURE_SCENARIO" = renderer-build-failed ]; then echo 'fixture renderer build failed' >&2; exit 43; fi
+    exit 0
+  fi
   [ "$3" = web ] || exit 94
   record 'docker compose build web'
   : > "$FIXTURE_BUILT"
@@ -110,6 +121,10 @@ elif [ "$1" = compose ] && [ "$2" = up ]; then
   record 'docker compose up -d --no-deps web'
 elif [ "$1" = cp ]; then
   record 'docker cp database snapshot'
+elif [ "$1" = exec ]; then
+  [ "$*" = 'exec -i yoshling-web-1 node --input-type=module -' ] || exit 103
+  record 'docker exec overview staging scanner'
+  "$TEST_NODE" --input-type=module -
 else
   record "docker unexpected operation:$1"
   echo 'unsupported fixture Docker operation' >&2
@@ -199,7 +214,7 @@ describe("web deploy rechecks background work and the next invitation policy bef
     expect(r.failed, r.output).toBe(false);
     const ordered = [
       "docker compose policy web image=current", "docker ps seeds:before",
-      "git checkout -f -q -B main FETCH_HEAD", "docker compose build web",
+      "git checkout -f -q -B main FETCH_HEAD", "docker compose build minecraft-overview", "docker compose build web",
       "docker compose policy web image=next", "docker ps seeds:after",
       "docker compose up -d --no-deps web",
     ];
@@ -208,7 +223,7 @@ describe("web deploy rechecks background work and the next invitation policy bef
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(r.calls.filter(call => call.startsWith("docker compose policy"))).toHaveLength(2);
     expect(r.calls.filter(call => call.startsWith("docker compose up"))).toEqual(["docker compose up -d --no-deps web"]);
-    expect(r.calls.some(call => /create|unexpected|zomboid|minecraft|sevendtd/.test(call))).toBe(false);
+    expect(r.calls.filter(call => /create|unexpected|zomboid|minecraft|sevendtd/.test(call))).toEqual(["docker compose build minecraft-overview"]);
     expect(r.output.match(/invitation policy format verified/g)).toHaveLength(2);
     expect(r.calls).toContain("docker ps final");
   });
@@ -309,5 +324,10 @@ describe("web deploy rechecks background work and the next invitation policy bef
     const r = await deploy("initial-profile", false, true);
     expect(r.failed, r.output).toBe(false); expect(r.output).toContain("FORCE_OPS=1 set — accepting interruption after review");
     expect(r.calls).toContain("docker compose up -d --no-deps web"); expect(r.output).not.toContain("fixture-private-operation-content");
+  });
+  it("refuses a failed renderer build before building or replacing web", async () => {
+    const r = await deploy("renderer-build-failed"); expect(r.failed).toBe(true);
+    expect(r.calls).toContain("docker compose build minecraft-overview"); expect(r.calls).not.toContain("docker compose build web"); expect(r.calls).not.toContain("docker compose up -d --no-deps web");
+    expect(r.output).toContain("overview renderer build failed; web has not been replaced");
   });
 });

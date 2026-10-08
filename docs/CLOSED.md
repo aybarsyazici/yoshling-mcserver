@@ -780,3 +780,58 @@ containers, server mods or the database schema.
   already replaced; it produced no backup. The existing verified profile-aware
   rollback `yoshling-web:rollback-574a2f1-ui-20261008` remains the available preserved
   predecessor. Do not claim the attempted `rollback-b7954e3-capture-20261008` exists.
+
+## 2026-10-08 — Automatic saved-world default covers
+
+Implemented generated near-spawn Overworld covers, independently of custom
+manual/companion covers and numeric profile editor revisions. Custom images take
+priority; removing one reveals the generated default. Creation, adoption,
+verified checkpoints and sealed backups can notify generation without powering
+a game or reading its mutable running world. The bounded private snapshot,
+manifest, worker PNG and published artifact each receive independent readback.
+
+The optional worker packages BlueMap 5.28 and vanilla assets for Minecraft
+26.1.2/1.21.1. Rendering and browser capture run sequentially in a private,
+network-disabled Compose tool. Resource/privilege/mount inspection, a watchdog,
+exact-identity cleanup and persisted unverified states prevent guessing success
+or automatic reruns after ambiguous worker outcomes. Deployment builds the tool
+before web and refuses active workers or unresolved private staging. The scanner
+also runs through its actual Node-stdin entry point in fixtures.
+
+Verification from the restored feature checkout:
+
+- Full project: **184 files / 3,195 tests passed**, Node 22 types passed, normal
+  build and standalone artifact guard passed. Lint: **0 errors / 7 existing
+  warnings**, unchanged from baseline (error navigation, bans effect dependency
+  and legacy mod images). Existing deployment fixtures were updated for the new
+  build/scanner paths while retaining host-path escape checks.
+- Renderer bridge/timer: 43 cases; **30 guard mutants** failed assertions and
+  were restored. Backend: 35 overview cases plus operation integration;
+  **27 backend mutants** restored. Scanner: 24 filesystem cases / **8 mutants**;
+  deployment CLI/build refusal: **5 mutants**. UI: 31 new cases / **20 mutants**.
+- Offline worker: **22 cases / 32 isolated mutants**, restored and green.
+  Synthetic 26.1.2 namespaced and 1.21.1 legacy worlds produced actual terrain
+  PNGs with unchanged source hashes, verified receipts and private permissions.
+- Local Linux ARM64 final render image
+  `sha256:ee1a74fd758714e135d06ce2396eabb7ed172da713f98befea1e35b01c5329c3`:
+  26.1.2 took 17.416 s, peaked at 523,464,704 bytes, used 50,576 KiB scratch;
+  1.21.1 took 22.492 s, peaked at 512,438,272 bytes, used 38,536 KiB scratch.
+  Actual limits were 1 CPU, 1,536 MiB/no swap and 256 MiB tmpfs with no network,
+  read-only root and all capabilities dropped. Compose's additional PID and
+  tmpfs mount options were reviewed/guard-tested; the local proof did not exercise
+  all those options. An earlier cold proof peaked at 1,132,523,520 bytes, below
+  the retained 1,536 MiB ceiling. These are synthetic results, not game joins.
+
+Before rollout, current web image metadata was absent despite its running
+container. Preserved its root filesystem at
+`/root/yoshling-deploy-backup/before-overviews-20261008/web-rootfs.tar` (mode 0600,
+SHA256 `5f0a9267fa8fa4cc5223b0eb76d3dc8dde80e7e94053d9d0b3804f1bb73a9f9d`),
+imported neutral web defaults as
+`yoshling-web:rollback-c256f9f-before-overviews-20261008`, image
+`sha256:0001f3f64c6f52fa34302a425afabccf557a6902acb4d9fa74393eda979ee348`.
+Imported `server.js` and `BUILD_ID` hashes matched the running source; the artifact
+guard passed. This is a profile-aware rollback rootfs, not a rollback exercise.
+
+Current behavior and recovery instructions are in
+[MINECRAFT-OVERVIEWS.md](MINECRAFT-OVERVIEWS.md); scope and resource provenance are
+in [the worker documentation](../tools/minecraft-overview/README.md).

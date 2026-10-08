@@ -36,11 +36,13 @@ never represent actual world contents. Background profile refreshes retain a
 validated snapshot; failed reads and real permission/runtime changes still block
 actions. Preparation and player-disconnection confirmations remain separate.
 
-Covers use authenticated manual uploads or opt-in player-camera capture through
-the Fabric 26.1.2 client companion. Short-lived pairing authorizes one image for
-one applied profile, with exact revision/context checks and explicit replacement
-consent. See [MINECRAFT-SCREENSHOTS.md](MINECRAFT-SCREENSHOTS.md) for installation,
-limits and verification. The server has no camera or renderer.
+Covers default to a generated 3D overview of verified saved Overworld terrain.
+Custom uploads and opt-in player-camera screenshots take priority; removing a
+custom image reveals the generated default. New worlds wait for saved terrain,
+and rendering never starts or stops a game. See [MINECRAFT-OVERVIEWS.md](MINECRAFT-OVERVIEWS.md)
+for supported versions, snapshot sources, resource limits and recovery. The
+Fabric 26.1.2 companion uses short-lived pairing and explicit custom-cover
+replacement consent; see [MINECRAFT-SCREENSHOTS.md](MINECRAFT-SCREENSHOTS.md).
 
 ### Storage and identity
 

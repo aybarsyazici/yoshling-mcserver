@@ -6,6 +6,7 @@ import { MinecraftProfileDetail } from "@/components/minecraft-profile-detail";
 import { parseMinecraftCaptureCompanion, parseMinecraftCaptureGrant, parseMinecraftCaptureReceipt } from "@/lib/minecraft-capture-client";
 import { gamesState, installBrowserStubs, opsState } from "./helpers/dom";
 import { profileFixture, profilesFixture, worldSettingsFixture } from "./helpers/minecraft-profiles";
+import { waitingOverview } from "./helpers/minecraft-overviews";
 import type { MinecraftProfileDTO } from "@/lib/minecraft-profile-types";
 const boundary = vi.hoisted(() => ({ games: null as unknown, operations: null as unknown }));
 vi.mock("@/lib/use-games", async original => ({ ...(await original<typeof import("@/lib/use-games")>()), useGames: () => boundary.games }));
@@ -38,7 +39,7 @@ describe("player-camera capture panel", () => {
   it("pairs explicitly for this profile without power actions or persistent command storage", async () => {
     const { writes } = harness(); renderPanel(); await mint();
     expect(writes).toEqual([{ method: "POST", url: "/api/minecraft/profiles/p1/capture", body: { expectedRevision: 1, replaceExisting: false } }]);
-    expect(screen.getByText(/Java 25/)).toBeTruthy(); expect(screen.getByText(/no server renderer/)).toBeTruthy();
+    expect(screen.getByText(/Java 25/)).toBeTruthy(); expect(screen.getByText(/separate from the generated world overview/)).toBeTruthy();
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   });
   it.each([
@@ -159,6 +160,7 @@ describe("capture detail reconciliation", () => {
       if (url.endsWith("/capture") && init?.method === "POST") return json({ session });
       if (url.endsWith("/capture/session1")) return pending;
       if (url.endsWith("/cover") && init?.method === "POST") { manual = true; return json({ profile: manualCover }); }
+      if (url.endsWith("/overview")) return json({ profileId: "p1", overview: waitingOverview() });
       if (url.endsWith("/world-settings")) { settingReads++; return new Response(JSON.stringify(worldSettingsFixture({ profileId: "p1", editable: false })), { headers: { "X-File-Revision": '"r1"' } }); }
       return json({ profile: captured ? mode === "changed" ? { ...cover, name: "Changed elsewhere" } : cover : manual ? manualCover : profile(), runtime: runtime(), capabilities: profilesFixture().capabilities });
     }));
@@ -195,6 +197,7 @@ describe("capture detail reconciliation", () => {
       const url = String(input);
       if (url.endsWith("/companion")) return json(manifest);
       if (url.endsWith("/capture") && init?.method === "POST") { writes++; if (mintRefusal) return json({ error: "This profile changed; reload before pairing", code: "capture_stale" }, 409); throw new Error("offline"); }
+      if (url.endsWith("/overview")) return json({ profileId: "p1", overview: waitingOverview() });
       if (url.endsWith("/world-settings")) return new Response(JSON.stringify(worldSettingsFixture({ profileId: "p1", editable: false })), { headers: { "X-File-Revision": '"r1"' } });
       reads++; if (reads > 1 && failRead) return json({ error: "Profile read unavailable" }, 503);
       return json({ profile: mintRefusal && reads > 1 ? { ...profile(), revision: 2, coverUrl: "/api/minecraft/profiles/p1/cover?v=2" } : profile(), runtime: runtime(), capabilities: profilesFixture().capabilities });
@@ -236,6 +239,7 @@ describe("capture detail reconciliation", () => {
     vi.stubGlobal("fetch", vi.fn(async input => {
       const url = String(input);
       if (url.endsWith("/companion")) return json(manifest);
+      if (url.endsWith("/overview")) return json({ profileId: "p1", overview: waitingOverview() });
       if (url.endsWith("/world-settings")) return new Response(JSON.stringify(worldSettingsFixture({ profileId: "p1", editable: false })), { headers: { "X-File-Revision": '"r1"' } });
       return json({ profile: profile(), runtime: reads++ === 0 ? { ...runtime(), state: "stopped" } : runtime(), capabilities: profilesFixture().capabilities });
     }));

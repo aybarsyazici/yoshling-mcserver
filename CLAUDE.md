@@ -14,6 +14,7 @@ Update documentation with each meaningful change. State what was verified locall
 | Discord identity, invitations, revocation and legacy preparation | [AUTHENTICATION.md](docs/AUTHENTICATION.md) |
 | Minecraft mods, packs, identity, bans and rules | [MINECRAFT.md](docs/MINECRAFT.md) |
 | Minecraft profile implementation and migration | [MINECRAFT-PROFILES.md](docs/MINECRAFT-PROFILES.md) |
+| Automatic Minecraft covers and isolated rendering | [MINECRAFT-OVERVIEWS.md](docs/MINECRAFT-OVERVIEWS.md) |
 | Player screenshot pairing and client companion | [MINECRAFT-SCREENSHOTS.md](docs/MINECRAFT-SCREENSHOTS.md) |
 | Any Project Zomboid change | [PROJECT-ZOMBOID.md](docs/PROJECT-ZOMBOID.md); mod incidents also [PZ-MOD-BACKLOG.md](docs/PZ-MOD-BACKLOG.md) |
 | 7DTD telnet, XML, worlds, reset and updates | [7-DAYS-TO-DIE.md](docs/7-DAYS-TO-DIE.md) |
@@ -121,7 +122,7 @@ Telnet transport fixtures bind loopback ports. Restricted sessions can block the
 
 Host: `89.58.50.155`, deploy directory `/opt/yoshling`, SSH `root` with `~/.ssh/mc_yoshling_netcup`. Public dashboard: `https://yoshling.xyz`. Read live run state before an action; do not infer it from saved documentation.
 
-Use `scripts/deploy.sh --service web --verify 'literal from the actual change'`. It requires committed work, ships a git bundle, guards running seeds/copying backups and dirty host Compose, builds, and checks the literal in the running built image. The host has no GitHub key. Checkout pushes use the configured repository `core.sshCommand`.
+Use `scripts/deploy.sh --service web --verify 'literal from the actual change'`. It requires committed work, ships a git bundle, guards running seeds/copying backups, profile/overview staging and dirty host Compose, builds the overview tool and web, and checks the literal in the running built image. The host has no GitHub key. Checkout pushes use the configured repository `core.sshCommand`.
 
 Web replacement rechecks invitation policy, seeds and backup/profile staging after build. Private profile operation markers persist in `/app/data/minecraft-profile-operations`. Leftovers are active or unverified until reviewed; size/age cannot prove completion. Admission observations do not hold a deployment lock; avoid concurrent operations during rollout.
 
@@ -150,6 +151,7 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 
 - Remaining dependency advisories need applicability/exposure review. Feature limits include idempotent saved-set re-imports, draft review for Minecraft's custom settings cards, and owner-only checkpoint/drift recovery.
 - Minecraft profile contracts and remaining rollout work are in `MINECRAFT-PROFILES.md`. Different targets use separate profiles; profile version/loader editing is unavailable after preparation.
+- Default Minecraft covers use isolated saved-world rendering for 26.1.2/1.21.1; custom uploads/captures take priority. Source, worker limits and recovery are in `MINECRAFT-OVERVIEWS.md`.
 - Player-camera capture uses an opt-in Fabric 26.1.2 client companion; additional client targets and a real graphical capture trial remain open. Read `MINECRAFT-SCREENSHOTS.md` before changing pairing/publication.
 - Verification gaps: genuine Discord login/denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
 - Infrastructure/manual work: reproduce the host firewall unit, assess retained secret-bearing images/cache, verify old-host decommissioning, and owner-managed credential rotation.

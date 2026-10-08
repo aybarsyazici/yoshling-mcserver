@@ -59,6 +59,7 @@ echo "==> shipping ${LOCAL_SHA:0:7} ($SERVICE)"
 git bundle create /tmp/yoshling-deploy.bundle main --quiet 2>/dev/null \
   || git bundle create /tmp/yoshling-deploy.bundle main
 scp -q -i "$KEY" /tmp/yoshling-deploy.bundle "$BOX:/root/y.bundle"
+scp -q -i "$KEY" scripts/check-minecraft-overview-staging.mjs "$BOX:/root/yoshling-overview-deploy-scan.mjs"
 
 # ssh joins its arguments into one string and the REMOTE shell re-splits them, so
 # anything containing a space arrives as several arguments. A --verify string like
@@ -203,6 +204,19 @@ assert_no_background_work() {
     printf '%s\n' "$seeds" | awk -F '|' '{printf "        %s %s\n", $1, $2}' >&2
     return 1
   fi
+  local overview_workers
+  if ! overview_workers=$(docker ps -aq --filter label=yoshling.overview.worker=1 2>/dev/null); then
+    echo "deploy: cannot inspect overview workers; no replacement attempted." >&2
+    return 1
+  fi
+  if [ -n "$overview_workers" ]; then
+    echo "deploy: an overview worker is active or needs cleanup; wait or review it before replacement." >&2
+    return 1
+  fi
+  if ! docker exec -i yoshling-web-1 node --input-type=module - < /root/yoshling-overview-deploy-scan.mjs; then
+    echo "deploy: overview staging needs review before replacement." >&2
+    return 1
+  fi
 
 # Refuse present backup staging, including a copy whose size is no longer growing.
 #
@@ -313,6 +327,14 @@ docker cp yoshling-web-1:/app/data/yoshling.db \
   "/root/yoshling-deploy-backup/yoshling-$(date +%Y%m%d-%H%M%S).db" 2>/dev/null || true
 
 echo "==> building $SERVICE"
+if [ "$SERVICE" = "web" ]; then
+  echo "==> building bounded world overview renderer"
+  if ! docker compose build minecraft-overview >/tmp/deploy-overview-build.log 2>&1; then
+    echo "deploy: overview renderer build failed; web has not been replaced." >&2
+    tail -30 /tmp/deploy-overview-build.log >&2
+    exit 1
+  fi
+fi
 if ! docker compose build "$SERVICE" >/tmp/deploy-build.log 2>&1; then
   echo "deploy: build failed" >&2
   tail -30 /tmp/deploy-build.log >&2

@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!download-assets.mjs
+!OfflineBlueMap.java
+!run.mjs
+!screenshot.mjs

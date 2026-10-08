@@ -1,3 +1,4 @@
+import type { MinecraftProfileOverviewDTO } from "./minecraft-profile-overview-types";
 /** Client-safe contracts. Display names never identify filesystem paths. */
 export const MINECRAFT_PROFILE_LOADERS = ["vanilla", "fabric", "forge", "neoforge", "quilt"] as const;
 export type MinecraftProfileLoader = typeof MINECRAFT_PROFILE_LOADERS[number];
@@ -32,6 +33,8 @@ export interface MinecraftProfileDTO {
   target: MinecraftProfileTarget;
   source: { kind: MinecraftProfileSourceKind; ref: string | null; versionId: string | null; title: string | null };
   coverUrl: string | null;
+  /** Independent saved-world rendering; absent on legacy/synchronous receipts. */
+  overview?: MinecraftProfileOverviewDTO;
   /** Exact active jar count when physically inspected; absent means unknown. */
   modCount?: number;
   revision: number;

@@ -10,11 +10,10 @@ import { GAMES, GAME_LIST } from "@/lib/games";
 import { profileSourceLabel } from "@/lib/minecraft-profiles-client";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
-import Image from "next/image";
 import { motion } from "motion/react";
 import { ArrowRight, Check, HardDrive, ShieldCheck, Users } from "lucide-react";
 import { usePrefersReducedMotion } from "@/components/motion";
-import { MinecraftProfileScene } from "@/components/minecraft-profile-scene";
+import { MinecraftProfileImage } from "@/components/minecraft-profile-image";
 import { ProfileDialogHero, ProfileDialogReveal } from "@/components/minecraft-profile-dialog-visuals";
 import styles from "@/components/minecraft-profile-dialog.module.css";
 
@@ -87,9 +86,8 @@ function PickerSession({ onOpenChange, initialProfileId, onSubmitted }: Omit<Par
             <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-sm font-semibold">Your worlds</h3><p className="text-[11px] text-muted-foreground">Choose one to continue</p></div>
             {list.loading ? <p role="status" className={styles.note}>Reading profiles…</p> : list.error ? <p role="alert" className={`${styles.note} ${styles.warning}`}>{list.error}</p> : list.data?.requiresAdoption ? <p role="alert" className={styles.note}>Keep the existing world as a profile before switching. <Link href="/minecraft" className="underline">Open Minecraft profiles</Link>.</p> : <div className="grid gap-3 sm:grid-cols-2">
               {list.data?.profiles.map(item => {
-                const variant = item.source.kind === "legacy" ? "adopt" : item.source.kind;
                 return <motion.button key={item.id} type="button" aria-pressed={chosen === item.id} disabled={item.status !== "ready" || sending} onClick={() => { setChosen(item.id); setConfirmation(null); }} whileHover={reduced ? undefined : { y: -3 }} whileTap={reduced ? undefined : { scale: .985 }} className={styles.profileTile}>
-                  <div className={styles.profileScene}>{item.coverUrl ? <Image src={item.coverUrl} alt="" fill sizes="(max-width: 640px) 100vw, 400px" className="object-cover" unoptimized /> : <><MinecraftProfileScene variant={variant} /><span className="absolute bottom-2 left-2 rounded bg-popover/90 px-2 py-1 text-[9px] text-foreground">No world screenshot yet</span></>}{chosen === item.id && <span className={styles.selectedMark}><Check className="size-3.5" aria-hidden="true" /></span>}</div>
+                  <div className={styles.profileScene}><MinecraftProfileImage profile={item} decorative compact sizes="(max-width: 640px) 100vw, 400px" />{chosen === item.id && <span className={styles.selectedMark}><Check className="size-3.5" aria-hidden="true" /></span>}</div>
                   <div className={styles.profileText}><span className="block break-words font-display text-base font-semibold tracking-tight">{item.name}</span><span className="mt-1.5 block break-words text-[11px] leading-relaxed text-muted-foreground">{item.target.mcVersion} · {item.target.loader} · {profileSourceLabel(item)}</span><span className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-muted/70 px-2 py-1 text-[10px] font-medium"><HardDrive className="size-3" aria-hidden="true" />{item.status === "ready" ? "Ready" : item.status === "preparing" ? "Preparation incomplete; check operations" : "Needs attention"}</span></div>
                 </motion.button>;
               })}

@@ -49,7 +49,7 @@ export function powerBlocker(ops: OperationView[], game: GameId): OperationView 
  * is only the warning that has to be as wide as the consequence.
  */
 export function liveFileOperations(ops: OperationView[]): OperationView[] {
-  return ops.filter((o) => !o.synthetic && !o.endedAt && !o.holdsPower);
+  return ops.filter((o) => !o.synthetic && !o.endedAt && !o.holdsPower && o.resources.some(resource => resource.startsWith("files:")));
 }
 
 /**

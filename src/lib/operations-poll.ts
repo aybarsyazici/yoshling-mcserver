@@ -7,9 +7,9 @@ const finite = (value: unknown): value is number => typeof value === "number" &&
 const game = (value: unknown) => typeof value === "string" && isGameId(value);
 const optional = (value: unknown, test: (input: unknown) => boolean) => value === undefined || test(value);
 const count = (value: unknown) => object(value) && finite(value.done) && value.done >= 0 && optional(value.total, item => finite(item) && item >= 0) && text(value.noun);
-const kinds = new Set(["power", "settings", "backup.create", "backup.restore", "backup.delete", "mods.apply", "mods.install", "mods.update", "world.upload", "world.reset", "game.update", "profile.prepare", "profile.adopt", "profile.switch", "profile.delete", "boot"]);
+const kinds = new Set(["power", "settings", "backup.create", "backup.restore", "backup.delete", "mods.apply", "mods.install", "mods.update", "world.upload", "world.reset", "game.update", "profile.prepare", "profile.adopt", "profile.switch", "profile.delete", "profile.overview", "boot"]);
 const outcomes = new Set(["ok", "partial", "nothing", "failed", "unverified"]);
-const resources = new Set(["power", "files:minecraft", "files:7dtd", "files:zomboid", "auth:whitelist"]);
+const resources = new Set(["power", "files:minecraft", "files:7dtd", "files:zomboid", "auth:whitelist", "render:minecraft-overview"]);
 
 function operation(value: unknown): value is OperationView {
   if (!object(value) || !text(value.id) || !value.id || !text(value.kind) || !kinds.has(value.kind) ||

@@ -230,6 +230,8 @@ export async function createPreparedMinecraftProfile(input: CreateMinecraftProfi
             if (stored.length !== rows.length || rows.some(row => !stored.some(value => value.fileName === row.fileName && value.versionId === row.versionId))) throw new Error("Prepared mod inventory readback failed.");
           }
           active(op); created = await updateProfileRecord(created.id, created.revision, { status: "ready", preparationError: null });
+          const { notifyMinecraftProfileOverviewReady } = await import("./minecraft-profile-overview-queue");
+          await notifyMinecraftProfileOverviewReady(created.id, op);
           op.fact({ label: "Profile", value: created.name }); op.fact({ label: "Files", value: `${plan.files.length} published and read back` });
           op.fact({ label: "Target", value: `${plan.target.mcVersion} / ${plan.target.loader}${plan.target.loaderVersion ? ` ${plan.target.loaderVersion}` : ""} / ${plan.target.javaVariant}` });
           if (plan.skipped) op.fact({ label: "Client files", value: `${plan.skipped} excluded from the server` });

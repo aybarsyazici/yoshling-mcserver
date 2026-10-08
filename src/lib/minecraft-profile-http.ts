@@ -92,6 +92,8 @@ export function requireInactiveMinecraftProfile(runtime: MinecraftProfileRuntime
 
 export async function minecraftProfileDTO(record: MinecraftProfileRecord): Promise<MinecraftProfileDTO> {
   const dto = toMinecraftProfileDTO(record);
+  const { readMinecraftProfileOverview } = await import("./minecraft-profile-overview-queue");
+  dto.overview = await readMinecraftProfileOverview(record);
   try {
     const root = await minecraftProfileServerPath(record.id, "", { allowMissing: false });
     dto.modCount = (await activeModJars(await minecraftProfileServerPath(record.id, "mods"), root)).length;

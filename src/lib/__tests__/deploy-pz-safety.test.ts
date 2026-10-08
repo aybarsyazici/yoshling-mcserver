@@ -23,7 +23,13 @@ async function deploy(options: { service?: string; running?: string; afterBuild?
   const script = await readFile(path.resolve(__dirname, "../../../scripts/deploy.sh"), "utf8");
   const body = script.match(/<<'REMOTE'\n([\s\S]*?)\nREMOTE/)?.[1];
   if (!body) throw new Error("remote deploy body missing");
-  const remote = body.replace("cd /opt/yoshling", `cd ${quote(root)}`).replaceAll("/tmp/deploy-build.log", path.join(root, "build.log"))
+  const scanner = (await readFile(path.resolve(__dirname, "../../../scripts/check-minecraft-overview-staging.mjs"), "utf8")).replace('scanMinecraftOverviewStaging("/app/data/minecraft-profile-overviews")', `scanMinecraftOverviewStaging(${JSON.stringify(path.join(root, "data/minecraft-profile-overviews"))})`);
+  await writeFile(path.join(root, "overview-scan.mjs"), scanner);
+  const remote = body.replace("cd /opt/yoshling", `cd ${quote(root)}`).replaceAll("/opt/yoshling", root).replaceAll("/tmp/deploy-build.log", path.join(root, "build.log"))
+    .replaceAll("/tmp/deploy-overview-build.log", path.join(root, "overview-build.log"))
+    .replaceAll("/root/yoshling-overview-deploy-scan.mjs", path.join(root, "overview-scan.mjs"))
+    .replaceAll("/root/yoshling-deploy-backup", path.join(root, "backup"))
+    .replaceAll("/root/y.bundle", path.join(root, "bundle"))
     .replaceAll("/var/lib/docker/volumes/yoshling_web-data/_data", path.join(root, "data"))
     .replaceAll("/var/lib/docker/volumes/yoshling_mc-data/_data", path.join(root, "mc-data"));
   await writeFile(path.join(root, "remote.sh"), remote);
@@ -42,6 +48,7 @@ if [ "$1" = inspect ]; then
 elif [ "$1" = image ]; then echo sha256:built
 elif [ "$1" = compose ] && [ "$2" = build ]; then touch "$AUDIT_BUILT"
 elif [ "$1" = compose ] && [ "$2" = create ]; then touch "$AUDIT_CREATED"
+elif [ "$1" = exec ]; then "$TEST_NODE" --input-type=module -
 fi
 `, { mode: 0o755 });
   await writeFile(path.join(bin, "git"), '#!/usr/bin/env bash\nif [ "$1" = rev-parse ]; then echo audited-sha; fi\n', { mode: 0o755 });
@@ -53,6 +60,7 @@ fi
     const result = await execFileAsync("bash", [path.join(root, "remote.sh"), options.service || "zomboid", "", "audited-sha"], {
       env: {
         ...process.env, PATH: `${bin}:${process.env.PATH}`, AUDIT_CALLS: log,
+        TEST_NODE: process.execPath,
         AUDIT_CREATED: path.join(root, "created"), AUDIT_BUILT: path.join(root, "built"),
         AUDIT_RUNNING: options.running || "false", AUDIT_AFTER_BUILD: options.afterBuild || options.running || "false",
         AUDIT_INSPECT_FAIL: options.inspectFails ? "1" : "0", AUDIT_STARTS_ON_CREATE: options.startsOnCreate ? "1" : "0",

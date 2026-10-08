@@ -1,0 +1,5 @@
+node_modules/
+.assets/
+.cache/
+proof-output/
+*.log

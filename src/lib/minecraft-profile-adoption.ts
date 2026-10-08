@@ -134,6 +134,8 @@ export async function adoptLegacyMinecraftProfile(input: {
         op.fact({ label: "Preserved", value: "the complete legacy server remains intact at the volume root" });
         await prepareMinecraftProfileControlSettings(profile.id, op);
         profile = await updateProfileRecord(profile.id, profile.revision, { status: "ready", preparationError: null });
+        const { notifyMinecraftProfileOverviewReady } = await import("./minecraft-profile-overview-queue");
+        await notifyMinecraftProfileOverviewReady(profile.id, op);
         activated = true;
         await recreateMinecraftProfileForOperation(op, minecraftProfileComposeSettings(profile.id, target));
         await commitProfileActivation(profile.id, before.revision, { adoptLegacyInventory: true });

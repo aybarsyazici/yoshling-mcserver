@@ -20,6 +20,7 @@ export type OperationKind =
   | "profile.adopt"
   | "profile.switch"
   | "profile.delete"
+  | "profile.overview"
   /**
    * Synthetic, derived from the boot probe — never entered by a route and never
    * admissible. A game container booting is work that outlives this Node process,
@@ -36,7 +37,7 @@ export type OperationKind =
  * declaring them all reproduces today's total exclusivity in one line instead of
  * reasoning about which world happens to be running.
  */
-export type OperationResource = "power" | `files:${GameId}` | "auth:whitelist";
+export type OperationResource = "power" | `files:${GameId}` | "auth:whitelist" | "render:minecraft-overview";
 
 export type StepKind = "running" | "done" | "noop" | "failed";
 

@@ -558,6 +558,10 @@ async function createMinecraft(
       ...provenance(actor),
     };
     const sealed = await sealArchive(op, { game: "minecraft", target, filename, manifest });
+    if (context.profileId && flushed && sealed.sha256 && sealed.size) {
+      const { notifyMinecraftProfileOverviewBackup } = await import("./minecraft-profile-overview-queue");
+      await notifyMinecraftProfileOverviewBackup({ profileId: context.profileId, archivePath: target, name: filename, bytes: sealed.size, sha256: sealed.sha256, flushed: true, snapshotAt: manifest.createdAt }, op);
+    }
 
     const facts: OperationFact[] = [
       ...sealed.facts,

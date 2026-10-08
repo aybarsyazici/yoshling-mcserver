@@ -125,6 +125,26 @@ export async function register() {
       setTimeout(tick, 60_000);
     }
 
+    // Generated default covers use saved copies and a bounded non-game worker.
+    // This timer does not save, start or stop a world.
+    if ((process.env.MC_OVERVIEWS ?? "true") !== "false") {
+      let overviewTickRunning = false;
+      const overviewTick = async () => {
+        if (overviewTickRunning) return;
+        overviewTickRunning = true;
+        try {
+          const { tickMinecraftProfileOverviews } = await import("@/lib/minecraft-profile-overview-queue");
+          await tickMinecraftProfileOverviews();
+        } catch (error) {
+          console.error("[minecraft-overviews] tick failed:", error instanceof Error ? error.message : "unknown overview error");
+        } finally { overviewTickRunning = false; }
+      };
+      setTimeout(() => {
+        void overviewTick();
+        setInterval(overviewTick, 60_000);
+      }, 90_000);
+    }
+
     // ── automatic backups ───────────────────────────────────────────────────
     //
     // Backups were manual-only: the only archive that ever existed was one somebody

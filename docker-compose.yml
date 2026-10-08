@@ -318,6 +318,43 @@ services:
     tty: true
     stdin_open: true
 
+  # One-shot world overview renderer. The dashboard admits one bounded job and
+  # supplies private snapshot subpaths; this service never mounts a live game.
+  minecraft-overview:
+    profiles: ["tools"]
+    build:
+      context: ./tools/minecraft-overview
+    image: yoshling/minecraft-overview:5.28
+    user: "0:0"
+    labels:
+      yoshling.overview.worker: "1"
+    network_mode: "none"
+    volumes:
+      - type: volume
+        source: web-data
+        target: /input
+        read_only: true
+        volume:
+          subpath: "${MC_OVERVIEW_INPUT_SUBPATH:-minecraft-profile-overviews/.empty/input}"
+      - type: volume
+        source: web-data
+        target: /output
+        volume:
+          subpath: "${MC_OVERVIEW_OUTPUT_SUBPATH:-minecraft-profile-overviews/.empty/output}"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    restart: "no"
+    logging:
+      driver: "json-file"
+      options: { max-size: "5m", max-file: "1" }
+
   web:
     build: .
     ports:
@@ -325,6 +362,7 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      MC_OVERVIEWS: "${MC_OVERVIEWS:-true}"
       DOCKER_HOST: unix:///var/run/docker.sock
       MC_SERVER_DIR: "/minecraft"
       SDTD_SERVER_DIR: "/sevendtd"
