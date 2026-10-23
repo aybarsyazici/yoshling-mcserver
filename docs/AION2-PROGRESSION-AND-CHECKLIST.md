@@ -69,4 +69,5 @@ The shared validator checks cross-catalog activity references. The runtime and C
 check source hashes, versions and expiry, including ISO checklist source timestamps.
 Embedding similarity is a retrieval aid; it cannot approve a strategy or a quota.
 Run the documented source check, embedding update and repository checks after review.
-The three-table migration remains manual and unapplied in production.
+The manual three-table migration was applied and verified in production on
+2026-10-23; do not reapply it. See the [rollout record](AION2-DEPLOYMENT.md).

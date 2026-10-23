@@ -5,7 +5,9 @@ backlog or a claim that every finding below remains unfixed. Current behavior be
 in `AION2-HELPER.md`; the implementation and its regression tests determine remediation
 status. Review covered the initial recipes, eligibility rules, observed official
 equipment/skill data, current client-data references, and the October 7/14/21 Global
-patches. No production migration, deployment, purchase or character change was made.
+patches. No production migration, deployment, purchase or character change was made
+during this review. The later [production rollout](AION2-DEPLOYMENT.md) is recorded
+separately.
 
 ## Evidence and limits
 

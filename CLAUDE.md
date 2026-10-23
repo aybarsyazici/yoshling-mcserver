@@ -61,7 +61,7 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 
 Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft spotlight onboarding, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
 
-`/aion2` is a separate authenticated character helper. Lists are account-owned, with public armory polling, history and reviewed PvE guidance. Its additive tracking migration is manual. Versioned knowledge has source/patch pins, expiry and change detection; see `docs/AION2-HELPER.md` before modifying advice or deploying it.
+`/aion2` is a separate authenticated character helper. Lists are account-owned, with public armory polling, history and reviewed PvE guidance. Its three-table tracking migration was applied on 2026-10-23; no migration runs on boot. Versioned knowledge has source/patch pins, expiry and change detection; see `docs/AION2-HELPER.md` before modifying advice or deploying it.
 
 ## Required safety and success rules
 
@@ -138,16 +138,7 @@ Docker published ports bypass UFW INPUT. The host firewall must protect TCP 3000
 
 ### Applying DB migrations in production
 
-No migration runs on boot. Back up `/app/data/yoshling.db` before schema changes. Apply reviewed SQL with the libSQL client inside web, then query the schema/data to prove the change. Confirm compatibility with the deployed generated client before dropping columns.
-
-```bash
-docker cp yoshling-web-1:/app/data/yoshling.db /root/yoshling-deploy-backup/
-docker exec yoshling-web-1 node -e '
-  const {createClient}=require("/app/node_modules/@libsql/client");
-  const c=createClient({url:"file:/app/data/yoshling.db"});
-  c.execute("REVIEWED SQL HERE").then(()=>c.close()).catch(e=>{console.error(e.message);process.exitCode=1});
-'
-```
+No migration runs on boot. Create a consistent SQLite backup before schema changes; a raw copy during writes is insufficient. Verify backup integrity and a private host copy before applying reviewed SQL in a libSQL write transaction inside web. Read back columns, indexes, foreign keys and existing schema/data. Confirm client compatibility before dropping columns. The [Aion rollout record](docs/AION2-DEPLOYMENT.md) documents the verified backup/migration and live deployment.
 
 Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.md`; do not reapply historical ALTER statements. Removing unused 7DTD DB columns remains a separate manual migration with client-first ordering.
 

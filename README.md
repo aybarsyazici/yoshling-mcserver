@@ -30,6 +30,8 @@ track public armory observations and see reviewed PvE progression guidance. Its
 knowledge base records sources and review dates and withholds stale advice.
 The visual polish adds Catppuccin accents to roster selection, character
 metrics, daily/weekly reports and timer contexts, with status labels alongside colour.
+The helper is deployed at [yoshling.xyz/aion2](https://yoshling.xyz/aion2).
+See [rollout verification](docs/AION2-DEPLOYMENT.md) for the production evidence and limits.
 See [Aion 2 setup, knowledge updates and database rollout](docs/AION2-HELPER.md)
 before enabling saved characters on an existing installation.
 

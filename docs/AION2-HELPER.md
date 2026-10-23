@@ -218,7 +218,10 @@ It adds `Aion2Character`, `Aion2Snapshot` and `Aion2ChecklistCompletion`, with a
 deletion, including nullable reported Odyle/context timestamp columns. There are no startup migrations. A missing schema returns a clear unavailable
 response; existing hosting routes do not query these tables.
 
-For production: follow CLAUDE.md's backup/manual-migration procedure, apply the reviewed
+Production applied this migration on 2026-10-23; do not reapply it. See the
+[rollout record](AION2-DEPLOYMENT.md) for schema and backup evidence.
+
+For a fresh installation: follow CLAUDE.md's backup/manual-migration procedure, apply the reviewed
 SQL, verify all three tables/indexes/foreign keys and existing user/game data, then deploy
 the generated client and web via `scripts/deploy.sh --service web --verify 'Track your progress'`.
 Read actual production state first; the quoted literal is present in the helper bundle.
@@ -267,7 +270,10 @@ returned PNG/HTTP 200. Owned, target, path and next-unlock states have distinct 
 and labels. Asset-state selection and failure recovery have mutation-tested regressions;
 no paths are guessed. Artwork does not establish graph adjacency.
 
-No production migration or deployment has been performed. NCSOFT's public web endpoints
+The three-table migration and web deployment completed on 2026-10-23. See the
+[production rollout record](AION2-DEPLOYMENT.md) for backup, image, HTTP and unchanged
+game-state evidence. A genuine signed-in production session remains unverified.
+NCSOFT's public web endpoints
 have no published developer stability/rate guarantee identified in this research.
 Invitation revocation removes access immediately on session resolution, but public
 tracking rows continue polling until the account/rows are removed or tracking is paused.

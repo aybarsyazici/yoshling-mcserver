@@ -1072,3 +1072,16 @@ that restart preceded this copy rollout. `.env` stayed mode 0600 / 1,380 bytes
 with hash `495f33b0e80249bedb755f1216e4322401f713a1967110ba38b234aad4845ca7`.
 Main memory remains 166 lines / 2,215 words / 17,159 bytes; current copy guidance
 is concise there and dated evidence remains here.
+
+## 2026-10-23 — Aion 2 helper rollout
+
+Deployed the authenticated character helper with reviewed step plans, official
+images, Daevanion comparison, recurring checklists, event timers and configurable
+browser alerts. Added Catppuccin category accents and retained functional copy.
+All 3,759 tests, TypeScript, production build, lint and an actual Docker build
+passed, with the documented existing warnings. Applied the three-table additive
+migration after a consistent, independently verified private backup; original
+schema/counts and hosted-game container state were preserved. The running image,
+public helper bundle, login gate and private API responses were verified.
+Signed-in production account flows and OS notification delivery remain unverified.
+Exact backup, image, HTTP evidence and limits: [AION2-DEPLOYMENT.md](AION2-DEPLOYMENT.md).
