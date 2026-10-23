@@ -272,7 +272,8 @@ no paths are guessed. Artwork does not establish graph adjacency.
 
 The three-table migration and web deployment completed on 2026-10-23. See the
 [production rollout record](AION2-DEPLOYMENT.md) for backup, image, HTTP and unchanged
-game-state evidence. A genuine signed-in production session remains unverified.
+game-state evidence. The user confirmed production Discord sign-in after the issuer
+fix; live helper add/refresh/checklist operations remain unverified.
 NCSOFT's public web endpoints
 have no published developer stability/rate guarantee identified in this research.
 Invitation revocation removes access immediately on session resolution, but public

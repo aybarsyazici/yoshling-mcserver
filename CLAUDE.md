@@ -150,7 +150,7 @@ Applied migration history and worked SQL are in `CLOSED.md` and `MEMORY-HISTORY.
 - Minecraft profile contracts and remaining rollout work are in `MINECRAFT-PROFILES.md`. Different targets use separate profiles; profile version/loader editing is unavailable after preparation.
 - Default Minecraft covers use isolated saved-world rendering for 26.1.2/1.21.1; custom uploads/captures take priority. Source, worker limits and recovery are in `MINECRAFT-OVERVIEWS.md`.
 - Player-camera capture uses an opt-in Fabric 26.1.2 client companion; additional client targets and a real graphical capture trial remain open. Read `MINECRAFT-SCREENSHOTS.md` before changing pairing/publication.
-- Verification gaps: genuine Discord login/denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
+- Verification gaps: Discord denial/revocation, controlled restores, new 7DTD telnet completion/save protocol after rotation, real Minecraft/7DTD joins, and complete mobile/keyboard/contrast coverage.
 - Infrastructure/manual work: reproduce the host firewall unit, assess retained secret-bearing images/cache, verify old-host decommissioning, and owner-managed credential rotation.
 
 Update these groups after each verified change; do not append closed stories here.

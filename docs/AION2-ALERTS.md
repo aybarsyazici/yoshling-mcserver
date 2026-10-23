@@ -82,8 +82,8 @@ timed out during a parallel build run; its timeout/test was not changed. Notific
 guard mutations were restored and proved green. Actual OS delivery, audible hardware
 output, mobile and sleeping-device behavior are not established by offline tests.
 The web deployment completed on 2026-10-23; see the
-[rollout record](AION2-DEPLOYMENT.md). Production sign-in and actual OS notification
-delivery remain unverified.
+[rollout record](AION2-DEPLOYMENT.md). The user confirmed production Discord sign-in
+after the issuer fix. Actual OS notification delivery remains unverified.
 
 In-app browser preview check: the headline is functional; 15 minutes / Bell / 5%
 were saved and verified after reload. Preview sound activated the AudioContext for

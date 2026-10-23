@@ -1083,7 +1083,9 @@ passed, with the documented existing warnings. Applied the three-table additive
 migration after a consistent, independently verified private backup; original
 schema/counts and hosted-game container state were preserved. The running image,
 public helper bundle, login gate and private API responses were verified.
-Signed-in production account flows and OS notification delivery remain unverified.
+At initial rollout, signed-in production account flows and OS notification delivery
+were unverified. Later Discord login confirmation is recorded below; live helper
+add/refresh/checklist operations and OS notification delivery remain unverified.
 Exact backup, image, HTTP evidence and limits: [AION2-DEPLOYMENT.md](AION2-DEPLOYMENT.md).
 
 ## 2026-10-23 — Discord login callback issuer
@@ -1121,6 +1123,9 @@ client-ID/secret references. Public HTTP checks confirmed the login page, protec
 helper redirect and JSON 401/private-no-store APIs. All game IDs, images, states,
 start/finish timestamps and restart counts matched the fresh incident baseline.
 
-The user was asked to start a fresh production sign-in after deployment; genuine
-Discord authorization/logout readback remains pending. Mocked callback completion
-and a correct running configuration do not establish a real account login.
+After deployment, the user confirmed a fresh Discord authorization and production
+sign-in after logout succeeded. A subsequent server-log check found zero Auth.js
+errors or invitation-policy refusals since the corrected web image started.
+This confirms the reported real-account login path. Denial/revocation, explicit
+logout invalidation readback, helper mutations and OS notification delivery remain
+unverified.

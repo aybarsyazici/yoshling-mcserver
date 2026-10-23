@@ -50,6 +50,11 @@ and rejects missing/corrupt verifier cookies. Removing the issuer setting reprod
 the failure; restoring it passes. The separate real-SQLite account suite covers
 registration, ownership and current invitation checks.
 
+On 2026-10-23, the user confirmed a fresh production Discord authorization/sign-in
+after logout succeeded following this fix. See the
+[incident record](CLOSED.md#2026-10-23--discord-login-callback-issuer).
+Denied/revoked accounts and explicit logout invalidation remain separate live checks.
+
 ## Policy storage and editing
 
 `WHITELIST_FILE` defaults to `/app/data/whitelist.json`. Its format is a JSON array of

@@ -118,9 +118,12 @@ Minecraft remained `created`; 7DTD and PZ remained `exited`. Before/after compar
 matched each game's full container ID, image, status, start/finish timestamps and
 restart count. No game lifecycle operation, file edit or restore was submitted.
 
-Production Discord login, adding/refreshing a character and saving checklist reports
-through a real account remain unverified. Local persistence/isolation tests cover
-those contracts. Actual OS notification delivery, audible hardware output and
+Production Discord login was unverified at this initial rollout. After the later
+[issuer fix](CLOSED.md#2026-10-23--discord-login-callback-issuer), the user confirmed
+fresh Discord authorization and sign-in after logout succeeded. Adding/refreshing
+a character and saving checklist reports through a real account remain unverified;
+local persistence/isolation tests cover those contracts. Actual OS notification
+delivery, audible hardware output and
 sleeping-device behavior remain unverified; reminders require the helper page to
 remain open. Public armory fields still exclude Odyle, inventory and reset progress.
 
