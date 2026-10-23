@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { sanitizeStandalone, verifyBuildArtifact } from "../scripts/verify-build-artifact.mjs";
@@ -27,6 +27,18 @@ afterEach(async () => {
 });
 
 describe("deployment artifact boundary", () => {
+  it("admits the runtime semantic helper without admitting the credentialed embedding builder", async () => {
+    const [ignore, runtime] = await Promise.all([
+      readFile(path.join(process.cwd(), ".dockerignore"), "utf8"),
+      readFile(path.join(process.cwd(), "src/lib/aion2-semantic-evidence.ts"), "utf8"),
+    ]);
+    const rules = ignore.split(/\r?\n/).map((line) => line.trim());
+    expect(runtime).toContain("../../scripts/aion2-semantic-core.mjs");
+    expect(rules).toContain("scripts/**");
+    expect(rules).toContain("!scripts/aion2-semantic-core.mjs");
+    expect(rules).not.toContain("!scripts/aion2-embed.mjs");
+  });
+
   it("accepts the required runtime structure", async () => {
     const root = await artifact();
     await file(root, "node_modules/@prisma/client/runtime/query_compiler_fast_bg.sqlite.mjs");

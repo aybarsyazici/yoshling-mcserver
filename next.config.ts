@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
   },
   images: {
     remotePatterns: [
+      { protocol: "https", hostname: "assets.playnccdn.com", pathname: "/static-aion2-gamedata/resources/**" },
+      { protocol: "https", hostname: "assets.playnccdn.com", pathname: "/static-aion2/characters/img/daevanion/**" },
+      { protocol: "https", hostname: "profileimg.plaync.com", pathname: "/game_profile_images/aion2global/images" },
       { protocol: "https", hostname: "cdn.modrinth.com" },
       { protocol: "https", hostname: "cdn-raw.modrinth.com" },
       { protocol: "https", hostname: "cdn.discordapp.com" },

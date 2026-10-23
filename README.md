@@ -24,6 +24,15 @@ Live at **https://yoshling.xyz**.
 
 ## Running it locally
 
+The dashboard also includes an **Aion 2 helper** at `/aion2`, reached through the
+application switcher. Each signed-in account can save and switch between characters,
+track public armory observations and see reviewed PvE progression guidance. Its
+knowledge base records sources and review dates and withholds stale advice.
+The visual polish adds Catppuccin accents to roster selection, character
+metrics, daily/weekly reports and timer contexts, with status labels alongside colour.
+See [Aion 2 setup, knowledge updates and database rollout](docs/AION2-HELPER.md)
+before enabling saved characters on an existing installation.
+
 ```bash
 # Use supported Node 22; this is the installation on the development machine.
 export PATH="$HOME/.local/share/mise/installs/node/22.18.0/bin:$PATH"

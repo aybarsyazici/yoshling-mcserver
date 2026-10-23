@@ -1,5 +1,7 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { startAionTracking } = await import("./lib/aion2-tracker-start");
+    startAionTracking();
     const { exec } = await import("child_process");
     const { promisify } = await import("util");
     const { readFile, writeFile } = await import("fs/promises");

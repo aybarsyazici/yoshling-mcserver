@@ -1,0 +1,395 @@
+{
+  "version": "2026.10.23.1",
+  "reviewedAt": "2026-10-23T00:00:00.000Z",
+  "expiresAt": "2026-10-28T00:00:00.000Z",
+  "resets": {
+    "eu": {
+      "dailyHourUTC": 7,
+      "weeklyDayUTC": 3,
+      "weeklyHourUTC": 7,
+      "sourceIds": [
+        "reset-meta",
+        "current-client-checklist"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "checklist-sheet",
+      "title": "Original Checklist tab",
+      "url": "https://docs.google.com/spreadsheets/d/1bNxC1wd0S_ILGYAyWnO0aTo_G_AOrjkv7bTcOj_NRz8/export?format=csv&gid=1177705857",
+      "fetchUrl": "https://docs.google.com/spreadsheets/d/1bNxC1wd0S_ILGYAyWnO0aTo_G_AOrjkv7bTcOj_NRz8/export?format=csv&gid=1177705857",
+      "sha256": "b822354894a23cf5c529511a13c8f43f21ea48a0c6dbfe3329f4d99789c55709",
+      "kind": "community-guide",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "current-client-checklist",
+      "title": "Current Global client activity checklist",
+      "url": "https://aion2data.com/checklist",
+      "fetchUrl": "https://aion2data.com/checklist",
+      "sha256": "ca62a2e14a32d82748d5e19c444ee3fb52cab5d29242a607e646bb905ace50f5",
+      "kind": "client-data-interpretation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "current-client-alts",
+      "title": "Client account and character limits",
+      "url": "https://aion2data.com/alts",
+      "fetchUrl": "https://aion2data.com/alts",
+      "sha256": "ae9382a7f205116f320ae7adef6f415f3824c04edefe583d6789ba6e70e94b0e",
+      "kind": "client-data-interpretation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "command-home-shop",
+      "title": "Home-region Command scroll shop",
+      "url": "https://aion2data.com/shops/1008-command-shop-quest-scroll",
+      "fetchUrl": "https://aion2data.com/shops/1008-command-shop-quest-scroll",
+      "sha256": "ab3960450db275ee6cd32f80dd5d3dcb41de9de552b4b9ff4354a77b37b5cc7d",
+      "kind": "client-data-interpretation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "command-abyss-asmo-shop",
+      "title": "Asmodian Lower Abyss Command shop",
+      "url": "https://aion2data.com/shops/2009-command-shop-abyss-quest-scroll-asmodian-row",
+      "fetchUrl": "https://aion2data.com/shops/2009-command-shop-abyss-quest-scroll-asmodian-row",
+      "sha256": "079b66e4704d057864aaceef65fc7e80f3517c04dd2dd2ec1008229457770f85",
+      "kind": "client-data-interpretation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "nightmare-shop",
+      "title": "Nightmare Trade Shop",
+      "url": "https://aion2data.com/shops/990003-trade-shop-nightmare",
+      "fetchUrl": "https://aion2data.com/shops/990003-trade-shop-nightmare",
+      "sha256": "aac466fd0a44fa30b56db0b2230a9f9fb2208594b98087e054d160cdb20bf07b",
+      "kind": "client-data-interpretation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "reset-meta",
+      "title": "EU reset clock observations",
+      "url": "https://aion2-meta.com/timers/",
+      "fetchUrl": "https://aion2-meta.com/timers/",
+      "sha256": "efc170e87aefb48feaccedf9a73cde90437dd85052dcd0b4f070f0a5cdbc5620",
+      "kind": "community-observation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "command-abyss-elyos-shop",
+      "title": "Elyos Lower Abyss Command shop",
+      "url": "https://aion2data.com/shops/1009-command-shop-abyss-quest-scroll-elyos-row",
+      "fetchUrl": "https://aion2data.com/shops/1009-command-shop-abyss-quest-scroll-elyos-row",
+      "sha256": "64c299b6114781409f5788a35c6e3188240668b741c9b83110ac132aeb6c0196",
+      "kind": "client-data-interpretation",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "content-sheet",
+      "title": "Original Content Guide reward reference",
+      "url": "https://docs.google.com/spreadsheets/d/1bNxC1wd0S_ILGYAyWnO0aTo_G_AOrjkv7bTcOj_NRz8/edit?gid=0",
+      "fetchUrl": "https://docs.google.com/spreadsheets/d/1bNxC1wd0S_ILGYAyWnO0aTo_G_AOrjkv7bTcOj_NRz8/export?format=csv&gid=0",
+      "sha256": "b785a5b3d5021028fd5590da55d898aefe75bdf5fc3d15c9f20e41127a5db1e9",
+      "kind": "community-guide",
+      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    }
+  ],
+  "activities": [
+    {
+      "id": "duty-missions",
+      "name": "Duty Missions",
+      "cadence": "daily",
+      "scope": "server",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Open Escape → Journal → Duty. Complete up to the five shared-server Duty missions you want. Check rewards before accepting; redraw costs Kina and becomes more expensive.",
+      "rewardTags": [
+        "Abyss Points",
+        "Kina (Bound)",
+        "Random bonus reward"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "daily-dungeon",
+      "name": "Daily Dungeon",
+      "cadence": "weekly",
+      "scope": "server",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 30,
+      "instruction": "Open Escape → Daily Dungeon and check the remaining shared entries. The reviewed base allowance is 14 entries per week per server, not two daily refills. Complete suitable available runs before Wednesday reset; confirm your actual remaining allowance in game.",
+      "rewardTags": [
+        "Enhance Stones; amount depends on score"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "command-missions",
+      "name": "Command scrolls: home region",
+      "cadence": "weekly",
+      "scope": "server",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Visit the Command Merchant in your main city. Check the faction home-region Command scrolls: Altgard for Asmodians, Verteron for Elyos. Buy only the scrolls you plan to use; consume a scroll to start a Command quest. Quests can be completed later. The reviewed weekly shop allowance is 12 scroll purchases per server, not a cap on completed quests. Check the actual remaining shop allowance before buying.",
+      "rewardTags": [
+        "Abyss Points",
+        "Quest-specific bonus rewards"
+      ],
+      "sourceIds": [
+        "command-home-shop",
+        "current-client-checklist"
+      ]
+    },
+    {
+      "id": "abyss-command-missions",
+      "name": "Command scrolls: Lower Abyss",
+      "cadence": "weekly",
+      "scope": "server",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Visit your faction’s Lower Abyss Command Merchant and review Normal, Veteran, Elite and Special scrolls. Each tier has five weekly purchases per server: 20 across the four tiers. Buy only quests you can complete and check the PvP-area risk. These are shop allowances, not quest-completion limits.",
+      "rewardTags": [
+        "Abyss Points",
+        "Quest-specific bonus rewards"
+      ],
+      "sourceIds": [
+        "command-abyss-asmo-shop",
+        "current-client-checklist",
+        "command-abyss-elyos-shop"
+      ]
+    },
+    {
+      "id": "ascension-trial",
+      "name": "Ascension Trial",
+      "cadence": "weekly",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Open Escape → Ascension Trial. Select a difficulty your current Gear Score and combat ability support, and use available entries before Wednesday reset. Entries are shared among the six Trial dungeons. The reviewed base allowance is 3 entries per character per week across those dungeons; confirm the actual remaining entries.",
+      "rewardTags": [
+        "Manastones",
+        "Soulstones",
+        "Pets",
+        "Enhance Stones",
+        "Difficulty and achievement rewards"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts",
+        "content-sheet"
+      ]
+    },
+    {
+      "id": "nightmare",
+      "name": "Nightmare attempts",
+      "cadence": "daily",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Open Escape → Nightmare. Review the available attempts and use them on a suitable stage before the bank reaches its cap. Check clear-grade rewards. The reviewed bank adds 2 attempts per daily reset and stores up to 14; unused attempts carry over.",
+      "rewardTags": [
+        "Phantasmal Fragments",
+        "First-clear or achievement rewards when available"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "shugo-festival-server",
+      "name": "Shugo Festival reward keys: server",
+      "cadence": "daily",
+      "scope": "server",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Open Main Menu → Shugo Festival. Join an hourly game during the three-minute entry window and review the reward cards. Use available reward keys before the shared bank caps; participation and reward claims are separate. The reviewed base server pool adds 3 keys per daily reset and stores up to 12; membership can alter it.",
+      "rewardTags": [
+        "Centuryroot Tokens",
+        "Enhance Stones",
+        "Abyss Points",
+        "Random reward cards"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "dimensional-invasion",
+      "name": "Dimensional Invasion reward key",
+      "cadence": "daily",
+      "scope": "server",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Watch the :30 event notice and enter within its three-minute window. Review the reward selection and available keys before claiming. Use keys before their shared bank caps. The reviewed server pool adds 1 key per daily reset and stores up to 7.",
+      "rewardTags": [
+        "Centuryroot Tokens",
+        "Enhance Stones",
+        "Abyss Points",
+        "Random reward cards"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "nightmare-weekly-shop",
+      "name": "Nightmare shop: weekly goods",
+      "cadence": "weekly",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Open the Nightmare Trade Shop and review weekly goods you can afford with Phantasmal Fragments. Soul Codex packs have five purchases per week and Soul Codex: Reset has three. Leave permanent/lifetime-limit goods out of a weekly counter.",
+      "rewardTags": [
+        "Soul Codex",
+        "Soul Codex: Reset"
+      ],
+      "sourceIds": [
+        "nightmare-shop"
+      ]
+    },
+    {
+      "id": "shugo-festival-character",
+      "name": "Shugo Festival reward keys: character",
+      "cadence": "daily",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Check the character-specific Festival reward-key pool separately from the shared-server pool. Spend only available keys; leave membership modifications manual. The separate character pool adds 4 keys per daily reset and stores up to 28.",
+      "rewardTags": [
+        "Festival reward cards"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "subjugation",
+      "name": "Subjugation",
+      "cadence": "weekly",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Review available Subjugation entries and choose an eligible dungeon; the four dungeons share this allowance. The reviewed base allowance is 3 entries per character per week across all four; confirm the actual remaining entries.",
+      "rewardTags": [
+        "Read current dungeon reward panel"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "conquest-reward-pools",
+      "name": "Conquest reward-claim pools",
+      "cadence": "daily",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Review the reward-claim pool of the Conquest dungeon you chose. Each claimed cube also costs Odyle. Check your separate shared-server unclaimed-clear allowance; this task does not imply free entries or a live balance. This reviews a per-dungeon bank (2 added daily, up to 14 stored), not a weekly entry limit.",
+      "rewardTags": [
+        "Chosen dungeon gear and materials"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    },
+    {
+      "id": "transcendence-reward-pools",
+      "name": "Transcendence reward-claim pools",
+      "cadence": "daily",
+      "scope": "character",
+      "regions": [
+        "eu"
+      ],
+      "minimumLevel": 45,
+      "instruction": "Review Deus Research Base or Shattered Arkanis claim availability and your Odyle before claiming rewards. Choose the stage that supports your current plan. The reviewed per-dungeon bank adds 2 claims daily and stores up to 4; a normal reward cube costs 40 Odyle.",
+      "rewardTags": [
+        "Arcana",
+        "Materials"
+      ],
+      "sourceIds": [
+        "current-client-checklist",
+        "current-client-alts"
+      ]
+    }
+  ],
+  "limitations": [
+    "Checkmarks are manual reports, not observed rewards, currencies or quest state.",
+    "Daily recharge checks do not reset or estimate a stored bank.",
+    "Server scope is private to the signed-in account on one region/server.",
+    "The 12 and 20 weekly Command counts refer to shop purchases, not quest-completion caps.",
+    "Do not infer membership, available entries, selected difficulty or reward affordability."
+  ],
+  "excluded": [
+    {
+      "name": "Subscriber Shop",
+      "reason": "Original sheet saysweeklyreview, but membership-specificproducts/entitlementscopesandquotasnotverified. Maydisplayconditionalmanualreviewwithoutquotaonlyafterexplicitcatalogdecision."
+    },
+    {
+      "name": "Substance Morph Odyle Energy16/server+4/characterweekly",
+      "reason": "SupersededtemporarilybyofficialOct14patch: server16limitremoved; char4→20duringtransferperioduntilOct28. Do notshipoldquotas. Separatetemporaryshopactivitywouldneedofficialdaterange."
+    },
+    {
+      "name": "Daily Kina Farm1m",
+      "reason": "1mfoundinGlobalSettingisKinaTRADElimit, notverifiedmonsterfarmingcapormandatorydailygoal."
+    },
+    {
+      "name": "Abyss Corridor0–3/Siege",
+      "reason": "Conditionalpersiege/factionresult, notdaily/weeklyresetquota; entryscopeandavailabilitynotverified."
+    },
+    {
+      "name": "Supply Requests",
+      "reason": "Daily/weeklyperiodtabsandAbyssPoints/EnhanceStonerewardssupported, activeitemsunknown. Exactcompletionownershipnotconfirmed; do notassignsharedquota. Manualreviewpossiblewithuncertainty."
+    },
+    {
+      "name": "Battlefield3wins/week",
+      "reason": "CurrentRewardLimitshowsstrategy3wins+3joinsweekly, butowner scope notindependentlyconfirmed. OptionalPvPmanualitemuntilscopeconfirmed."
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.10.23.2",
+  "reviewedAt": "2026-10-23",
+  "expiresAt": "2026-10-28",
+  "regions": ["eu"],
+  "sources": [
+    { "id": "shugo-eu", "label": "Shugo.GG EU schedule observation", "url": "https://shugo.gg/timers", "kind": "community-observation", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "meta-eu", "label": "Aion2 Meta EU schedule observation", "url": "https://aion2-meta.com/timers/", "fetchUrl": "https://aion2-meta.com/timers/", "sha256": "efc170e87aefb48feaccedf9a73cde90437dd85052dcd0b4f070f0a5cdbc5620", "kind": "community-observation", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "shugo-entry", "label": "Aion2.gg client-data event reference", "url": "https://aion2.gg/tools/event-timer/shugo-festival", "fetchUrl": "https://aion2.gg/tools/event-timer/shugo-festival", "sha256": "36eabc4068a01689cdf87ed6ce7e74992d7915d3772d02f88e4c8f07d66c02d3", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "invasion-entry", "label": "Aion2.gg client-data event reference", "url": "https://aion2.gg/tools/event-timer/dimensional-invasion", "fetchUrl": "https://aion2.gg/tools/event-timer/dimensional-invasion", "sha256": "5abd84d9fbb3cc5037d7841fa45f5ba911e58ad0c3ae1a562acf27a6905c4e32", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "rift-entry", "label": "Aion2.gg client-data rift entry reference", "url": "https://aion2.gg/tools/event-timer/spacetime-rift", "fetchUrl": "https://aion2.gg/tools/event-timer/spacetime-rift", "sha256": "cde29bf357cb460cf6091834aac0cc717f0b9174d5dc4f504d1035814f277397", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "tracker-schedule", "label": "Aion2Timers reviewed Global client schedule reference", "url": "https://www.aion2timers.com/schedule.json", "fetchUrl": "https://www.aion2timers.com/schedule.json", "sha256": "8803c07472296667963290c3242c60cf8f6ac760d7349b70324a3ec8abeb54aa", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "reset-clock", "label": "Aion2Data reset-clock reference", "url": "https://aion2data.com/timers", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "gartua-reports", "label": "Community field-boss tracker; not official live status", "url": "https://aion2timers.com/", "kind": "community-reports", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" }
+  ],
+  "events": [
+    {
+      "id": "spacetime-rift", "name": "Spacetime Rift", "kind": "scheduled", "priority": "high", "timeZone": "Europe/Berlin", "sourceIds": ["shugo-eu", "meta-eu", "rift-entry"],
+      "hours": [2, 5, 8, 11, 14, 17, 20, 23], "minute": 0, "weekdays": [0, 1, 2, 3, 4, 5, 6], "entryMinutes": 10, "activityMinutes": 0,
+      "description": "Scheduled portal entry lasts 10 minutes. Check the in-game rift notice before travelling."
+    },
+    {
+      "id": "shugo-festival", "name": "Shugo Festival", "kind": "scheduled", "priority": "high", "timeZone": "Europe/Berlin", "sourceIds": ["shugo-entry", "shugo-eu"],
+      "hours": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], "minute": 0, "weekdays": [0, 1, 2, 3, 4, 5, 6], "entryMinutes": 3, "activityMinutes": 5,
+      "description": "Entry lasts 3 minutes, followed by up to 5 minutes of gameplay. The play window is a schedule estimate, not your participation status."
+    },
+    {
+      "id": "dimensional-invasion", "name": "Dimensional Invasion", "kind": "scheduled", "priority": "high", "timeZone": "Europe/Berlin", "sourceIds": ["invasion-entry", "shugo-eu"],
+      "hours": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23], "minute": 30, "weekdays": [0, 1, 2, 3, 4, 5, 6], "entryMinutes": 3, "activityMinutes": 10,
+      "description": "Entry lasts 3 minutes, followed by up to 10 minutes of gameplay. This scheduled window does not establish whether the boss is still alive."
+    },
+    {
+      "id": "artifact-siege", "name": "Artifact Siege preparation", "kind": "scheduled", "priority": "high", "timeZone": "Europe/Berlin", "sourceIds": ["shugo-eu", "meta-eu", "tracker-schedule"],
+      "hours": [21], "minute": 0, "weekdays": [1, 4, 6], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Get ready at 21:00 on Monday, Thursday and Saturday in the reviewed EU community schedule. The client-data reference schedules the battle for 21:05–21:30. This preparation reminder does not establish that a battle is active; check the in-game notice."
+    },
+    {
+      "id": "siege-executors", "name": "Siege Bosses (Executors)", "kind": "scheduled", "priority": "high", "timeZone": "Europe/Berlin", "sourceIds": ["shugo-eu", "meta-eu"],
+      "hours": [21], "minute": 30, "weekdays": [1, 4, 6], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Scheduled start on Monday, Thursday and Saturday after Artifact Siege. Boss liveness is not available from this schedule."
+    },
+    {
+      "id": "guardian-nahma", "name": "Guardian Lord Nahma", "kind": "scheduled", "priority": "high", "timeZone": "Europe/Berlin", "sourceIds": ["shugo-eu", "meta-eu"],
+      "hours": [21], "minute": 0, "weekdays": [0, 5], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Scheduled start on Friday and Sunday. Check the in-game notice and boss state; no live spawn status is inferred."
+    },
+    {
+      "id": "watcher-kaira", "name": "Watcher Kaira", "kind": "scheduled", "priority": "medium", "timeZone": "Europe/Berlin", "sourceIds": ["shugo-eu", "meta-eu"],
+      "hours": [1, 4, 7, 10, 13, 16, 19, 22], "minute": 0, "weekdays": [0, 1, 2, 3, 4, 5, 6], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Scheduled start every three hours in the reviewed EU local clock. This is not an indication that Kaira is currently alive."
+    },
+    {
+      "id": "daily-reset", "name": "Daily reset", "kind": "reset", "priority": "high", "timeZone": "UTC", "sourceIds": ["reset-clock", "shugo-eu", "meta-eu"],
+      "hours": [7], "minute": 0, "weekdays": [0, 1, 2, 3, 4, 5, 6], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Reviewed EU daily reset is fixed at 07:00 UTC, independently of Berlin daylight saving time."
+    },
+    {
+      "id": "weekly-reset", "name": "Weekly reset", "kind": "reset", "priority": "high", "timeZone": "UTC", "sourceIds": ["reset-clock", "shugo-eu", "meta-eu"],
+      "hours": [7], "minute": 0, "weekdays": [3], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Reviewed EU weekly reset is Wednesday at 07:00 UTC. Server maintenance may affect availability."
+    },
+    {
+      "id": "gartua", "name": "Gartua field boss", "kind": "manual", "priority": "high", "timeZone": null, "sourceIds": ["gartua-reports"],
+      "hours": [], "minute": 0, "weekdays": [], "entryMinutes": 0, "activityMinutes": 0,
+      "description": "Check Eternal Gartua (Elyos) or Immortal Gartua (Asmodians) in the in-game Field Boss list. Its kill-dependent respawn needs a server-specific observation; no automatic 12-hour countdown is invented."
+    }
+  ]
+}

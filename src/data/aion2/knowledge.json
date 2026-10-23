@@ -1,0 +1,766 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.10.23.3",
+  "reviewedAt": "2026-10-23",
+  "expiresAt": "2026-10-28",
+  "regions": [
+    "eu",
+    "nae",
+    "naw",
+    "la",
+    "as"
+  ],
+  "patchFeed": "https://api-global-community.plaync.com/aion2_global/board/update_en/article/search/moreArticle?moreSize=100&moreDirection=BEFORE&previousArticleId=0",
+  "patches": [
+    {
+      "id": "6ad85be86cfe4756db5b8e92",
+      "updatedAt": "2026-10-21T06:30:11.674Z",
+      "bodySha256": "5a4bb8615f7be79bb26d98cb679272a1c6c68b443450c5e85fbd09404f91cba4"
+    },
+    {
+      "id": "6acf20d007b77e214688a7ac",
+      "updatedAt": "2026-10-19T18:04:41.267Z",
+      "bodySha256": "f52636c97f2186d188f86639640ee1ecb8399afd5f61861c9466320eb1f0f7ee"
+    },
+    {
+      "id": "6ac5e6e8d97eae18cc40e34e",
+      "updatedAt": "2026-10-07T07:33:36.425Z",
+      "bodySha256": "87bb11f306e1cc0c20bbfefe4d737e9ea4a2d97e246ca01cb324dbd0fc995bdd"
+    }
+  ],
+  "sources": [
+    {
+      "id": "official-armory",
+      "title": "NCSOFT public character service",
+      "kind": "official-data",
+      "url": "https://aion2.plaync.com/en-us/characters/index",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-11-06",
+      "notes": "Profile, skills, equipment and item capabilities verified by direct unauthenticated HTTP. An observation time is not a game-state change time."
+    },
+    {
+      "id": "kanon",
+      "title": "Kanon's Aion 2 Bible",
+      "kind": "community-guide",
+      "url": "https://docs.google.com/document/d/11u4wLCG1WfL-xSka2Aze0rI9vYRa7mq3N3Gp1bt0AWY/edit",
+      "fetchUrl": "https://docs.google.com/document/d/11u4wLCG1WfL-xSka2Aze0rI9vYRa7mq3N3Gp1bt0AWY/export?format=txt",
+      "sha256": "e547fb720501db068bc927c0e156a2f6610999728b9374fd148b20db8a94a9e3",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-11-06",
+      "notes": "Reviewed Global skill-level and scroll guidance only. KR wings, uncertain crit caps and region-specific progression are excluded. Skill 20 is community advice, not an independently verified official damage simulation."
+    },
+    {
+      "id": "screamheart",
+      "title": "Screamheart's content guide",
+      "kind": "community-guide",
+      "url": "https://docs.google.com/spreadsheets/d/1bNxC1wd0S_ILGYAyWnO0aTo_G_AOrjkv7bTcOj_NRz8/edit#gid=0",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-11-06",
+      "notes": "Only the Arcana purpose and listed 1600 entry milestone are used, with an in-game requirement check. Weekly shop quotas are excluded: the Oct 14 official patch superseded the sheet's Odyle limits.",
+      "fetchUrl": "https://docs.google.com/spreadsheets/d/1bNxC1wd0S_ILGYAyWnO0aTo_G_AOrjkv7bTcOj_NRz8/export?format=csv&gid=0",
+      "sha256": "b785a5b3d5021028fd5590da55d898aefe75bdf5fc3d15c9f20e41127a5db1e9"
+    },
+    {
+      "id": "shattered",
+      "title": "Shattered Arkanis entry and rewards (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/dungeons/shattered-arkanis",
+      "fetchUrl": "https://aion2data.com/dungeons/shattered-arkanis",
+      "sha256": "d253d53e072eed855a2385061ee517801ad17696326eb8e289a1409bb1d9bb01",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "urugugu",
+      "title": "Urugugu Canyon entry and rewards (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/dungeons/urugugu-canyon",
+      "fetchUrl": "https://aion2data.com/dungeons/urugugu-canyon",
+      "sha256": "f6e63d41013a58e6cecf5f1510c92dec44f47f3e3f753916665bcb79b5ba8cb3",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "succession",
+      "title": "Transfer rules and fixed soulbind source behavior (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/tools/succession",
+      "fetchUrl": "https://aion2data.com/tools/succession",
+      "sha256": "aa68b66450f983b83e0d3c0bb6db21156fdf7c6852f71343756848352aed0e71",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "arcana-guide",
+      "title": "Global Arcana slots, pools and enhancement (client reference)",
+      "kind": "client-data",
+      "url": "https://aion2.gg/guides/arcana-system-explained",
+      "fetchUrl": "https://aion2.gg/guides/arcana-system-explained",
+      "sha256": "0cc958e358380819b10ee9cededef8874bdb3e47ebddf9bbf6fbcd1b794ba8f4",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "overhead-skill",
+      "title": "Overhead Slam specialties and bonus levels (client reference)",
+      "kind": "client-data",
+      "url": "https://aion2.gg/database/skills/overhead-slam-11170000",
+      "fetchUrl": "https://aion2.gg/database/skills/overhead-slam-11170000",
+      "sha256": "d63d5481d03f66a58f81774d22d25eecc738bd6d683f1e09cb2764ee9fa03d6a",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "glad-build",
+      "title": "Gladiator PvE skill-first route (curated build)",
+      "kind": "community-guide",
+      "url": "https://aion2.gg/guides/gladiator-pve-build",
+      "fetchUrl": "https://aion2.gg/guides/gladiator-pve-build",
+      "sha256": "f5b9da6d85af0944db13553ecb0dab52ded1298828e62aa10d9cc521f7b08402",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "board-guide",
+      "title": "White-board adjacency and crystal costs (client reference)",
+      "kind": "client-data",
+      "url": "https://aion2.gg/builds/gladiator/daevanion",
+      "fetchUrl": "https://aion2.gg/builds/gladiator/daevanion",
+      "sha256": "2c24460b8fdd1e6a1ff93787b57cf8d298118f8a7c44faa28e76501186e303e4",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+    },
+    {
+      "id": "vakron-data",
+      "title": "Vakron regular Conquest entry, loot and voucher route (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/dungeons/vakron-sky-island",
+      "fetchUrl": "https://aion2data.com/dungeons/vakron-sky-island",
+      "sha256": "a0323406e3239447130beb2f4422b87d9d9d392290b10ed80790158f1b1379f6",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "upgrade-guide",
+      "title": "Conservative gear investment order (community advice)",
+      "kind": "community-guide",
+      "url": "https://aion2.gg/guides/gear-upgrade-systems",
+      "fetchUrl": "https://aion2.gg/guides/gear-upgrade-systems",
+      "sha256": "9bce311449a5ebfba4c4e45e56e3ef80f34848dd62e257136ab7c5fd56da3609",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "vakron-item-data",
+      "title": "Vakron Guard stats, random lines and crafting (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/items/115030052-vakron-guard",
+      "fetchUrl": "https://aion2data.com/items/115030052-vakron-guard",
+      "sha256": "0101f5e33f38a6cc47138e1844467bc6c79e1048cb39dd5002abc5ac9a3d2b96",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "spiritforged-item-data",
+      "title": "Spiritforged Guard growth costs (client model, not guaranteed spending)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/items/115030041-spiritforged-guard",
+      "fetchUrl": "https://aion2data.com/items/115030041-spiritforged-guard",
+      "sha256": "fc3e6bdab51e40f9a8c6d130e6822548750a5c5571e4df13240856b0dbddae82",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "deus-stage1",
+      "title": "Deus Research Base entry and card pools (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/dungeons/deus-research-base",
+      "fetchUrl": "https://aion2data.com/dungeons/deus-research-base",
+      "sha256": "ac69bdd755b31fcfbf9c163fc4b97410e5e5d641a21f7f380f8b749b78fc0f34",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "amulet-data",
+      "title": "Revelation Amulet enhancement materials (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/items/311030001-revelation-amulet",
+      "fetchUrl": "https://aion2data.com/items/311030001-revelation-amulet",
+      "sha256": "064aeecc52c4fcf1e1fd5a5b47b53fde05d0cf1b2c6039cd82d921a9a5708c5a",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "belt-data",
+      "title": "Noble Belt enhancement materials (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/items/215240001-noble-belt",
+      "fetchUrl": "https://aion2data.com/items/215240001-noble-belt",
+      "sha256": "2d53b3946ddd5c7d70428c88084023f2eec303faf85b4ebf192dfa85e7c17a03",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "rage-burst",
+      "title": "Rage Burst boss window and level bonuses (client reference)",
+      "kind": "client-data",
+      "url": "https://aion2.gg/database/skills/rage-burst-11390000",
+      "fetchUrl": "https://aion2.gg/database/skills/rage-burst-11390000",
+      "sha256": "b12678fb6fd433982e4184b5257bc8bb416548d2950c5ba38284f171debac6e0",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
+    },
+    {
+      "id": "ring-pool",
+      "title": "Aulamus Ring skill pool and distinct skill lines (client 2026.10.21)",
+      "kind": "client-data",
+      "url": "https://aion2data.com/items/310330052-aulamus-ring",
+      "fetchUrl": "https://aion2data.com/items/310330052-aulamus-ring",
+      "sha256": "6480606038d4390bbc535b8474e7cdc2b3a6156c3ca1b8589228046576286ae7",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "notes": "Gladiator pool includes Overhead Slam +1 and Rending Blow +1. Multiple distinct skills were corroborated by an official same-item sample; duplicate-same-skill prohibition is a client-reference rule. Material acceptance remains an in-game check."
+    }
+  ],
+  "rules": [
+    {
+      "id": "gladiator-overhead",
+      "strategy": "skill-target",
+      "classes": [
+        "Gladiator"
+      ],
+      "sourceIds": [
+        "overhead-skill",
+        "arcana-guide",
+        "shattered",
+        "urugugu",
+        "kanon",
+        "screamheart",
+        "rage-burst",
+        "glad-build",
+        "ring-pool"
+      ],
+      "priority": "high",
+      "target": 20,
+      "skillId": 11170000,
+      "minimumLevel": 45,
+      "action": "Your next breakpoint is level {nextLevel}, {missingLevels} levels above the observed skill. Follow the route below; you do not need to enter an energy balance.",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "evidence": "Reviewed community Global PvE guidance; not independently verified official skill/dungeon mechanics",
+      "milestones": [
+        16,
+        20
+      ],
+      "steps": [
+        {
+          "id": "base-rank",
+          "title": "Check bought skill ranks before spending on random rolls",
+          "instruction": "Open Skills \u2192 Overhead Slam and inspect the rank bought with Skill Points. Bought ranks stop at 10; the displayed total also includes board and equipment bonuses. If the bought rank is below 10, compare the next Skill Point cost first. Collect any remaining Regional Quest / Sealed Dungeon skill-point rewards you can actually claim.",
+          "reason": "Owning four board bonuses does not prove the bought rank is already 10. This check can reveal a route that needs no Odyle or random gear roll. Completion of those quests is not visible.",
+          "sourceId": "glad-build"
+        },
+        {
+          "id": "base-and-board",
+          "title": "Take only missing Overhead Slam board bonuses",
+          "instruction": "Open Daevanion and inspect the Overhead Slam +1 node on Nezekan, Zikel, Vaizel and Triniel. Take only missing nodes along a connected route. Current verified contribution: {boardBonus}. Check your available crystals in game.",
+          "reason": "The four white boards supply at most four levels for this skill. The helper only treats a node as owned when the board-detail API reports it.",
+          "sourceId": "overhead-skill",
+          "when": "boards-incomplete"
+        },
+        {
+          "id": "owned-cards",
+          "title": "Check stored cards and unopened bags before farming",
+          "instruction": "Inspect your inventory, storage and unopened Arcana bags, then open Arcana \u2192 Equip. Look for an owned Parchment or Chalice with Overhead Slam +1 or better. Equip useful cards before deciding to spend Odyle. Empty equipped slots do not prove that your inventory is empty.",
+          "reason": "Two existing +1 contributions may already supply the missing levels. Do not feed useful skill cards or buy/farm duplicates before checking what you own.",
+          "sourceId": "arcana-guide"
+        },
+        {
+          "id": "boss-window",
+          "title": "Check the Rage Burst window for boss fights",
+          "instruction": "For the boss-focused Slam route, inspect Skills \u2192 Stigmas \u2192 Rage Burst. Its effect allows Overhead Slam against any target during its window. Equip it if this is the build you intend to play, and read the current level/cooldown before spending shards. Do not remove a defensive stigma without considering your role.",
+          "reason": "Removing Overhead Slam cooldown does not remove its target condition by itself. Bosses normally resist knockdown. Your armory does not currently show an equipped, acquired Rage Burst.",
+          "sourceId": "rage-burst",
+          "when": "rage-burst-missing"
+        },
+        {
+          "id": "shattered",
+          "title": "Choose an eligible Shattered Arkanis tier for the missing cards",
+          "instruction": "Open Escape \u2192 Transcendence \u2192 Shattered Arkanis \u2192 Stage 1, then find a party. Entry is level 45 and {activityGearScore} Gear Score; your armory lists {gearScore}. Clear the bosses and use the reward cube when you have at least {activityCost} Odyle and a reward claim available. Select the normal single claim; inspect the displayed cost before confirming. Stage 1 is the reviewed baseline. If your Gear Score is higher, compare tiers you have actually unlocked and can clear reliably; inspect their own reward cost. Gear Score alone does not prove their S-rank unlock.",
+          "reason": "Stage 1 is the eligible starting tier, not Exploration or the 1,900-GS Stage 2. Energy pays for the reward claim. A drop or the desired skill line is not guaranteed.",
+          "sourceId": "shattered",
+          "when": "transcendence-eligible",
+          "activityId": "shattered-stage1"
+        },
+        {
+          "id": "open-and-equip",
+          "title": "Open the card bags and inspect Parchment / Chalice",
+          "instruction": "Use the Arcana bag items you receive, then open Escape \u2192 Arcana \u2192 Equip. For Overhead Slam, keep a Parchment or Chalice showing Overhead Slam +1 or better. Compass cannot roll Overhead Slam. Vigor and Magic versions share the skill pool, so keep the useful skill roll while building your set.",
+          "reason": "At level 14, two separate +1 contributions reach level 16: Parchment +1 plus Chalice +1, or one card +1 plus one ring +1. Card enhance level +2 does not guarantee +2 to Overhead; card-line upgrades are random.",
+          "sourceId": "arcana-guide",
+          "when": "transcendence-eligible"
+        },
+        {
+          "id": "sync-ring",
+          "title": "Alternative: use a ring you already own",
+          "instruction": "Choose one observed random-line ring and work only on that ring:\n{ringPlan}\nOpen Enhancement \u2192 Soul Binding \u2192 Sync, select the unwanted line on the chosen ring, and add a Sync Stone or material the current window accepts. Inspect consumption, success chance and the skill pool before rolling for Overhead Slam +1. Set a Kina/material spending limit first. Stop when it lands or when that limit is reached; success is not guaranteed within your budget.",
+          "reason": "Sync changes one selected line and consumes its material; it does not guarantee the target skill. Reset changes every line. Bind raises existing values and does not turn Flight Power into Overhead Slam. Inventory and Kina are not visible to the helper.",
+          "sourceId": "ring-pool",
+          "when": "random-ring"
+        },
+        {
+          "id": "ring-fodder",
+          "title": "Only if you need another ring or Sync material",
+          "instruction": "If you lack an accepted Sync material, check your stored spare Unique items first. For a replacement or spare Aulamus Ring, run Escape \u2192 Expedition \u2192 Urugugu Canyon \u2192 Conquest (level 45, {activityGearScore} Gear Score). Keep the ring and suitable Unique fodder instead of extracting everything. If its Guaranteed Reward selection is ready, select the needed accessory.",
+          "reason": "The ring is random loot, not a guaranteed drop each run. The client lists an accessory selection after 21 reward claims; your existing claim counter is unknown. Do not confuse that counter with 21 clears.",
+          "sourceId": "urugugu",
+          "when": "ring-materials-needed",
+          "activityId": "urugugu-conquest"
+        },
+        {
+          "id": "specialty",
+          "title": "At level 16, equip the cooldown specialty",
+          "instruction": "After equipping new rings/cards, refresh the character and check Skills \u2192 Overhead Slam \u2192 Specialty. At level 16, select the option labeled Remove cooldown and put it into an available Specialty slot. Level 20 is the later goal that opens the third slot. The cooldown option does not remove the target restriction: against bosses, use the any-target window supplied by Rage Burst. {rageState}.",
+          "reason": "An unlocked option is not automatically selected. At 14 you need only two more levels for the level-16 option, not six before the build can improve. Keep the boss-window requirement separate from the skill-level breakpoint.",
+          "sourceId": "overhead-skill",
+          "when": "below-first-milestone"
+        },
+        {
+          "id": "later20",
+          "title": "After 16, work toward the third Specialty slot at 20",
+          "instruction": "Keep the level-16 cooldown specialty equipped. Add further Overhead levels on the two rings, Parchment and Chalice as their actual rolls allow. Recheck the total after each change; only feed Arcana cards you have checked are not keepers. At 20 equip the third Specialty option.",
+          "reason": "Random card enhancement can improve a different skill or add another line. A card enhance number is not a guaranteed Overhead level.",
+          "sourceId": "arcana-guide",
+          "when": "at-least-first-milestone"
+        },
+        {
+          "id": "no-energy",
+          "title": "When you cannot claim a dungeon cube",
+          "instruction": "Use already-owned cards or accepted Sync materials first. Otherwise check remaining Sealed Dungeons / regional rewards for skill and Daevanion resources, Monolith Resonance for amulet scrolls, Strongholds for belt scrolls, and Nightmare / Shugo rewards if their own entries are available. Resume the targeted cube route when Odyle and a reward claim are available.",
+          "reason": "These alternatives do not spend Odyle, but have their own requirements. The helper cannot see your completion, entries or inventory. Skipping cubes repeatedly can exhaust the unobtained-cube allowance, so do not treat rewardless dungeon runs as unlimited farming.",
+          "sourceId": "screamheart",
+          "when": "energy-not-confirmed"
+        }
+      ]
+    },
+    {
+      "id": "arcana",
+      "strategy": "arcana-slots",
+      "classes": [],
+      "sourceIds": [
+        "arcana-guide",
+        "shattered",
+        "deus-stage1"
+      ],
+      "priority": "high",
+      "target": 5,
+      "minimumGearScore": 1600,
+      "minimumLevel": 45,
+      "action": "Fill the five different Arcana slots with usable cards, then improve the rolls for your build.",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "evidence": "Reviewed community Global PvE guidance; not independently verified official skill/dungeon mechanics",
+      "steps": [
+        {
+          "id": "inspect-owned",
+          "title": "Inspect equipped slots and your existing cards first",
+          "instruction": "Open Arcana \u2192 Equip and compare all five slots with your inventory, storage and unopened bags. The observed unequipped slot families are {missingArcana}. Equip suitable owned cards first; farming is only for gaps that remain after this check.",
+          "reason": "The public armory shows equipped cards, not the contents of bags or storage. A higher card grade is not automatically a better skill roll.",
+          "sourceId": "arcana-guide"
+        },
+        {
+          "id": "first-cards",
+          "title": "For missing Parchment / Chalice / Mirror, consider Shattered Arkanis",
+          "instruction": "If those slots still need usable cards after your inventory check, open Transcendence \u2192 Shattered Arkanis \u2192 Stage 1 (level {activityLevel}, {activityGearScore} Gear Score). Its pools are Parchment, Chalice and Mirror. Inspect available reward charges and the normal {activityCost}-Odyle cube cost. At higher Gear Score, compare the highest tier you have actually unlocked and can clear reliably; Stage 1 is a baseline, not a universal best farm.",
+          "reason": "This is card farming, not the similarly named Exploration tier.",
+          "sourceId": "shattered",
+          "activityId": "shattered-stage1",
+          "when": "shattered-pool-missing"
+        },
+        {
+          "id": "other-slots",
+          "title": "Fill Compass and Bell from Deus Research Base",
+          "instruction": "If Compass / Bell or a remaining Chalice is the gap after checking owned cards, open Transcendence \u2192 Deus Research Base \u2192 Stage 1 (level {activityLevel}, {activityGearScore} Gear Score). The pools are Compass, Bell and Chalice. Inspect available charges and the normal {activityCost}-Odyle cube cost. Compare higher unlocked, reliably clearable tiers in game; Gear Score alone does not prove a tier is unlocked.",
+          "reason": "Five slots are Chalice, Parchment, Compass, Bell and Mirror. Skill pools differ by class and slot.",
+          "sourceId": "deus-stage1",
+          "activityId": "deus-stage1",
+          "when": "deus-pool-missing"
+        },
+        {
+          "id": "preserve-cards",
+          "title": "Keep good skill lines before enhancing",
+          "instruction": "Read every skill line. Equip cards that support the skills you use; only feed unwanted cards through Arcana \u2192 Enhance. A higher enhancement level can improve a random line, so it is not a guaranteed level on your chosen skill.",
+          "reason": "Do not delete or feed a desired skill card just because another has a higher grade.",
+          "sourceId": "arcana-guide"
+        }
+      ]
+    },
+    {
+      "id": "amulet",
+      "strategy": "amulet-scrolls",
+      "classes": [],
+      "sourceIds": [
+        "official-armory",
+        "amulet-data",
+        "screamheart"
+      ],
+      "priority": "medium",
+      "target": 10,
+      "minimumLevel": 45,
+      "action": "The current Revelation Amulet description identifies Monolith Resonance as the source of Amulet Enhance Scrolls. Check your available rewards and scrolls in game. Do not assume your quest or feather progress is incomplete.",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "evidence": "Current official item capabilities",
+      "itemIds": [
+        311030001
+      ],
+      "steps": [
+        {
+          "id": "monolith",
+          "title": "Turn in available feathers at the Monolith",
+          "instruction": "Travel to your main city Monolith, open Monolith Resonance and turn in feathers / claim the available resonance rewards. Check for Amulet Enhance Scrolls in those rewards.",
+          "reason": "The current Revelation Amulet description names Monolith Resonance as the scroll source.",
+          "sourceId": "official-armory"
+        },
+        {
+          "id": "stones-weekly",
+          "title": "Use remaining weekly Daily Dungeon entries for Enhance Stones",
+          "instruction": "Open Escape \u2192 Daily Dungeon and check remaining entries in the weekly allowance shared by your own characters on this server. Use suitable available runs for Enhance Stones, then inspect what you actually received. If you have marked this activity done for the week, move to the remaining material checks; a checkmark does not add stones to your inventory.",
+          "reason": "Daily Dungeon is a weekly-entry activity despite its name. Scrolls alone do not cover the amulet or belt upgrade cost. Reward amounts depend on your result; the public armory cannot read remaining entries or stones.",
+          "sourceId": "screamheart",
+          "checklistActivityIds": [
+            "daily-dungeon"
+          ]
+        },
+        {
+          "id": "amulet-menu",
+          "title": "Use the scrolls on your amulet",
+          "instruction": "Open Enhancement, select Revelation Amulet and use the named amulet scrolls shown by the upgrade screen. Check the level increase and next cost after each upgrade. Inspect every material shown: the current client table also requires Enhance Stones and Kina alongside the special scroll. Do not start the upgrade until that full cost suits your budget.",
+          "reason": "The scroll is an additional requirement, not a replacement for ordinary enhancement materials. Your current scrolls, stones, Kina and unclaimed rewards are not public.",
+          "sourceId": "amulet-data"
+        }
+      ]
+    },
+    {
+      "id": "belt",
+      "strategy": "belt-scrolls",
+      "classes": [],
+      "sourceIds": [
+        "official-armory",
+        "belt-data",
+        "screamheart"
+      ],
+      "priority": "medium",
+      "target": 10,
+      "minimumLevel": 45,
+      "action": "The current Noble Belt description identifies Strongholds as the source of Belt Enhance Scrolls. Check your available rewards in game. Its current enhancement cap is +10, after which the item description identifies Substance Morph as the upgrade path.",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "evidence": "Current official item capabilities",
+      "itemIds": [
+        215240001
+      ],
+      "steps": [
+        {
+          "id": "strongholds",
+          "title": "Check Stronghold rewards on the map",
+          "instruction": "Open the map and check Strongholds with an available completion reward. Clear one you have not claimed and look for Noble Belt Enhance Scrolls.",
+          "reason": "The current Noble Belt description names Strongholds as the scroll source; a +3 belt alone does not prove any particular Stronghold is unfinished.",
+          "sourceId": "official-armory"
+        },
+        {
+          "id": "stones-weekly",
+          "title": "Use remaining weekly Daily Dungeon entries for Enhance Stones",
+          "instruction": "Open Escape \u2192 Daily Dungeon and check remaining entries in the weekly allowance shared by your own characters on this server. Use suitable available runs for Enhance Stones, then inspect what you actually received. If you have marked this activity done for the week, move to the remaining material checks; a checkmark does not add stones to your inventory.",
+          "reason": "Daily Dungeon is a weekly-entry activity despite its name. Scrolls alone do not cover the amulet or belt upgrade cost. Reward amounts depend on your result; the public armory cannot read remaining entries or stones.",
+          "sourceId": "screamheart",
+          "checklistActivityIds": [
+            "daily-dungeon"
+          ]
+        },
+        {
+          "id": "belt-menu",
+          "title": "Enhance the Noble Belt, then inspect Morph at +10",
+          "instruction": "Open Enhancement, select Noble Belt and apply its belt scrolls. When it reaches the reported +10 cap, open Substance Morph and inspect the belt upgrade recipe before spending. Inspect every material shown: the current client table also requires Enhance Stones and Kina alongside the special scroll. Do not start the upgrade until that full cost suits your budget.",
+          "reason": "The scroll is an additional requirement, not a replacement for ordinary enhancement materials. Your current scrolls, stones, Kina and unclaimed rewards are not public.",
+          "sourceId": "belt-data"
+        }
+      ]
+    },
+    {
+      "id": "fixed-weapon",
+      "strategy": "fixed-weapon",
+      "classes": [
+        "Gladiator"
+      ],
+      "sourceIds": [
+        "official-armory",
+        "urugugu",
+        "succession",
+        "kanon"
+      ],
+      "priority": "medium",
+      "minimumLevel": 45,
+      "action": "Compare a replacement weapon with useful damage or skill rolls. Your current weapon has fixed soulbind lines, so do not spend Sync resources trying to reroll those lines. Review the transfer preview before replacing it.",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "evidence": "Current official item capabilities",
+      "steps": [
+        {
+          "id": "candidate",
+          "title": "Get a random-line weapon candidate",
+          "instruction": "Check inventory and storage for an already-owned candidate first. If you need a drop, Urugugu Canyon \u2192 Conquest (level {activityLevel}, {activityGearScore} Gear Score) can drop an Aulamus Greatsword. Inspect its random Soul Binding lines and base stats before replacing your equipped greatsword. Do not choose a lower-stat weapon solely for one roll.",
+          "reason": "Your fixed Spiritforged weapon cannot roll new skill/damage lines. A dungeon candidate can be checked before any transfer.",
+          "sourceId": "urugugu",
+          "activityId": "urugugu-conquest"
+        },
+        {
+          "id": "growth-transfer",
+          "title": "Preview the +{weaponUpgrade} story weapon transfer first",
+          "instruction": "Keep both items. Unequip the old fixed-line Spiritforged Greatsword and remove it from presets. Open Enhancement \u2192 Transfer. Select it as material and the chosen greatsword as destination. Check that the final preview shows your intended +{weaponUpgrade} and preserves the destination lines you want. Confirm only if the preview matches; the material item is consumed. The current first-transfer row requires a destination with zero previous transfers and one Transfer Stone (Unique). Check the current window accepts that exact source/destination; stop if it does not.",
+          "reason": "The current client explicitly says a fixed-Soul-Binding source transfers enhancement only, not its fixed Soul Binding effects. Normal random-line donors behave differently. Never assume growth levels are added together.",
+          "sourceId": "succession"
+        },
+        {
+          "id": "sync-new",
+          "title": "Then polish the random-line candidate",
+          "instruction": "On the destination weapon, use Soul Binding \u2192 Sync to change one unwanted line, using an accepted material shown in the current window. Preserve good Combat Speed / Weapon Damage Boost or useful skill lines. Bind improves values after choosing the lines; Reset replaces all of them.",
+          "reason": "A skill line is a random roll, not a guaranteed result of Sync. Save expensive socket and Philosopher-line work until the transfer path is settled.",
+          "sourceId": "kanon"
+        }
+      ],
+      "itemIds": [
+        110130048
+      ]
+    },
+    {
+      "id": "starter-guard",
+      "strategy": "starter-guard",
+      "classes": [],
+      "itemIds": [
+        115030041
+      ],
+      "sourceIds": [
+        "official-armory",
+        "upgrade-guide",
+        "spiritforged-item-data",
+        "vakron-data",
+        "vakron-item-data",
+        "succession"
+      ],
+      "priority": "low",
+      "target": 10,
+      "minimumLevel": 45,
+      "action": "Keep the starter guard as a possible transfer donor while comparing an expedition replacement. A +15 cap alone does not make it the next investment. Check owned drops and your full transfer budget before spending more.",
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "evidence": "Conservative progression advice, current fixed-source transfer rules and a scoped client cost model; not a universal DPS optimum.",
+      "steps": [
+        {
+          "id": "guard-hold",
+          "title": "Keep your current +{guardUpgrade} guard while comparing replacements",
+          "instruction": "Your {guardName} has fixed Soul Binding lines. Keep it until a replacement and its complete transfer preview are ready. Check inventory for an already-owned random-line Guard before farming. Do not spend Sync materials trying to reroll the fixed starter guard.",
+          "reason": "The official metadata establishes fixed lines and a cap, not the best use of Kina. For a temporary piece, the reviewed community baseline stops at +10.",
+          "sourceId": "upgrade-guide"
+        },
+        {
+          "id": "guard-to-ten",
+          "title": "If keeping the starter guard, compare only the safe path to +10",
+          "instruction": "Select the guard in Enhancement and compare the displayed Enhance Stone and Kina cost up to +10. The reviewed table has guaranteed steps through +10. Stop at that temporary baseline unless a funded transfer plan justifies more; do not confuse safe success with free materials.",
+          "sourceId": "spiritforged-item-data",
+          "when": "starter-guard-below-target"
+        },
+        {
+          "id": "guard-candidate",
+          "title": "Compare a regular Vakron Guard candidate",
+          "instruction": "After checking stored gear, open Escape \u2192 Expedition \u2192 Vakron Sky Island \u2192 Conquest, not Hard (level {activityLevel}, {activityGearScore} Gear Score; your armory lists {gearScore}). A normal claimed reward cube costs {activityCost} Odyle. The Guard is random loot. Inspect the actual drop, useful class lines and final transfer stats before choosing it; item level alone is not a proven DPS upgrade. Prioritize the still-missing skill/card milestone before allocating limited Odyle to this secondary farm. This is the reviewed early-progression baseline for the 1,638-Gear-Score example. If you are at a higher tier, compare higher eligible expedition guards and existing drops before committing energy to Vakron.",
+          "reason": "The current reference lists an item-level-70 random-line Guard, versus the item-level-45 fixed starter. An already-owned Bakarma drop/voucher can be a cheaper stopgap; unknown inventory prevents a universal best-dungeon claim.",
+          "sourceId": "vakron-data",
+          "activityId": "vakron-conquest"
+        },
+        {
+          "id": "guard-voucher",
+          "title": "Check the complete voucher fallback before grinding for it",
+          "instruction": "The regular Conquest guaranteed selection is reached after 21 reward claims and can supply a Vakron voucher, not a direct Guard. If you already have two vouchers and 1,500,000 Kina, inspect Substance Morph \u2192 Vakron Guard. Your existing vouchers and partial counter are unknown. Do not blindly farm 42 claims to force this route.",
+          "reason": "Two vouchers are required by the current Guard recipe. Two complete 21-claim cycles from zero would be 42 claims, but that is not your remaining counter or a recommendation to spend that energy.",
+          "sourceId": "vakron-item-data"
+        },
+        {
+          "id": "guard-preview",
+          "title": "Preview your existing +{guardUpgrade} on the candidate",
+          "instruction": "Keep both items. Unequip the old guard and remove it from presets. Open Enhancement \u2192 Transfer. Set the candidate Vakron Guard as destination and the bound Spiritforged Guard as material. The cited first-transfer row accepts this donor only when the target has zero prior transfers and uses one Transfer Stone (Unique). Check that the actual preview preserves your intended +{guardUpgrade} and the destination lines you want. Confirm only if it matches; the source is consumed.",
+          "reason": "The current fixed-source rule transfers enhancement only, not its fixed Soul Binding lines. Enhancement levels are not added together. A preview that rejects the source or loses a keeper line is a reason to stop.",
+          "sourceId": "succession"
+        },
+        {
+          "id": "guard-later15",
+          "title": "Consider +15 later as a complete donor-and-transfer budget",
+          "instruction": "If you later choose a +15 destination, compare enhancing the cheaper low-level donor before transfer with enhancing the destination directly. For the +10\u2192+15 Spiritforged example, the reviewed client model estimates roughly 6.2 million Kina and 68,000 Enhance Stones for only 26 extra flat Attack before transfer. Actual spending varies with failed attempts. Compare that cost with skill and other gear milestones before committing.",
+          "reason": "Transferred enhancement can retain value, so upgrading a low-level donor is not automatically wasted. That savings argument does not establish that +15 is the best next use of your budget.",
+          "sourceId": "spiritforged-item-data",
+          "when": "starter-guard-below-cap"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "PvE guidance for Global regions. Character tracking supports every class; the curated skill target currently covers Gladiator only.",
+    "Currencies, inventory, Odyle, daily entries, quest completion and full pet Genus progress are unavailable from the public armory.",
+    "Step plans are conditional on unseen inventory, reward charges and currency. Client-data references are labeled separately from live official character observations.",
+    "Investment order is conservative community guidance. An enhancement cap does not imply good value; unknown inventory, spending budget and actual rolls can change the best next action."
+  ],
+  "boardPresets": [
+    {
+      "id": "gladiator-pve-skills",
+      "className": "Gladiator",
+      "label": "Gladiator PvE: skills first",
+      "sourceIds": [
+        "glad-build",
+        "board-guide"
+      ],
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28",
+      "targets": [
+        {
+          "effect": "Overhead Slam",
+          "reason": "Core repeatable damage skill; secure bonus levels before generic stat corners."
+        },
+        {
+          "effect": "Rending Blow",
+          "reason": "Core damage skill and an important skill-level breakpoint."
+        },
+        {
+          "effect": "Ruinous Blow",
+          "reason": "Core damage action in the reviewed Gladiator PvE route."
+        },
+        {
+          "effect": "Crushing Wave",
+          "reason": "Core damage action in the reviewed Gladiator PvE route."
+        },
+        {
+          "effect": "Experienced Counterstrike",
+          "reason": "Damage passive prioritized by the reviewed PvE route."
+        },
+        {
+          "effect": "Attack Preparation",
+          "reason": "Damage passive prioritized by the reviewed PvE route."
+        },
+        {
+          "effect": "Murderous Burst",
+          "reason": "Damage passive; actual marginal value depends on the rest of the build."
+        },
+        {
+          "effect": "Identify Weakness",
+          "reason": "Damage passive prioritized by the reviewed PvE route."
+        },
+        {
+          "effect": "Impact Hit",
+          "reason": "Damage passive prioritized by the reviewed PvE route."
+        },
+        {
+          "effect": "Combat Speed",
+          "reason": "Offensive corner after core skill nodes."
+        },
+        {
+          "effect": "Cooldown Reduction",
+          "reason": "Offensive corner after core skill nodes."
+        },
+        {
+          "effect": "Damage Boost",
+          "reason": "Offensive corner after core skill nodes."
+        },
+        {
+          "effect": "Critical Damage Boost",
+          "reason": "Offensive corner after core skill nodes."
+        },
+        {
+          "effect": "Multi-hit Chance",
+          "reason": "Offensive corner after core skill nodes."
+        }
+      ],
+      "pathModel": {
+        "adjacency": "orthogonal-grid",
+        "nodeCosts": {
+          "Common": 1,
+          "Rare": 2,
+          "Legend": 3,
+          "Epic": 3,
+          "Unique": 4
+        },
+        "startKind": "Start",
+        "sourceId": "board-guide"
+      },
+      "boardIds": [
+        11,
+        12,
+        13,
+        14
+      ]
+    }
+  ],
+  "activities": [
+    {
+      "id": "shattered-stage1",
+      "name": "Shattered Arkanis \u2014 Transcendence Stage 1",
+      "minimumLevel": 45,
+      "minimumGearScore": 1600,
+      "odylePerClaim": 40,
+      "sourceIds": [
+        "shattered"
+      ],
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28"
+    },
+    {
+      "id": "urugugu-conquest",
+      "name": "Urugugu Canyon \u2014 Conquest",
+      "minimumLevel": 45,
+      "minimumGearScore": 1400,
+      "odylePerClaim": 40,
+      "sourceIds": [
+        "urugugu"
+      ],
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28"
+    },
+    {
+      "id": "vakron-conquest",
+      "name": "Vakron Sky Island \u2014 regular Conquest",
+      "minimumLevel": 45,
+      "minimumGearScore": 1400,
+      "odylePerClaim": 40,
+      "sourceIds": [
+        "vakron-data"
+      ],
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28"
+    },
+    {
+      "id": "deus-stage1",
+      "name": "Deus Research Base \u2014 Transcendence Stage 1",
+      "minimumLevel": 45,
+      "minimumGearScore": 1600,
+      "odylePerClaim": 40,
+      "sourceIds": [
+        "deus-stage1"
+      ],
+      "reviewedAt": "2026-10-23",
+      "expiresAt": "2026-10-28"
+    }
+  ]
+}

@@ -11,6 +11,7 @@ Update documentation with each meaningful change. State what was verified locall
 | Long operations, status, toasts, background work | [OPERATIONS.md](docs/OPERATIONS.md) |
 | Minecraft onboarding tour | [MINECRAFT-TOUR.md](docs/MINECRAFT-TOUR.md) |
 | Frontend readiness, permissions, stale data and result handling | [FRONTEND.md](docs/FRONTEND.md) |
+| Aion 2 characters, tracking, knowledge reviews and rollout | [AION2-HELPER.md](docs/AION2-HELPER.md) |
 | Configuration and configured versus live values | [SETTINGS.md](docs/SETTINGS.md) |
 | Discord identity, invitations, revocation and legacy preparation | [AUTHENTICATION.md](docs/AUTHENTICATION.md) |
 | Minecraft mods, packs, identity, bans and rules | [MINECRAFT.md](docs/MINECRAFT.md) |
@@ -59,6 +60,8 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 - Prisma client is generated into gitignored `src/generated/prisma`; schema is `prisma/schema.prisma`.
 
 Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft spotlight onboarding, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
+
+`/aion2` is a separate authenticated character helper. Lists are account-owned, with public armory polling, history and reviewed PvE guidance. Its additive tracking migration is manual. Versioned knowledge has source/patch pins, expiry and change detection; see `docs/AION2-HELPER.md` before modifying advice or deploying it.
 
 ## Required safety and success rules
 
@@ -162,5 +165,7 @@ Update these groups after each verified change; do not append closed stories her
 ## UI conventions
 
 Use existing shared components and `cn()`. Identity comes from `GAMES` and `GameMark`; colors use `--tint` and Catppuccin tokens. Keep operational copy plain and direct. Photos remain in MC/7DTD footers; PZ/shared pages have none. The deliberate Miku corner reveal and Roadhog drawer remain UI elements. Prefer shared behavior over per-game copies and verify responsive/error/permission states when changing controls.
+
+Aion 2 copy uses plain functional labels, such as “Track your progress”; omit slogans and motivational taglines.
 
 Tour copy should be short, direct and practical: explain features and button names, without role-level commentary or internal proof/verification language.

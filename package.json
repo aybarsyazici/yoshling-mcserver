@@ -9,7 +9,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "aion2:knowledge:validate": "node scripts/aion2-knowledge.mjs",
+    "aion2:knowledge:check": "node scripts/aion2-knowledge.mjs --check-sources",
+    "aion2:knowledge:embed": "node scripts/aion2-embed.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",

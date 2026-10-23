@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { motion } from "motion/react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AppSwitcher } from "@/components/app-switcher";
 import { LogOut } from "lucide-react";
 
 export function HomeChrome({
@@ -12,7 +13,7 @@ export function HomeChrome({
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-border/50 bg-background/70 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
         <motion.div
           className="flex items-center gap-2.5"
           initial={{ opacity: 0, x: -10 }}
@@ -32,6 +33,7 @@ export function HomeChrome({
         </motion.div>
 
         <div className="flex items-center gap-2">
+          <AppSwitcher />
           <ThemeToggle />
           {user.image && (
             <Image

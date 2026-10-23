@@ -23,6 +23,7 @@ import {
   LogOut,
   ChevronLeft,
   Menu,
+  Swords,
 } from "lucide-react";
 
 interface NavItem {
@@ -208,6 +209,7 @@ export function GameSidebar({ game, access }: { game: GameId; access: GameId[] }
 
         {/* Nav */}
         <nav className="relative flex-1 space-y-0.5 overflow-y-auto p-2">
+          <NavLink item={{ name: "Aion 2 helper", href: "/aion2", icon: Swords }} active={false} collapsed={collapsed} tint={meta.tint} onNav={() => setMobileOpen(false)} />
           {/* Named, to match the "Shared" group below. Without it these links read
               as generic on a shared page, when they all go to one world. */}
           {!collapsed && <p className="eyebrow px-3 pb-1 pt-1 text-muted-foreground">{meta.name}</p>}

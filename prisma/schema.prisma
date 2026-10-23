@@ -20,6 +20,65 @@ model User {
   minecraftTourDone Boolean @default(false)
   createdAt  DateTime   @default(now())
   activities Activity[]
+  aion2Characters Aion2Character[]
+  aion2ChecklistCompletions Aion2ChecklistCompletion[]
+}
+
+/// Manual reset progress. Server scope is shared only inside one account.
+model Aion2ChecklistCompletion {
+  id          String @id @default(cuid())
+  ownerId     String
+  owner       User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  scopeKey    String
+  activityId  String
+  periodKey   String
+  revision    Int @default(1)
+  completedAt DateTime?
+  updatedAt   DateTime @updatedAt
+
+  @@unique([ownerId, scopeKey, activityId, periodKey])
+  @@index([ownerId, scopeKey])
+}
+
+/// Public armory tracking belongs to the signed-in account, independently of world grants.
+model Aion2Character {
+  id             String @id @default(cuid())
+  ownerId        String
+  owner          User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  region         String
+  serverId       Int
+  characterId    String
+  name           String
+  serverName     String
+  tracking       Boolean @default(true)
+  /// User-entered resource context; never read or inferred from the public armory.
+  odyleEnergy    Int?
+  resourcesUpdatedAt DateTime?
+  lastAttemptAt  DateTime?
+  lastSuccessAt  DateTime?
+  nextRefreshAt  DateTime @default(now())
+  lastError      String?
+  failureCount   Int @default(0)
+  leaseToken     String?
+  leaseUntil     DateTime?
+  createdAt      DateTime @default(now())
+  snapshots      Aion2Snapshot[]
+
+  @@unique([ownerId, region, serverId, characterId])
+  @@index([tracking, nextRefreshAt])
+}
+
+model Aion2Snapshot {
+  id           String @id @default(cuid())
+  characterId  String
+  character    Aion2Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  observedAt   DateTime
+  fingerprint  String
+  payloadJson  String
+  combatPower  Int?
+  gearScore    Int?
+
+  @@index([characterId, observedAt])
 }
 
 model InstalledMod {
