@@ -99,6 +99,8 @@ The first registered Discord account becomes ADMIN; later accounts start as MEMB
 
 JWT resolution rechecks current policy and DB identity/role/worlds; deleted or uninvited accounts lose access. Upload tokens require a real `AUTH_SECRET`, expire after ten minutes, and recheck current policy/role/worlds when spent. They remain reusable until expiry.
 
+Discord pins `issuer: "https://discord.com"` for callback validation; preserve PKCE and the existing OAuth endpoints.
+
 ## Local development
 
 Use a supported Node 22 installation. On this machine:

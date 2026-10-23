@@ -20,6 +20,36 @@ tokens require a new sign-in; immutable DB IDs/Discord subjects can resolve exis
 Already-started work is not retroactively undone by session revocation. Direct upload tokens
 also check the current invitation policy when spent, alongside role/world grants.
 
+## Discord OAuth issuer
+
+The Discord provider explicitly sets `issuer: "https://discord.com"`.
+[Discord's authorization responses](https://docs.discord.com/developers/topics/oauth2#issuer-identification)
+include that `iss` value, also declared in its
+[discovery metadata](https://discord.com/.well-known/openid-configuration).
+The installed Auth.js provider supplies explicit OAuth endpoints without an issuer;
+without our setting, its callback validation compares against `https://authjs.dev`
+and rejects Discord's response before token exchange/account registration.
+
+Keep the exact HTTPS issuer with no trailing slash. Preserve the provider's OAuth
+type, `identify email` scope, explicit token/profile endpoints and PKCE defaults.
+Do not suppress issuer validation, strip `iss`, or disable callback security checks
+to fix this error. No database migration or OAuth credential change is required.
+
+For callback incidents, inspect the server's error type/cause without exposing
+authorization codes, tokens, cookies, profiles or environment contents. A generic
+configuration error page alone cannot establish whether the failure is issuer,
+PKCE, credentials, invitation policy or database access. Real login/logout readback
+is separate from mocked OAuth and account-policy tests.
+
+`tests/discord-oauth-issuer.test.ts` runs the real Auth.js authorization/callback,
+token/profile processing and application session callbacks with synthetic responses.
+All network requests are blocked except the fixture's explicit mock transport;
+account storage and invitations are mocked. It accepts the exact Discord issuer,
+rejects nonmatching/duplicate issuers before token exchange, preserves S256 PKCE,
+and rejects missing/corrupt verifier cookies. Removing the issuer setting reproduces
+the failure; restoring it passes. The separate real-SQLite account suite covers
+registration, ownership and current invitation checks.
+
 ## Policy storage and editing
 
 `WHITELIST_FILE` defaults to `/app/data/whitelist.json`. Its format is a JSON array of
