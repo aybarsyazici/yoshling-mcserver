@@ -1085,3 +1085,42 @@ schema/counts and hosted-game container state were preserved. The running image,
 public helper bundle, login gate and private API responses were verified.
 Signed-in production account flows and OS notification delivery remain unverified.
 Exact backup, image, HTTP evidence and limits: [AION2-DEPLOYMENT.md](AION2-DEPLOYMENT.md).
+
+## 2026-10-23 — Discord login callback issuer
+
+A fresh sign-in after logout reached the generic server configuration error after
+Discord authorization. Three recent production callback failures reported
+`unexpected "iss" (issuer) response parameter value`, with the fallback expected
+issuer `https://authjs.dev`. The installed Discord provider supplied endpoints
+without an issuer. Added the exact documented `issuer: "https://discord.com"` to
+the application provider; OAuth type, scopes, endpoints, PKCE and account policy
+remain unchanged. No credential change or database migration was performed.
+
+Seven new offline regressions exercise real Auth.js authorization, callback,
+token/profile processing and application JWT/session callbacks with synthetic
+responses and blocked network access. The valid Discord issuer completes the
+fixture login; wrong/trailing-slash/duplicate issuers reject before token exchange;
+missing/corrupt PKCE cookies still reject. Removing the issuer reproduced three
+failures, including the observed Configuration redirect; restoring it passed all
+seven OAuth and nineteen real-SQLite identity tests. The full 210-file / 3,766-test
+suite, TypeScript, normal production build and lint passed. Thirteen existing
+build warnings and seven existing lint warnings remain.
+
+Feature commit `326a81478e0a7d4c64dc658a392c61afae27694a` was deployed with:
+
+```bash
+scripts/deploy.sh --service web --verify 'issuer:"https://discord.com"'
+```
+
+The live image is
+`sha256:4d2c2f86a31791ad4e4e09cd3bdadbc53d6263eb68866b591229f970f999d558`,
+container `d971ef6e6ef2d2a5ec14c72850d540b2a69668134fb1fc53df30cfe0a4fa6d31`,
+started at 16:41:36 UTC with restart count zero. At 16:42:02 UTC, a readback of the
+running server bundles confirmed the exact issuer beside the runtime Discord
+client-ID/secret references. Public HTTP checks confirmed the login page, protected
+helper redirect and JSON 401/private-no-store APIs. All game IDs, images, states,
+start/finish timestamps and restart counts matched the fresh incident baseline.
+
+The user was asked to start a fresh production sign-in after deployment; genuine
+Discord authorization/logout readback remains pending. Mocked callback completion
+and a correct running configuration do not establish a real account login.
