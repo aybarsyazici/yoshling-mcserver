@@ -1155,3 +1155,28 @@ through the web script; the new version and counter text were read back from the
 running image, and its source check passed. All game container metadata matched
 the pre-deployment baseline. Detailed claims, evidence, current profile readback,
 coverage limits and image identity: [AION2-REVIEW-2026-10-24.md](AION2-REVIEW-2026-10-24.md).
+
+## 2026-10-24 — Refreshed Aion curation and per-item substat comparisons
+
+Used the user-renewed local `.env` AWS credentials for a bounded Bedrock review
+and actual Titan V2 rebuild. The saved index now binds the main and gear catalogs:
+90 authored chunks, six queries, 36 model calls and 60 reused vectors. SSO setup
+and recurring compilation remain deferred. Current source pins were reviewed;
+knowledge release `2026.10.24.2` restores advice without weakening the source latch.
+
+Expandable gear cards show the Gladiator PvE substat order beside observed lines,
+reasons and sources. Exact pools filter unavailable rolls; fixed gear gets no
+reroll list. Missing live details permit a labeled exact-pool reference with no
+observed-match badges. Unknown items/classes do not inherit a generic displayed
+rank list. The bounded armory detail reads now include other equipment, runes and
+Arcana after critical gear/boards; all still share one eight-second deadline.
+
+All 3,871 tests, TypeScript, the normal production build/artifact check, lint and
+local/live source checks passed with existing warnings. Regression protections
+were broken to establish failure, then restored. Commit `eca2076` was deployed;
+the release and card labels were read back from the running image. Public HTTP
+authentication checks passed and all game container metadata remained unchanged.
+Signed-in visual verification was unavailable because the browser URL policy
+refused the localhost preview. Detailed scope, model review disposition, public
+probe, image identity and verification limits:
+[AION2-GEAR-PRIORITIES.md](AION2-GEAR-PRIORITIES.md).

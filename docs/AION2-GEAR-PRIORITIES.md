@@ -115,3 +115,18 @@ production account interaction.
 Browser observation of the localhost preview was refused by the browser URL policy;
 no visual browser approval is claimed. Component tests cover expanded cards, held
 and fixed items, references, tied ranks, source links and malformed projections.
+
+### Production rollout
+
+Feature commit `eca2076` was pushed to `main` and deployed with
+`scripts/deploy.sh --service web --verify '2026.10.24.2'`. The running image is
+`sha256:9d1f6fc32a6c4a297696d92d75d5916869b7acbdf4cd239dbfe933819ec094d4`,
+started at 09:54:20 UTC. Its built server/client files contained the new release,
+reviewed order, reference order and fixed-item labels. The four-catalog source
+check inside the running web container passed at 09:54 UTC.
+
+Live anonymous HTTP checks returned `/login` 200, `/aion2` 307 to login, and the
+character/knowledge/server/timer APIs 401 with `private, no-store`. This checks
+authentication boundaries, not a completed Discord login. The Minecraft, 7DTD and
+Project Zomboid container IDs, image IDs, states and start times matched the fresh
+pre-deploy baseline. No schema migration or game lifecycle action was required.
