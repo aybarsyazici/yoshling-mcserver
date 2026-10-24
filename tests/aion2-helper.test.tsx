@@ -6,6 +6,12 @@ import type { AionCharacterList, AionTrackedCharacter } from "@/lib/aion2-types"
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
+async function findPriorityText(text: Parameters<typeof screen.findByText>[0]) {
+  return within(await screen.findByRole("region", { name: "What to work on next" })).findByText(text);
+}
+function priorityText(text: Parameters<typeof screen.getByText>[0]) {
+  return within(screen.getByRole("region", { name: "What to work on next" })).getByText(text);
+}
 function character(): AionTrackedCharacter {
   const now = new Date().toISOString();
   return {
@@ -115,7 +121,7 @@ it("retains the last snapshot after a failed list check but disables mutations u
   expect(screen.getByText("Example Greatsword")).toBeTruthy();
   expect(screen.queryByText("Work toward Overhead Slam level 20")).toBeNull();
   expect(screen.queryByText("Activity guide")).toBeNull();
-  expect(screen.getByText(/Recommendations are withheld because saved characters could not be checked/)).toBeTruthy();
+  expect(priorityText(/Recommendations are withheld because saved characters could not be checked/)).toBeTruthy();
   expect((screen.getByRole("button", { name: "Refresh now" }) as HTMLButtonElement).disabled).toBe(true);
   failed = false; fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect((screen.getByRole("button", { name: "Refresh now" }) as HTMLButtonElement).disabled).toBe(false));
@@ -146,7 +152,7 @@ it.each(["missing", "expired", "unverified", "review-required"] as const)("withh
   if (status === "missing") delete payload.knowledge;
   else payload.knowledge!.status = status;
   backend(url => url === "/api/aion2/characters" ? json(payload) : undefined);
-  render(<AionHelper />); await screen.findByText(/Recommendations are withheld/);
+  render(<AionHelper />); await findPriorityText(/Recommendations are withheld/);
   expect(screen.queryByText("Work toward Overhead Slam level 20")).toBeNull();
   expect(screen.queryByText("Activity guide")).toBeNull();
   expect(screen.queryByText(/No specific upgrade gap|No applicable recommendations/)).toBeNull();
@@ -159,14 +165,14 @@ it("describes a reference review hold without claiming that a newer patch exists
   payload.knowledge!.notices = ["A pinned reference changed after review."];
   backend(url => url === "/api/aion2/characters" ? json(payload) : undefined);
   render(<AionHelper />);
-  await screen.findByText("Recommendations are withheld until updated patch or reference information has been reviewed.");
+  await findPriorityText("Recommendations are withheld until updated patch or reference information has been reviewed.");
   expect(screen.queryByText(/a newer patch needs/)).toBeNull();
 });
 
 it("withholds a current status whose review deadline has passed", async () => {
   const payload = list([character()]); payload.knowledge!.expiresAt = new Date(Date.now() - 1_000).toISOString();
   backend(url => url === "/api/aion2/characters" ? json(payload) : undefined);
-  render(<AionHelper />); await screen.findByText("Recommendations are withheld because the source review has expired.");
+  render(<AionHelper />); await findPriorityText("Recommendations are withheld because the source review has expired.");
   expect(screen.queryByText("Work toward Overhead Slam level 20")).toBeNull();
   expect(screen.queryByText("Activity guide")).toBeNull();
 });
@@ -174,7 +180,7 @@ it("withholds a current status whose review deadline has passed", async () => {
 it.each([31 * 60_000, -6 * 60_000])("withholds recommendations for a snapshot with an age of %s milliseconds", async age => {
   const c = character(); c.snapshot!.observedAt = new Date(Date.now() - age).toISOString();
   backend(url => url === "/api/aion2/characters" ? json(list([c])) : undefined);
-  render(<AionHelper />); await screen.findByText(/Recommendations are withheld because the snapshot needs a fresh check/);
+  render(<AionHelper />); await findPriorityText(/Recommendations are withheld because the snapshot needs a fresh check/);
   expect(screen.getByText("Snapshot needs a check")).toBeTruthy();
   expect(screen.queryByText("Work toward Overhead Slam level 20")).toBeNull();
   expect(screen.queryByText("Activity guide")).toBeNull();
@@ -190,7 +196,7 @@ it("ages recommendations out using the client clock while an inactive tab does n
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
   await act(async () => { await vi.advanceTimersByTimeAsync(31 * 60_000); });
   expect(screen.queryByText("Work toward Overhead Slam level 20")).toBeNull();
-  expect(screen.getByText(/Recommendations are withheld because the snapshot needs a fresh check/)).toBeTruthy();
+  expect(priorityText(/Recommendations are withheld because the snapshot needs a fresh check/)).toBeTruthy();
   expect(screen.getByText("Snapshot needs a check")).toBeTruthy();
   expect(screen.getByText("Example Greatsword")).toBeTruthy();
 });

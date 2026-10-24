@@ -68,7 +68,8 @@ it("keeps fixed stats visible and never supplies a reroll priority list for fixe
 
 it("withholds ordered guidance and rank badges under a source hold while preserving observed stats", () => {
   render(<AionGearPriorities snapshot={snapshot()} report={report()} holdReason="Reference information needs review." />); open();
-  expect(screen.getByText(/Substat guidance is withheld.*Observed item stats remain visible/)).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toContain("Reference information needs review.");
+  expect(screen.getByRole("status").textContent).toContain("Observed item stats remain visible.");
   expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
   expect(screen.queryByText(/Reviewed priority 1/)).toBeNull();
   expect(screen.getByText("55")).toBeTruthy(); expect(screen.getByText("+1")).toBeTruthy();
@@ -139,4 +140,31 @@ it.each(["held", "fixed"])("keeps reference comparison lists hidden when %s", co
   render(<AionGearPriorities snapshot={data} report={guide} holdReason={condition === "held" ? "Reference needs review." : null} />); open();
   expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
   expect(screen.queryByText("Reference substat order")).toBeNull();
+});
+
+it("shows the exact parent hold reason in the gear banner and the expanded item", () => {
+  const reason = "Saved characters could not be checked. Retry the current character read.";
+  render(<AionGearPriorities snapshot={snapshot()} report={report()} holdReason={reason} />);
+  expect(within(screen.getByRole("status")).getByText(reason)).toBeTruthy();
+  expect(within(open()).getByText(reason)).toBeTruthy();
+  expect(screen.queryByText(/Current reviewed guidance is unavailable/)).toBeNull();
+  expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
+});
+
+it.each(["stale", "review-required", "unverified"] as const)("shows the specific %s report notice inside the item instead of a generic review claim", status => {
+  const guide = report(); guide.status = status;
+  guide.notice = `${status}: the equipped snapshot or reference status needs a fresh check.`;
+  render(<AionGearPriorities snapshot={snapshot()} report={guide} />);
+  expect(within(open()).getByText(guide.notice)).toBeTruthy();
+  expect(screen.queryByText(/Current reviewed guidance is unavailable/)).toBeNull();
+  expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
+});
+
+it("identifies a missing optional gear report and points to Check saved characters without claiming a stale review", () => {
+  render(<AionGearPriorities snapshot={snapshot()} />);
+  const message = "The gear priority report was not returned. Use Check saved characters to request it.";
+  expect(within(screen.getByRole("status")).getByText(message)).toBeTruthy();
+  expect(within(open()).getByText(message)).toBeTruthy();
+  expect(screen.queryByText(/Current reviewed guidance is unavailable|needs a current review/)).toBeNull();
+  expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
 });

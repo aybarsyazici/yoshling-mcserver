@@ -130,3 +130,26 @@ character/knowledge/server/timer APIs 401 with `private, no-store`. This checks
 authentication boundaries, not a completed Discord login. The Minecraft, 7DTD and
 Project Zomboid container IDs, image IDs, states and start times matched the fresh
 pre-deploy baseline. No schema migration or game lifecycle action was required.
+
+### Unavailable-message investigation
+
+A subsequent report of “Current reviewed guidance is unavailable” exposed a UI
+diagnostic problem: that sentence covered a missing optional gear report, a parent
+character/source hold and a non-current report. Gear now shows the exact parent
+reason or report notice in its banner and item panel. A missing report explicitly
+points to **Check saved characters**. Ranking and freshness gates are unchanged.
+
+At 10:32 UTC, a read-only production probe ran the same strict source routine in
+an isolated Node process: 51 unique requests completed in 3.88 seconds with matching
+pins and patch bodies, no redirect/deadline failures, current knowledge and a valid
+23-row current gear report for the stored example. The example's last successful
+armory observation was 10:28 UTC with no error and three progression recommendations.
+This does not inspect or clear the web process's existing in-memory source latch,
+or prove which view/character triggered the user-visible warning. Those causes
+remain unconfirmed until the affected page's status is observed.
+
+The message regressions failed before the change, then all 3,876 tests passed.
+TypeScript, normal build/artifact verification and lint passed with the existing
+13 tracing/seven lint warnings. The attempted standalone full-list UI-validator
+probe could not load a client-only icon package from the runner; it was stopped
+without installing dependencies. Full signed-in list validation remains unverified.
