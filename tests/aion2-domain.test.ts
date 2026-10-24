@@ -10,6 +10,8 @@ const NOW = new Date("2026-10-23T12:00:00Z");
 const REF: AionCharacterRef = { region: "eu", serverId: 2322, characterId: "fixturecharacteridentifier=" };
 const fetchMock = vi.fn<typeof fetch>();
 const GUIDE_BYTES = Buffer.from("\uFEFFReviewed fixture guide\r\n", "utf8");
+const SCOPED_GUIDE_URL = "https://aion2.gg/database/skills/overhead-slam-11170000";
+const SCOPED_MAIN = "\n<h1>Overhead Slam</h1><p>Cooldown specialty at level 16 · Ω</p>\n";
 let testManifest: typeof originalManifest;
 let testTimers: typeof originalTimers;
 let testChecklist: typeof originalChecklist;
@@ -116,6 +118,23 @@ async function primeKnowledge() {
   return { ...knowledge, feed };
 }
 
+function scopedGuidePage(main = SCOPED_MAIN, transport = "baseline") {
+  return `<!doctype html><html><body><script>const text="<main>transport literal</main>";</script><main data-layout="${transport}" title="a > b">${main}</main><script>self.__next_f.push([1,"${transport}"])</script></body></html>`;
+}
+
+async function primeScopedKnowledge() {
+  const source = testManifest.sources.find(source => source.id === "overhead-skill")!;
+  Object.assign(source, { fetchUrl: SCOPED_GUIDE_URL, hashScope: "html-main-v1", sha256: sha256(SCOPED_MAIN) });
+  const knowledge = await import("@/lib/aion2-knowledge");
+  const feed = { contentList: knowledge.aionKnowledge.patches.map(patch => ({ id: patch.id, timestamps: { updatedAt: patch.updatedAt } })) };
+  const respond = (input: string, page: string | Uint8Array = scopedGuidePage()) => input === SCOPED_GUIDE_URL
+    ? new Response(typeof page === "string" ? page : new Uint8Array(page), { headers: { "Content-Type": "text/html; charset=utf-8" } })
+    : knowledgeReply(input, feed);
+  fetchMock.mockImplementation(async input => respond(String(input)));
+  expect((await knowledge.refreshAionKnowledgeStatus()).status).toBe("current");
+  return { ...knowledge, feed, respond };
+}
+
 beforeEach(() => {
   vi.resetModules();
   const globals = globalThis as typeof globalThis & { __aionHttp?: unknown; __aionKnowledge?: unknown };
@@ -128,6 +147,9 @@ beforeEach(() => {
   testGear = structuredClone(originalGear);
   for (const patch of testManifest.patches) patch.bodySha256 = sha256(patchBody(patch.id));
   for (const source of testManifest.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
+  // The common fixtures intentionally hash raw synthetic bytes. Scoped HTML is
+  // enabled explicitly only in its dedicated integration cases below.
+  for (const source of testManifest.sources) delete (source as { hashScope?: string }).hashScope;
   for (const source of testTimers.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
   for (const source of testChecklist.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
   for (const source of testGear.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
@@ -286,6 +308,84 @@ describe("Aion2 HTTP boundary", () => {
 });
 
 describe("Aion2 knowledge freshness", () => {
+  it("keeps the exact opted-in main current across outside script and transport variants", async () => {
+    const knowledge = await primeScopedKnowledge();
+    const variant = scopedGuidePage(SCOPED_MAIN, "different-flight-module-order");
+    expect(sha256(variant)).not.toBe(sha256(scopedGuidePage()));
+    vi.setSystemTime(new Date(NOW.getTime() + 16 * 60_000));
+    fetchMock.mockImplementation(async input => knowledge.respond(String(input), variant));
+    const checked = await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 });
+    expect(checked.status).toBe("current");
+    expect(checked.checkedAt).toBe(new Date(NOW.getTime() + 16 * 60_000).toISOString());
+  });
+
+  it("still hashes other source bytes raw when the exact skill source opts in", async () => {
+    const knowledge = await primeScopedKnowledge();
+    const other = testManifest.sources.find(source => "fetchUrl" in source && source.fetchUrl !== SCOPED_GUIDE_URL)!;
+    expect("fetchUrl" in other).toBe(true);
+    vi.setSystemTime(new Date(NOW.getTime() + 16 * 60_000));
+    fetchMock.mockImplementation(async input => String(input) === (other as { fetchUrl: string }).fetchUrl
+      ? new Response(new Uint8Array(Buffer.concat([GUIDE_BYTES, Buffer.from(" changed ordinary source")])) )
+      : knowledge.respond(String(input), scopedGuidePage(SCOPED_MAIN, "changed-flight")));
+    expect((await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 })).status).toBe("review-required");
+  });
+
+  it("latches a real inner-main claim change even if a later response returns the reviewed main", async () => {
+    const knowledge = await primeScopedKnowledge();
+    vi.setSystemTime(new Date(NOW.getTime() + 16 * 60_000));
+    fetchMock.mockImplementation(async input => knowledge.respond(String(input), scopedGuidePage(SCOPED_MAIN.replace("level 16", "level 18"), "variant")));
+    expect((await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 })).status).toBe("review-required");
+    vi.setSystemTime(new Date(NOW.getTime() + 32 * 60_000));
+    fetchMock.mockImplementation(async input => knowledge.respond(String(input), scopedGuidePage(SCOPED_MAIN, "old-main-returned")));
+    expect((await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 })).status).toBe("review-required");
+  });
+
+  it.each(["missing", "nested", "duplicate", "invalid-utf8"])("immediately withdraws a prior successful check for %s scoped main content until a whole valid check succeeds", async kind => {
+    const knowledge = await primeScopedKnowledge();
+    const invalid = kind === "missing" ? "<html><p>No main</p></html>"
+      : kind === "nested" ? "<main>first<main>second</main></main>"
+      : kind === "duplicate" ? "<main>first</main><main>second</main>"
+      : new Uint8Array([...Buffer.from("<main>"), 0xc3, 0x28, ...Buffer.from("</main>")]);
+    vi.setSystemTime(new Date(NOW.getTime() + 16 * 60_000));
+    fetchMock.mockImplementation(async input => knowledge.respond(String(input), invalid));
+    const failed = await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 });
+    expect(failed.status).toBe("unverified"); expect(failed.checkedAt).toBe(NOW.toISOString());
+    expect(failed.notices.join(" ")).toMatch(/could not be parsed safely/);
+    // An ordinary network failure cannot erase the known parse failure.
+    vi.setSystemTime(new Date(NOW.getTime() + 17 * 60_000));
+    fetchMock.mockResolvedValueOnce(reply({}, 503));
+    expect((await knowledge.refreshAionKnowledgeStatus()).status).toBe("unverified");
+    vi.setSystemTime(new Date(NOW.getTime() + 18 * 60_000));
+    fetchMock.mockImplementation(async input => knowledge.respond(String(input)));
+    const recovered = await knowledge.refreshAionKnowledgeStatus();
+    expect(recovered.status).toBe("current");
+    expect(recovered.checkedAt).toBe(new Date(NOW.getTime() + 18 * 60_000).toISOString());
+  });
+
+  it("preserves the existing last-good grace for an unknown network failure with valid scoped content", async () => {
+    const knowledge = await primeScopedKnowledge();
+    const other = testManifest.sources.find(source => "fetchUrl" in source && source.fetchUrl !== SCOPED_GUIDE_URL)!;
+    vi.setSystemTime(new Date(NOW.getTime() + 16 * 60_000));
+    fetchMock.mockImplementation(async input => String(input) === (other as { fetchUrl: string }).fetchUrl ? reply({}, 503) : knowledge.respond(String(input)));
+    const failed = await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 });
+    expect(failed.status).toBe("current"); expect(failed.checkedAt).toBe(NOW.toISOString());
+    expect(failed.notices.join(" ")).toMatch(/retained for at most one hour/);
+    vi.setSystemTime(new Date(NOW.getTime() + 61 * 60_000));
+    expect(knowledge.aionKnowledgeStatus().status).toBe("unverified");
+  });
+
+  it("latches an already verified new patch feed even when an unrelated source request fails", async () => {
+    const knowledge = await primeKnowledge();
+    const changed = { contentList: [{ id: "new-reviewed-feed-entry", timestamps: { updatedAt: "2026-10-23T12:15:00Z" } }, ...knowledge.feed.contentList] };
+    const other = testManifest.sources.find(source => "fetchUrl" in source)!;
+    vi.setSystemTime(new Date(NOW.getTime() + 16 * 60_000));
+    fetchMock.mockImplementation(async input => String(input) === (other as { fetchUrl: string }).fetchUrl ? reply({}, 503) : knowledgeReply(String(input), changed));
+    expect((await knowledge.refreshAionKnowledgeStatus({ maximumCheckAgeMs: 15 * 60_000 })).status).toBe("review-required");
+    vi.setSystemTime(new Date(NOW.getTime() + 17 * 60_000));
+    fetchMock.mockImplementation(async input => knowledgeReply(String(input), knowledge.feed));
+    expect((await knowledge.refreshAionKnowledgeStatus()).status).toBe("review-required");
+  });
+
   it("refreshes alert sources before their thirty-minute trust window and clamps request frequency", async () => {
     const knowledge = await primeKnowledge();
     const calls = fetchMock.mock.calls.length;
@@ -424,6 +524,16 @@ describe("Aion2 knowledge freshness", () => {
 });
 
 describe("Aion2 knowledge configuration validation", () => {
+  it.each(["unknown-scope", "wrong-url"])("rejects %s metadata before any source request", async kind => {
+    const source = testManifest.sources.find(source => source.id === "overhead-skill")!;
+    Object.assign(source, { hashScope: kind === "unknown-scope" ? "unknown" : "html-main-v1", fetchUrl: kind === "wrong-url" ? `${SCOPED_GUIDE_URL}?variant=1` : SCOPED_GUIDE_URL });
+    const { validateAionKnowledge } = await import("@/lib/aion2-knowledge-validation");
+    expect(validateAionKnowledge(testManifest).some(error => /hashScope/.test(error))).toBe(true);
+    const knowledge = await import("@/lib/aion2-knowledge");
+    expect((await knowledge.refreshAionKnowledgeStatus()).status).toBe("review-required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(["invalid-dates", "missing-source", "invalid-target", "region-and-url"])("fails closed for %s", async (kind) => {
     const { validateAionKnowledge } = await import("@/lib/aion2-knowledge-validation");
     if (kind === "invalid-dates") testManifest.expiresAt = "2026-02-30";

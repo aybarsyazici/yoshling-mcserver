@@ -8,19 +8,20 @@ import { validateAionTimers } from "./aion2-timer-validation";
 import { validateAionChecklistManifest } from "./aion2-checklist-validation";
 import { validateAionGearPriorities } from "./aion2-gear-validation";
 import { createHash } from "node:crypto";
+import { aionSourceContent, AionSourceContentError } from "./aion2-source-content";
 
 export const aionKnowledge = manifest;
 const validationErrors = [...validateAionKnowledge(manifest), ...validateAionTimers(timerManifest), ...validateAionChecklistManifest(checklistManifest), ...validateAionChecklistLinks(manifest, checklistManifest), ...validateAionGearPriorities(gearManifest)];
 const reviewVersion = `${manifest.version}:${timerManifest.version}:${checklistManifest.version}:${gearManifest.version}`;
-const globals = globalThis as typeof globalThis & { __aionKnowledge?: { version: string; checkedAt: number; attemptedAt: number; changed: boolean; reason: string | null; error: string | null; pending?: Promise<AionKnowledgeStatus> } };
-if (globals.__aionKnowledge?.version !== reviewVersion) globals.__aionKnowledge = { version: reviewVersion, checkedAt: 0, attemptedAt: 0, changed: false, reason: null, error: null };
+const globals = globalThis as typeof globalThis & { __aionKnowledge?: { version: string; checkedAt: number; attemptedAt: number; changed: boolean; sourceUnverified: boolean; reason: string | null; error: string | null; pending?: Promise<AionKnowledgeStatus> } };
+if (globals.__aionKnowledge?.version !== reviewVersion) globals.__aionKnowledge = { version: reviewVersion, checkedAt: 0, attemptedAt: 0, changed: false, sourceUnverified: false, reason: null, error: null };
 const state = globals.__aionKnowledge!;
 const CHECK_MS = 30 * 60_000;
 
 export function aionKnowledgeStatus(now = new Date()): AionKnowledgeStatus {
   const expires = (value: string) => Date.parse(value.length === 10 ? `${value}T00:00:00Z` : value);
   const expired = [manifest, timerManifest, checklistManifest, gearManifest, ...manifest.sources, ...manifest.rules, ...manifest.activities, ...timerManifest.sources, ...checklistManifest.sources, ...gearManifest.sources].some((source) => now.getTime() >= expires(source.expiresAt));
-  const status = validationErrors.length ? "review-required" : expired ? "expired" : state.changed ? "review-required" : !state.checkedAt || now.getTime() - state.checkedAt > CHECK_MS * 2 ? "unverified" : "current";
+  const status = validationErrors.length ? "review-required" : expired ? "expired" : state.changed ? "review-required" : state.sourceUnverified || !state.checkedAt || now.getTime() - state.checkedAt > CHECK_MS * 2 ? "unverified" : "current";
   return {
     version: manifest.version, reviewedAt: manifest.reviewedAt, expiresAt: manifest.expiresAt, status,
     checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
@@ -59,7 +60,10 @@ export function refreshAionKnowledgeStatus(options: { maximumCheckAgeMs?: number
         const article = data.contentList!.find((item) => item.id === reviewed.id);
         return !article || article.timestamps?.updatedAt !== reviewed.updatedAt;
       });
-      const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+      // A verified feed change already requires review, even if a subsequent
+      // independent guide request fails before the remaining checks finish.
+      if (changed) { state.changed = true; state.reason = "NCSOFT published or revised patch notes after this knowledge review. Recommendations are withheld pending review."; }
+      const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
       const checks = await Promise.all([
         ...manifest.patches.map(async (patch) => {
           const detail = JSON.parse((await read(`https://api-global-community.plaync.com/aion2_global/board/update_en/article/${patch.id}`)).toString("utf8"));
@@ -69,7 +73,7 @@ export function refreshAionKnowledgeStatus(options: { maximumCheckAgeMs?: number
         }),
         ...[...manifest.sources, ...timerManifest.sources, ...checklistManifest.sources, ...gearManifest.sources].filter((source) => "fetchUrl" in source).map(async (source) => {
           if (!("fetchUrl" in source) || !source.fetchUrl) return false;
-          return hash(await read(source.fetchUrl)) !== source.sha256;
+          return hash(aionSourceContent(source, await read(source.fetchUrl))) !== source.sha256;
         }),
       ]);
       changed ||= checks.some(Boolean);
@@ -77,8 +81,11 @@ export function refreshAionKnowledgeStatus(options: { maximumCheckAgeMs?: number
       // Only a reviewed knowledge version resets this process's latch.
       state.changed ||= changed;
       if (state.changed) state.reason = "Official patch notes, a pinned guide, timer, checklist or gear source changed after review. Recommendations are withheld until the knowledge base is reviewed.";
-      state.checkedAt = Date.now(); state.error = null;
-    } catch { state.error = "A patch, guide, timer, checklist or gear source check failed. Its last verified result is retained for at most one hour."; }
+      state.checkedAt = Date.now(); state.error = null; state.sourceUnverified = false;
+    } catch (error) {
+      if (error instanceof AionSourceContentError) { state.sourceUnverified = true; state.error = "A reviewed source could not be parsed safely. Recommendations are withheld until its content can be verified."; }
+      else state.error = "A patch, guide, timer, checklist or gear source check failed. Its last verified result is retained for at most one hour.";
+    }
     return aionKnowledgeStatus();
   })().finally(() => { state.pending = undefined; });
   state.pending = promise; return promise;

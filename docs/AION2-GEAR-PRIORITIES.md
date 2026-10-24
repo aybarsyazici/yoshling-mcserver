@@ -84,9 +84,10 @@ on all guard skill lines was not adopted: a different random guard requires its 
 reviewed pool. Several other severity labels contradicted their own “no contradiction”
 reasons. Model output was manually checked, not treated as source truth or approval.
 
-The index now binds **both** the main knowledge and gear catalog digests. It stores
-90 authored chunks/six queries: 60 existing vectors reused and 36 new Titan V2
-invocations, with 7,173 embedding input tokens. Gear chunks cannot displace a
+The index binds **both** the main knowledge and gear catalog digests. Its initial
+gear rebuild stored 90 authored chunks/six queries: 60 existing vectors reused and
+36 new Titan V2 invocations, with 7,173 embedding input tokens. The later source-scope
+metadata correction reused all 96 vectors without model calls. Gear chunks cannot displace a
 progression rule's related step explanations. Edited catalogs invalidate saved
 semantic evidence; the builder checks both inputs again before atomic publication.
 The website still makes no AWS/model request during ordinary use.
@@ -144,9 +145,11 @@ an isolated Node process: 51 unique requests completed in 3.88 seconds with matc
 pins and patch bodies, no redirect/deadline failures, current knowledge and a valid
 23-row current gear report for the stored example. The example's last successful
 armory observation was 10:28 UTC with no error and three progression recommendations.
-This does not inspect or clear the web process's existing in-memory source latch,
-or prove which view/character triggered the user-visible warning. Those causes
-remain unconfirmed until the affected page's status is observed.
+That isolated probe did not inspect the web process's existing in-memory source
+latch. The user then confirmed the live URL, and a 10:38 source check reproduced
+an intermittent Overhead Slam page fingerprint mismatch. Its game content was
+identical; Next.js transport record numbering differed. The reviewed correction
+is documented in [source fingerprints](AION2-SOURCE-CHECKS.md).
 
 The message regressions failed before the change, then all 3,876 tests passed.
 TypeScript, normal build/artifact verification and lint passed with the existing

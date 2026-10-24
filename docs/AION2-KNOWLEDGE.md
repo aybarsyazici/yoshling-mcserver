@@ -40,7 +40,9 @@ embedding is similar. Rules and source expiry still control whether advice is sh
    conditions explicitly. Give every step, board model and event its direct source.
    Retain uncertainty when the source or public API cannot establish a prerequisite.
 3. Bump the knowledge version and update the reviewed source pins/dates after reading
-   the changes. Run:
+   the changes. Pins hash raw response bytes unless an explicitly implemented scope
+   is selected. Read [source fingerprints](AION2-SOURCE-CHECKS.md) before changing
+   a scope; rendering differences must be proved separately from game-data changes. Run:
 
    ```bash
    npm run aion2:knowledge:validate
@@ -177,3 +179,7 @@ Its bounded rebuild made 36 model calls and reused all 60 existing vectors; 90
 chunks/six queries are now saved. Both catalog inputs are checked for concurrent
 changes before index publication. The one-off Bedrock review and its manual
 disposition are recorded in [gear priorities](AION2-GEAR-PRIORITIES.md).
+
+The `2026.10.24.3` source-fingerprint correction changes review metadata only. Its
+index rebuild reused all 96 saved vectors, with zero model calls or input tokens.
+The reviewed skill facts and progression instructions are unchanged.

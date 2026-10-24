@@ -75,6 +75,8 @@ The gear view now provides item cards with observed lines and ranked substat
 comparisons. [Gear priorities](AION2-GEAR-PRIORITIES.md) explains the reviewed
 Gladiator/item-pool scope, tied groups, fixed/unknown items and source gates.
 `gear-priorities.json` joins source validation and the offline index digest.
+Read [source fingerprints](AION2-SOURCE-CHECKS.md) for the exact Overhead Slam
+content scope and the review required before changing any source's hash input.
 
 ## Knowledge and recommendations
 

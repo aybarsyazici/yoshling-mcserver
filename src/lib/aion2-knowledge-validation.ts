@@ -24,6 +24,7 @@ export function validateAionKnowledge(value: unknown): string[] {
     sourceIds.add(id); period(source, `Source ${id}`);
     if (!url(source.url) || !text(source.title) || !["official-data", "official-patch", "community-guide", "client-data"].includes(String(source.kind))) errors.push(`Source ${id}: title, HTTPS URL and evidence kind are required`);
     if (source.fetchUrl !== undefined && (!url(source.fetchUrl) || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256))) errors.push(`Source ${id}: fetchUrl requires a SHA-256 baseline`);
+    if (source.hashScope !== undefined && (source.hashScope !== "html-main-v1" || source.fetchUrl !== "https://aion2.gg/database/skills/overhead-slam-11170000")) errors.push(`Source ${id}: hashScope is not reviewed for this exact fetch URL`);
   }
   const ids = new Set<string>();
   const activityIds = new Set<string>();

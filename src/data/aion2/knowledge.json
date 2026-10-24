@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.10.24.2",
+  "version": "2026.10.24.3",
   "reviewedAt": "2026-10-24",
   "expiresAt": "2026-10-28",
   "regions": [
@@ -110,10 +110,11 @@
       "kind": "client-data",
       "url": "https://aion2.gg/database/skills/overhead-slam-11170000",
       "fetchUrl": "https://aion2.gg/database/skills/overhead-slam-11170000",
-      "sha256": "d63d5481d03f66a58f81774d22d25eecc738bd6d683f1e09cb2764ee9fa03d6a",
-      "reviewedAt": "2026-10-23",
+      "hashScope": "html-main-v1",
+      "sha256": "e952c04bec1d940bd15a968e15fcbc2e2fab99378b966da37248e4972d1951d3",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
-      "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
+      "notes": "The complete main content was reviewed byte-for-byte across two production response variants; all skill claims and level tables match. This source alone hashes its complete main HTML because Next.js transport serialization outside it varies. Missing or malformed main content fails verification. Client reference, not NC-authored documentation; stale board availability and shop-limit claims remain excluded."
     },
     {
       "id": "glad-build",

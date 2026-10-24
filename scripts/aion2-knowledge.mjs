@@ -4,6 +4,7 @@ import { validateAionKnowledge, validateAionChecklistLinks } from "../src/lib/ai
 import { validateAionTimers } from "../src/lib/aion2-timer-validation.ts";
 import { validateAionChecklistManifest } from "../src/lib/aion2-checklist-validation.ts";
 import { validateAionGearPriorities } from "../src/lib/aion2-gear-validation.ts";
+import { aionSourceContent } from "../src/lib/aion2-source-content.ts";
 
 const knowledge = JSON.parse(await readFile(new URL("../src/data/aion2/knowledge.json", import.meta.url), "utf8"));
 const errors = validateAionKnowledge(knowledge);
@@ -36,23 +37,23 @@ if (errors.length) {
         try {
           for (;;) { const part = await reader.read(); if (part.done) break; total += part.value.byteLength; if (total > 2_000_000) throw new Error("Response is too large"); chunks.push(part.value); }
         } finally { await reader.cancel().catch(() => {}); }
-        return Buffer.concat(chunks).toString("utf8");
+        return Buffer.concat(chunks);
       })();
       reads.set(url, request); return request;
     }
     const digest = (text) => createHash("sha256").update(text).digest("hex");
     try {
-      const feed = JSON.parse(await get(knowledge.patchFeed));
+      const feed = JSON.parse((await get(knowledge.patchFeed)).toString("utf8"));
       if (feed.contentList?.[0]?.id !== knowledge.patches[0].id) errors.push("New official patch: review its effect on every rule");
       for (const patch of knowledge.patches) {
         const listed = feed.contentList?.find((entry) => entry.id === patch.id);
         if (listed?.timestamps?.updatedAt !== patch.updatedAt) errors.push(`Patch ${patch.id}: publication changed or missing`);
-        const detail = JSON.parse(await get(`https://api-global-community.plaync.com/aion2_global/board/update_en/article/${patch.id}`));
+        const detail = JSON.parse((await get(`https://api-global-community.plaync.com/aion2_global/board/update_en/article/${patch.id}`)).toString("utf8"));
         const body = detail.article?.content?.content;
         if (typeof body !== "string" || digest(body.replace(/\r\n/g, "\n").trim()) !== patch.bodySha256) errors.push(`Patch ${patch.id}: body changed`);
       }
       for (const source of [...knowledge.sources, ...timers.sources, ...checklist.sources, ...gear.sources]) if (source.fetchUrl) {
-        if (digest(await get(source.fetchUrl)) !== source.sha256) errors.push(`Source ${source.id}: contents changed; review supported claims before updating its baseline`);
+        if (digest(aionSourceContent(source, await get(source.fetchUrl))) !== source.sha256) errors.push(`Source ${source.id}: contents changed; review supported claims before updating its baseline`);
       }
       if (errors.length) { console.error(errors.join("\n")); process.exitCode = 1; }
       else console.log("Reviewed patch revisions, patch bodies, pinned guides, timers, checklist and gear sources match. This checks for change; it does not validate a strategy automatically.");
