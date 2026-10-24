@@ -1207,3 +1207,33 @@ knowledge, 23 gear entries and three plans for the example. Authentication/cache
 HTTP checks passed and all game container metadata remained unchanged. Signed-in
 browser interaction was not verified. Evidence, scope and image identity:
 [AION2-SOURCE-CHECKS.md](AION2-SOURCE-CHECKS.md).
+
+## 2026-10-24 — Cleric guidance and selectable focus
+
+Added class-scoped level-45 Cleric guidance using the tracked public Schmanya
+example, with explicit Group healing, Solo damage and Both preferences per browser
+and tracked row. Role selection filters plans, gear skill comparisons and board
+presets without inferring an in-game preset or bypassing freshness checks.
+
+Reviewed sources cover Condemnation's actual 12/16/20 mechanics, healing targets,
+Stigma allocation and permanent Nightmare-shop allowance, owned-card checks,
+eligible farms, fixed-mace replacement/transfer and exact Cleric item/card pools.
+Gladiator data and unknown-class withholding remain intact. The shared board map
+now fetches and compares Cleric 71–74; existing owned nodes are preserved, and
+Azphel is excluded from this PvE model. Shared low-priority work sorts after higher
+priority plans. A conflicting numeric healing renderer and unsupported critical
+caps were excluded from the authored guidance.
+
+All 3,976 tests, TypeScript, normal build/artifact verification and lint passed with
+existing warnings. Regression failures were proved before restoring protections.
+The bounded model review used only authored facts; the expanded saved index has
+192 chunks/12 queries with class and role isolation and a reviewed 256-entry cap.
+No model is called by normal website requests.
+
+Commit `59f0c2f` was deployed as `2026.10.24.4`. The running image and focus controls
+were verified, live source/authentication checks passed, and the normal tracker
+refreshed the stored example: current guidance, 23 reviewed gear rows, all four
+white boards and eight role-specific comparisons. All game container metadata was
+unchanged; no migration was needed. Signed-in visual interaction remains unverified.
+Research, exact scope, model disposition and rollout details:
+[AION2-CLERIC.md](AION2-CLERIC.md).

@@ -127,6 +127,28 @@ missing capabilities receive labeled references, never manufactured matches.
 A read-only isolated production store projection at 11:39 UTC validated the actual
 saved character against the new knowledge: current status, valid 23-row gear report,
 no armory error and the role-tagged plans. The old stored observation had no Cleric
-board details because of the prior hardcoded API IDs. A normal tracked-character
-refresh after rollout is needed to publish those newly supported details. This
-server-side check does not establish a signed-in browser interaction.
+board details because of the prior hardcoded API IDs. The normal tracked-character
+refresh after rollout published those newly supported details. This server-side
+check does not establish a signed-in browser interaction.
+
+### Production rollout
+
+Feature commit `59f0c2f` was pushed and deployed with the web-only deployment script
+and built literal `2026.10.24.4`. Image
+`sha256:7f8a83169142d5b6ad6091f3d921c92bb199eac6c270225d59a50b1ccfacd270`
+started at 13:42:34 Europe/Zurich (11:42:34 UTC). The built files contained the new
+version, focus controls, per-character preference key and both Cleric plans.
+
+A one-off maintenance call used the existing normal tracker refresh helper, with
+its owner checks, cooldown, database lease, validated observation and canonical
+readback. It did not forge a browser session or replace snapshots with raw SQL.
+The 13:43 local readback showed current knowledge and gear, no armory error, all
+23 exact pools covered and all four white-board node sets (89/89/89/117 including
+the Start node). Both presets produced four comparisons. Triniel's modeled
+additional costs were 67 for the support preset and 58 for solo; available crystals
+remain unknown and these are not globally optimal combined routes.
+
+The native source CLI inside the running container passed all four catalogs.
+Anonymous live HTTP checks passed: login 200, helper 307 to login and APIs 401 with
+private/no-store caching. All game container IDs, image IDs, states and start times
+matched the pre-deployment baseline. No migration or game lifecycle action occurred.
