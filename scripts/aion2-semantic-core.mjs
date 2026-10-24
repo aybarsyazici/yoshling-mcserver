@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 
 const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
 export const semanticHash = (value) => createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(canonical(value))).digest("hex");
+export const semanticKnowledgeDigest = (knowledge, gear) => semanticHash(gear ? { knowledge, gearPriorities: gear } : knowledge);
 
 /** Index only reviewed, authored game facts. Never accept player/account/env input. */
-export function aionEvidenceCorpus(knowledge) {
+export function aionEvidenceCorpus(knowledge, gear) {
   const chunks = [];
   for (const rule of knowledge.rules) {
     const context = `${rule.classes.length ? rule.classes.join(", ") : "All classes"}. Global PvE. ${rule.id}.`;
@@ -13,6 +14,8 @@ export function aionEvidenceCorpus(knowledge) {
   }
   for (const activity of knowledge.activities) chunks.push({ id: `activity:${activity.id}`, ruleId: null, kind: "activity", classes: [], sourceIds: activity.sourceIds, text: `${activity.name}. Global. Character level ${activity.minimumLevel}, Gear Score ${activity.minimumGearScore}. Each normal reward claim costs ${activity.odylePerClaim} Odyle; energy is not the entry ticket and reward charges must also be available.` });
   for (const preset of knowledge.boardPresets ?? []) for (const target of preset.targets) chunks.push({ id: `board:${preset.id}:${target.effect}`, ruleId: null, kind: "board", classes: [preset.className], sourceIds: preset.sourceIds, text: `${preset.className} PvE Daevanion. ${target.effect}. ${target.reason} Preserve already unlocked nodes and pay for connecting nodes as well as the target.` });
+  for (const rule of gear?.slotRules ?? []) chunks.push({ id: `gear-rule:${rule.id}`, ruleId: null, kind: "gear-priority", classes: [rule.className], sourceIds: rule.sourceIds.map(id => `gear:${id}`), text: `${rule.className} Global PvE gear slots ${rule.slots.join(", ")}. ${rule.mechanic}. ${rule.basis} ${rule.priorities.map(priority => `Priority ${priority.rank}: ${priority.label}. ${priority.reason}${priority.when ? ` Only below skill ${priority.when.skillId} level ${priority.when.belowLevel}.` : ""}`).join(" ")} Actual item pools restrict these comparisons; fixed items cannot inherit reroll advice.` });
+  for (const pool of gear?.itemPools ?? []) chunks.push({ id: `gear-pool:${pool.itemId}`, ruleId: null, kind: "gear-pool", classes: gear.classes, sourceIds: pool.sourceIds.map(id => `gear:${id}`), text: `Global reviewed item ${pool.itemId}, slots ${pool.slots.join(", ")}: ${pool.capability}, ${pool.mechanic}. Client-reference stat pool: ${pool.stats.map(stat => stat.label).join(", ") || "none"}. Skill pool: ${pool.skills.map(skill => `${skill.label} (${skill.id})`).join(", ") || "none"}. These are allowed reference lines, not observed inventory or a guarantee of a roll. Fixed and Arcana mechanics must not be treated as Soul Binding Sync.` });
   return chunks.map((chunk) => ({ ...chunk, textHash: semanticHash(chunk.text) }));
 }
 
@@ -31,7 +34,7 @@ export function cosine(a, b) {
 function compatible(a, b) { return !a.classes.length || !b.classes.length || a.classes.some((name) => b.classes.includes(name)); }
 
 export function relatedEvidence(chunks, query, count = 6) {
-  return chunks.filter((chunk) => compatible(chunk, query)).map((chunk) => ({ id: chunk.id, score: cosine(chunk.vector, query.vector) }))
+  return chunks.filter((chunk) => compatible(chunk, query) && !(query.ruleId && chunk.kind?.startsWith("gear-"))).map((chunk) => ({ id: chunk.id, score: cosine(chunk.vector, query.vector) }))
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, count);
 }
 

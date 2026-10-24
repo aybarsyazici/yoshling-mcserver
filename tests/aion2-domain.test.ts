@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import originalManifest from "@/data/aion2/knowledge.json";
 import originalTimers from "@/data/aion2/timers.json";
 import originalChecklist from "@/data/aion2/checklist.json";
+import originalGear from "@/data/aion2/gear-priorities.json";
 import type { AionCharacterRef, AionSnapshot } from "@/lib/aion2-types";
 
 const NOW = new Date("2026-10-23T12:00:00Z");
@@ -12,6 +13,7 @@ const GUIDE_BYTES = Buffer.from("\uFEFFReviewed fixture guide\r\n", "utf8");
 let testManifest: typeof originalManifest;
 let testTimers: typeof originalTimers;
 let testChecklist: typeof originalChecklist;
+let testGear: typeof originalGear;
 const patchBody = (id: string) => `<p>Reviewed fixture patch ${id}</p>`;
 const sha256 = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 
@@ -20,7 +22,7 @@ function knowledgeReply(input: string, feed: PatchFeed): Response {
   if (input === testManifest.patchFeed) return reply(feed);
   const patch = testManifest.patches.find((value) => input.endsWith(`/article/${value.id}`));
   if (patch) return reply({ article: { content: { content: patchBody(patch.id) } } });
-  const source = [...testManifest.sources, ...testTimers.sources, ...testChecklist.sources].find((value) => "fetchUrl" in value && value.fetchUrl === input);
+  const source = [...testManifest.sources, ...testTimers.sources, ...testChecklist.sources, ...testGear.sources].find((value) => "fetchUrl" in value && value.fetchUrl === input);
   if (source) return new Response(new Uint8Array(GUIDE_BYTES), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
   throw new Error(`Unexpected knowledge request: ${input}`);
 }
@@ -123,19 +125,22 @@ beforeEach(() => {
   testManifest = structuredClone(originalManifest);
   testTimers = structuredClone(originalTimers);
   testChecklist = structuredClone(originalChecklist);
+  testGear = structuredClone(originalGear);
   for (const patch of testManifest.patches) patch.bodySha256 = sha256(patchBody(patch.id));
   for (const source of testManifest.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
   for (const source of testTimers.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
   for (const source of testChecklist.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
+  for (const source of testGear.sources) if ("fetchUrl" in source) source.sha256 = sha256(GUIDE_BYTES);
   vi.doMock("@/data/aion2/knowledge.json", () => ({ default: testManifest }));
   vi.doMock("@/data/aion2/timers.json", () => ({ default: testTimers }));
   vi.doMock("@/data/aion2/checklist.json", () => ({ default: testChecklist }));
+  vi.doMock("@/data/aion2/gear-priorities.json", () => ({ default: testGear }));
   vi.stubGlobal("fetch", fetchMock);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
 });
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.doUnmock("@/data/aion2/knowledge.json"); vi.doUnmock("@/data/aion2/timers.json"); vi.doUnmock("@/data/aion2/checklist.json"); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.doUnmock("@/data/aion2/knowledge.json"); vi.doUnmock("@/data/aion2/timers.json"); vi.doUnmock("@/data/aion2/checklist.json"); vi.doUnmock("@/data/aion2/gear-priorities.json"); });
 
 describe("Aion2 public data normalization", () => {
   it("preserves distinct Gear Score, Combat Power, skill categories and missing optional data", async () => {
@@ -354,16 +359,16 @@ describe("Aion2 knowledge freshness", () => {
     const knowledge = await primeKnowledge();
     expect(GUIDE_BYTES.subarray(0, 3).toString("hex")).toBe("efbbbf");
     expect(knowledge.aionKnowledgeStatus().status).toBe("current");
-    for (const source of [...testManifest.sources, ...testTimers.sources, ...testChecklist.sources]) {
+    for (const source of [...testManifest.sources, ...testTimers.sources, ...testChecklist.sources, ...testGear.sources]) {
       if ("fetchUrl" in source) expect(fetchMock.mock.calls.some(([input]) => String(input) === source.fetchUrl)).toBe(true);
     }
   });
 
-  it.each(["patch-body", "guide-bytes", "timer-bytes", "checklist-bytes"])("detects changed %s even if the patch feed timestamp is unchanged", async (kind) => {
+  it.each(["patch-body", "guide-bytes", "timer-bytes", "checklist-bytes", "gear-bytes"])("detects changed %s even if the patch feed timestamp is unchanged", async (kind) => {
     const knowledge = await import("@/lib/aion2-knowledge");
     const feed = { contentList: knowledge.aionKnowledge.patches.map((patch) => ({ id: patch.id, timestamps: { updatedAt: patch.updatedAt } })) };
     const urls = (sources: { fetchUrl?: string }[]) => sources.flatMap((source) => source.fetchUrl ? [source.fetchUrl] : []);
-    const groups = { "guide-bytes": urls(testManifest.sources), "timer-bytes": urls(testTimers.sources), "checklist-bytes": urls(testChecklist.sources) };
+    const groups = { "guide-bytes": urls(testManifest.sources), "timer-bytes": urls(testTimers.sources), "checklist-bytes": urls(testChecklist.sources), "gear-bytes": urls(testGear.sources) };
     const group = kind === "patch-body" ? undefined : kind as keyof typeof groups;
     // A shared URL would let another catalog's fetch conceal an omitted group.
     const changedUrl = group && groups[group].find((url) => Object.entries(groups).every(([name, candidates]) => name === group || !candidates.includes(url)));
@@ -376,6 +381,32 @@ describe("Aion2 knowledge freshness", () => {
     });
     expect((await knowledge.refreshAionKnowledgeStatus()).status).toBe("review-required");
     if (changedUrl) expect(fetchMock.mock.calls.some(([input]) => String(input) === changedUrl)).toBe(true);
+  });
+
+  it("fetches each shared source URL once within one knowledge check", async () => {
+    await primeKnowledge();
+    const requested = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(requested).toHaveLength(new Set(requested).size);
+  });
+
+  it("withholds all guidance when a gear source review expires", async () => {
+    await primeKnowledge();
+    testGear.sources[0].reviewedAt = "2026-10-22";
+    testGear.sources[0].expiresAt = "2026-10-23";
+    const knowledge = await import("@/lib/aion2-knowledge");
+    expect(knowledge.aionKnowledgeStatus().status).toBe("expired");
+  });
+
+  it("a reviewed gear version resets the shared drift latch and requires a fresh check", async () => {
+    const knowledge = await primeKnowledge();
+    const globals = globalThis as typeof globalThis & { __aionKnowledge?: { changed: boolean } };
+    globals.__aionKnowledge!.changed = true;
+    expect(knowledge.aionKnowledgeStatus().status).toBe("review-required");
+    testGear.version += ".reviewed";
+    vi.resetModules();
+    const updated = await import("@/lib/aion2-knowledge");
+    expect(updated.aionKnowledgeStatus().status).toBe("unverified");
+    expect((await updated.refreshAionKnowledgeStatus()).status).toBe("current");
   });
 
   it("withholds guidance when a timer review expires independently of the main knowledge review", async () => {

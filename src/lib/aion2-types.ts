@@ -18,7 +18,7 @@ export type AionEquipment = {
   details?: {
     maxEnchantLevel: number | null; maxAmpLevel: number | null;
     randomStats: boolean | null; bindRate: number | null;
-    stats: { name: string; value: string }[];
+    stats: { id?: string; name: string; value: string }[];
     skills: { id: number; name: string; level: number }[];
   };
 };
@@ -86,6 +86,18 @@ export type AionChecklist = {
   items: AionChecklistItem[]; revision: string;
 };
 export type AionHistoryPoint = { observedAt: string; combatPower: number | null; gearScore: number | null };
+export type AionGearPriority = { id: string; label: string; kind: "stat" | "skill"; rank: number; reason: string };
+export type AionGearPriorityItem = {
+  slot: number; slotName: string; itemId: number; itemName: string; basis: string;
+  status: "fixed" | "item-pool-verified" | "item-pool-reference" | "slot-reference" | "unverified" | "unsupported";
+  priorities: AionGearPriority[];
+  currentLines: { label: string; value: string; kind: "stat" | "skill"; priorityRank: number | null }[];
+  notices: string[]; sources: AionEvidenceSource[];
+};
+export type AionGearPriorityReport = {
+  version: string; status: "current" | "review-required" | "stale" | "unsupported" | "unverified";
+  notice: string; items: AionGearPriorityItem[];
+};
 export type AionTrackedCharacter = AionCharacterRef & {
   id: string; name: string; serverName: string; tracking: boolean;
   lastAttemptAt: string | null; lastSuccessAt: string | null; nextRefreshAt: string;
@@ -94,6 +106,7 @@ export type AionTrackedCharacter = AionCharacterRef & {
   resources?: { odyleEnergy: number | null; updatedAt: string | null };
   boardPlans?: AionBoardComparison[];
   checklist?: AionChecklist;
+  gearPriorities?: AionGearPriorityReport;
 };
 export type AionKnowledgeStatus = {
   version: string; reviewedAt: string; expiresAt: string;

@@ -54,6 +54,23 @@ it("accepts only a validated same-identity snapshot and safe guide links", () =>
   expect(isAionTrackedCharacter({ ...c, snapshot: { ...c.snapshot, profile: { ...c.snapshot!.profile, combatPower: "73000" } } })).toBe(false);
 });
 
+it("validates gear report identity and sources, then withholds its priorities after a failed canonical read", async () => {
+  const c = character(); c.snapshot!.equipment[0].details = { maxEnchantLevel: 20, maxAmpLevel: 0, randomStats: true, bindRate: 100, stats: [{ name: "Attack", value: "10" }], skills: [] };
+  c.gearPriorities = { version: "review-1", status: "current", notice: "Reviewed item references.", items: [{ slot: 1, slotName: "MainHand", itemId: 1, itemName: "Example Greatsword", status: "item-pool-verified", basis: "A reviewed keep reference, not a calculated DPS order.", priorities: [{ rank: 1, kind: "stat", id: "attack", label: "Attack", reason: "A reviewed line in the item pool." }], currentLines: [{ kind: "stat", label: "Attack", value: "10", priorityRank: 1 }], notices: [], sources: [{ title: "Item reference", url: "https://docs.google.com/document/d/guide/edit", kind: "community-guide", reviewedAt: "2026-10-24" }] }] };
+  expect(isAionTrackedCharacter(c)).toBe(true);
+  expect(isAionTrackedCharacter({ ...c, gearPriorities: { ...c.gearPriorities, items: [{ ...c.gearPriorities.items[0], itemId: 999 }] } })).toBe(false);
+  expect(isAionTrackedCharacter({ ...c, gearPriorities: { ...c.gearPriorities, items: [{ ...c.gearPriorities.items[0], sources: [{ ...c.gearPriorities.items[0].sources[0], url: "javascript:alert(1)" }] }] } })).toBe(false);
+  let failed = false;
+  backend(url => url === "/api/aion2/characters" ? failed ? json({ error: "Read failed" }, 503) : json(list([c])) : undefined);
+  render(<AionHelper />); await screen.findByText("Example Greatsword");
+  fireEvent.click(screen.getByLabelText("Example Greatsword: view stats and priorities"));
+  expect(screen.getByRole("list", { name: "Example Greatsword substat priorities" })).toBeTruthy();
+  failed = true; fireEvent.click(screen.getByRole("button", { name: "Check saved characters" }));
+  await screen.findByText(/Saved data is shown below. Read failed/);
+  expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
+  expect(within(screen.getByRole("list", { name: "Example Greatsword observed stats" })).getByText("10")).toBeTruthy();
+});
+
 it("keeps initial malformed list data unavailable and prevents add actions", async () => {
   backend(url => url === "/api/aion2/characters" ? json({ characters: [] }) : undefined);
   render(<AionHelper />); await screen.findByText("Saved characters could not be verified. Please retry.");
@@ -135,6 +152,15 @@ it.each(["missing", "expired", "unverified", "review-required"] as const)("withh
   expect(screen.queryByText(/No specific upgrade gap|No applicable recommendations/)).toBeNull();
   expect(screen.getByText("Example Greatsword")).toBeTruthy();
   expect(screen.getByText("1,638")).toBeTruthy();
+});
+
+it("describes a reference review hold without claiming that a newer patch exists", async () => {
+  const payload = list([character()]); payload.knowledge!.status = "review-required";
+  payload.knowledge!.notices = ["A pinned reference changed after review."];
+  backend(url => url === "/api/aion2/characters" ? json(payload) : undefined);
+  render(<AionHelper />);
+  await screen.findByText("Recommendations are withheld until updated patch or reference information has been reviewed.");
+  expect(screen.queryByText(/a newer patch needs/)).toBeNull();
 });
 
 it("withholds a current status whose review deadline has passed", async () => {

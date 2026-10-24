@@ -1,12 +1,13 @@
 import saved from "@/data/aion2/semantic-index.json";
+import gear from "@/data/aion2/gear-priorities.json";
 import { aionKnowledge, aionKnowledgeStatus } from "./aion2-knowledge";
-import { semanticHash, validSemanticIndex } from "../../scripts/aion2-semantic-core.mjs";
+import { semanticKnowledgeDigest, validSemanticIndex } from "../../scripts/aion2-semantic-core.mjs";
 import type { AionEvidenceSource, AionRecommendation } from "./aion2-types";
 
 type Chunk = { id: string; ruleId: string | null; kind: string; text: string; classes: string[]; sourceIds: string[] };
 type Query = { ruleId: string; matches: { id: string; score: number }[] };
 const index = saved as unknown as { chunks: Chunk[]; queries: Query[] };
-const ready = validSemanticIndex(saved, semanticHash(aionKnowledge), aionKnowledge.version);
+const ready = validSemanticIndex(saved, semanticKnowledgeDigest(aionKnowledge, gear), aionKnowledge.version);
 
 /** Runtime uses the saved model output and reviewed sources; it never calls AWS. */
 export function aionPlanEvidence(ruleId: string, className: string, activeStepIds: string[]): Pick<AionRecommendation, "evidenceSources" | "relatedEvidence"> {

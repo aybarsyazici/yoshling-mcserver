@@ -5,6 +5,8 @@ import { ArrowRight, BookOpen, Check, ChevronRight, CircleAlert, Clock3, Externa
 import { Button } from "@/components/ui/button";
 import { AionAsset, aionImageSource } from "@/components/aion2-asset";
 import { AionBoards } from "@/components/aion2-board-map";
+import { AionGearPriorities } from "@/components/aion2-gear-priorities";
+import { isAionGearPriorityReport } from "@/lib/aion2-gear-validation";
 import { AionTimerPanel } from "@/components/aion2-timer-panel";
 import { AionChecklistPanel } from "@/components/aion2-checklist";
 import { Input } from "@/components/ui/input";
@@ -56,6 +58,7 @@ export function isAionTrackedCharacter(v: unknown): v is AionTrackedCharacter {
   if (!object(v) || !ref(v) || typeof v.id !== "string" || typeof v.name !== "string" || typeof v.serverName !== "string" || typeof v.tracking !== "boolean" || !nullableTime(v.lastAttemptAt) || !nullableTime(v.lastSuccessAt) || !time(v.nextRefreshAt) || !(v.lastError === null || typeof v.lastError === "string")) return false;
   if (v.snapshot !== null && (!snapshot(v.snapshot) || v.snapshot.ref.characterId !== v.characterId || v.snapshot.ref.serverId !== v.serverId || v.snapshot.ref.region !== v.region)) return false;
   if (v.resources !== undefined && (!object(v.resources) || !(v.resources.odyleEnergy === null || (Number.isSafeInteger(v.resources.odyleEnergy) && Number(v.resources.odyleEnergy) >= 0 && Number(v.resources.odyleEnergy) <= 10_000)) || !nullableTime(v.resources.updatedAt))) return false;
+  if (v.gearPriorities !== undefined && !isAionGearPriorityReport(v.gearPriorities, v.snapshot === null ? [] : (v.snapshot as AionSnapshot).equipment)) return false;
   if (v.checklist !== undefined) {
     const c = v.checklist;
     if (!object(c) || !["current", "review-required", "unverified"].includes(String(c.status)) || typeof c.notice !== "string" || typeof c.revision !== "string" || !c.revision || !Array.isArray(c.items) || c.items.length > 100 || !c.items.every(i => object(i) && typeof i.id === "string" && !!i.id && typeof i.name === "string" && ["daily", "weekly"].includes(String(i.cadence)) && ["character", "server"].includes(String(i.scope)) && typeof i.instruction === "string" && Array.isArray(i.rewardTags) && i.rewardTags.every(t => typeof t === "string") && sourceLink(i.source) && typeof i.completed === "boolean" && nullableTime(i.completedAt) && typeof i.periodKey === "string" && !!i.periodKey && nullableTime(i.nextResetAt)) || new Set(c.items.map(i => (i as Record<string, unknown>).id)).size !== c.items.length) return false;
@@ -266,7 +269,7 @@ function recommendationHold(c: AionTrackedCharacter, knowledge: AionKnowledgeSta
   if (!c.lastSuccessAt || now - Date.parse(c.lastSuccessAt) > 30 * 60_000 || now - Date.parse(c.lastSuccessAt) < -5 * 60_000 || now - Date.parse(c.snapshot.observedAt) > 30 * 60_000 || now - Date.parse(c.snapshot.observedAt) < -5 * 60_000) return "Recommendations are withheld because the snapshot needs a fresh check. Your last observed metrics and history are still shown.";
   if (!knowledge || knowledge.status === "unverified") return "Recommendations are withheld until current source status can be verified.";
   if (knowledge.status === "expired" || Date.parse(knowledge.expiresAt) <= now) return "Recommendations are withheld because the source review has expired.";
-  if (knowledge.status === "review-required") return "Recommendations are withheld because a newer patch needs a guide review.";
+  if (knowledge.status === "review-required") return "Recommendations are withheld until updated patch or reference information has been reviewed.";
   return null;
 }
 
@@ -297,7 +300,7 @@ function CharacterDetail({ character: c, now, knowledge, readFailed, disabled, b
     </section>
     <OdyleResources key={`${c.id}:${c.resources?.updatedAt}:${c.resources?.odyleEnergy}`} value={c.resources?.odyleEnergy ?? null} updatedAt={c.resources?.updatedAt ?? null} now={now} disabled={disabled} busy={busy} onSave={onResources} />
     <Progress history={c.history} />
-    {s && <section ref={detailsPanel} className="scroll-mt-24 overflow-hidden rounded-2xl border border-[var(--chart-2)]/20 bg-card/80 shadow-sm"><div className="flex flex-wrap items-center gap-1 border-b border-[var(--chart-2)]/15 bg-[var(--chart-2)]/5 p-2" role="group" aria-label="Character details">{["gear", "skills", "boards"].map(v => <button key={v} aria-pressed={view === v} onClick={() => setView(v)} className={cn("rounded-lg px-4 py-2 text-sm capitalize transition-colors focus-visible:outline-2 focus-visible:outline-ring", view === v ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-muted/40")}>{v}</button>)}</div><div className="p-4 sm:p-5">{view === "gear" ? <Gear snapshot={s} /> : view === "skills" ? <Skills snapshot={s} /> : s.coverage.boards ? <AionBoards boards={s.boards} characterClass={s.profile.className} plans={held ? undefined : c.boardPlans} planNotice={held} /> : <Unavailable subject="Daevanion boards" />}</div></section>}
+    {s && <section ref={detailsPanel} className="scroll-mt-24 overflow-hidden rounded-2xl border border-[var(--chart-2)]/20 bg-card/80 shadow-sm"><div className="flex flex-wrap items-center gap-1 border-b border-[var(--chart-2)]/15 bg-[var(--chart-2)]/5 p-2" role="group" aria-label="Character details">{["gear", "skills", "boards"].map(v => <button key={v} aria-pressed={view === v} onClick={() => setView(v)} className={cn("rounded-lg px-4 py-2 text-sm capitalize transition-colors focus-visible:outline-2 focus-visible:outline-ring", view === v ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-muted/40")}>{v}</button>)}</div><div className="p-4 sm:p-5">{view === "gear" ? <Gear snapshot={s} report={c.gearPriorities} holdReason={held} /> : view === "skills" ? <Skills snapshot={s} /> : s.coverage.boards ? <AionBoards boards={s.boards} characterClass={s.profile.className} plans={held ? undefined : c.boardPlans} planNotice={held} /> : <Unavailable subject="Daevanion boards" />}</div></section>}
     {!held && <Routine />}
   </div>;
 }
@@ -355,9 +358,9 @@ function Progress({ history }: { history: AionHistoryPoint[] }) {
   </section>;
 }
 
-function Gear({ snapshot: s }: { snapshot: AionSnapshot }) {
+function Gear({ snapshot: s, report, holdReason }: { snapshot: AionSnapshot; report?: AionTrackedCharacter["gearPriorities"]; holdReason?: string | null }) {
   if (!s.coverage.equipment) return <Unavailable subject="Equipment" />;
-  return <><div className="overflow-x-auto"><table className="w-full text-left text-sm"><caption className="sr-only">Equipped items from the latest public snapshot</caption><thead><tr className="border-b border-border text-xs text-muted-foreground"><th className="pb-3 pr-3 font-medium">Slot</th><th className="pb-3 pr-3 font-medium">Item</th><th className="pb-3 pr-3 font-medium">Grade</th><th className="pb-3 text-right font-medium">Upgrade</th></tr></thead><tbody>{s.equipment.slice().sort((a,b) => a.slot - b.slot).map(i => <tr key={i.slot} className="border-b border-border/40 last:border-0"><td className="py-3 pr-3 text-xs text-muted-foreground">{i.slotName.replace(/([a-z])([A-Z0-9])/g, "$1 $2")}</td><td className="py-3 pr-3 font-medium"><div className="flex items-start gap-3"><AionAsset src={i.icon} alt={`${i.name} icon`} size={40} /><div>{i.name}{i.details && <details className="mt-1 text-xs font-normal text-muted-foreground"><summary className="cursor-pointer text-primary">View stats{i.details.bindRate !== null && ` · Bind ${i.details.bindRate}%`}</summary><div className="mt-2 space-y-1">{i.details.randomStats === false && <p>Fixed item stats</p>}{i.details.stats.map((stat, n) => <p key={n}>{stat.name} {stat.value}</p>)}{i.details.skills.map(skill => <p key={skill.id}>{skill.name} +{skill.level}</p>)}{i.details.maxEnchantLevel !== null && <p>Enhancement limit +{i.details.maxEnchantLevel}{i.details.maxAmpLevel !== null && ` / Amp ${i.details.maxAmpLevel}`}</p>}</div></details>}</div></div></td><td className="py-3 pr-3 text-xs text-muted-foreground">{i.grade}</td><td className="whitespace-nowrap py-3 text-right font-mono text-xs">+{i.enchantLevel}{i.ampLevel > 0 && ` / Amp ${i.ampLevel}`}</td></tr>)}</tbody></table></div>{s.equipment.length === 0 && <p className="py-5 text-sm text-muted-foreground">No equipped items were returned.</p>}<div className="mt-4 grid gap-3 border-t border-border/60 pt-4 text-xs sm:grid-cols-2"><p><span className="text-muted-foreground">Wings</span><span className="mt-1 block font-medium">{s.wing?.name ?? "Not reported"}</span></p><p><span className="text-muted-foreground">Equipped pet</span><span className="mt-1 block font-medium">{s.pet ? `${s.pet.name} · Level ${s.pet.level}` : "Not reported"}</span></p></div></>;
+  return <AionGearPriorities snapshot={s} report={report} holdReason={holdReason} />;
 }
 function Skills({ snapshot: s }: { snapshot: AionSnapshot }) {
   if (!s.coverage.skills) return <Unavailable subject="Skills" />;

@@ -60,8 +60,9 @@ spot check, not a complete contrast, keyboard or live-account audit.
 
 `src/lib/aion2-api.ts` calls fixed official HTTP origins without login/cookies. Core
 profile/equipment reads share an eight-second deadline. Optional item details for
-weapon, guard and rings, plus the four white boards' node/effect details, use that
-same deadline; missing capabilities stay unknown.
+critical weapon, guard and rings, plus the four white boards' node/effect details,
+use that same deadline first. Remaining known gear/Arcana slots use optional bounded
+requests within the leftover budget; missing capabilities stay unknown.
 Item-specific caps and fixed/random lines take precedence over grade assumptions.
 The armory provides skills, gear, equipped pet/wings, Pantheon stats and board progress.
 Inventory, currencies, quests, daily entries, Odyle balance and full Genus progress are
@@ -69,6 +70,11 @@ unknown. Never interpret a missing/private field as completion, zero, or an empt
 
 Character, gear, skill and board images use the official public image origins with
 safe fallbacks. The helper does not request NCSOFT credentials or reuse account cookies.
+
+The gear view now provides item cards with observed lines and ranked substat
+comparisons. [Gear priorities](AION2-GEAR-PRIORITIES.md) explains the reviewed
+Gladiator/item-pool scope, tied groups, fixed/unknown items and source gates.
+`gear-priorities.json` joins source validation and the offline index digest.
 
 ## Knowledge and recommendations
 

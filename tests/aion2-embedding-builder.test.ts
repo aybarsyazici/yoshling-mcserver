@@ -16,12 +16,12 @@ beforeEach(async () => {
   folder = await mkdtemp(path.join(os.tmpdir(), "yoshling-embedding-builder-"));
   for (const directory of ["scripts", "src/lib", "src/data/aion2", "node_modules", "bin"]) await mkdir(path.join(folder, directory), { recursive: true });
   await writeFile(path.join(folder, "package.json"), '{"type":"module"}');
-  for (const file of ["scripts/aion2-embed.mjs", "scripts/aion2-embedding-aws.mjs", "scripts/aion2-semantic-core.mjs", "src/lib/aion2-knowledge-validation.ts", "src/lib/aion2-checklist-validation.ts", "src/data/aion2/knowledge.json", "src/data/aion2/checklist.json", "src/data/aion2/semantic-index.json"]) await copyFile(path.join(process.cwd(), file), path.join(folder, file));
+  for (const file of ["scripts/aion2-embed.mjs", "scripts/aion2-embedding-aws.mjs", "scripts/aion2-semantic-core.mjs", "src/lib/aion2-knowledge-validation.ts", "src/lib/aion2-checklist-validation.ts", "src/lib/aion2-gear-validation.ts", "src/data/aion2/knowledge.json", "src/data/aion2/checklist.json", "src/data/aion2/gear-priorities.json", "src/data/aion2/semantic-index.json"]) await copyFile(path.join(process.cwd(), file), path.join(folder, file));
   await symlink(path.join(process.cwd(), "node_modules/dotenv"), path.join(folder, "node_modules/dotenv"), "dir");
   // Only fixture dates change. The existing approved text vectors remain reusable.
-  for (const file of ["knowledge.json", "checklist.json"]) {
+  for (const file of ["knowledge.json", "checklist.json", "gear-priorities.json"]) {
     const target = path.join(folder, "src/data/aion2", file), value = JSON.parse(await readFile(target, "utf8"));
-    value.expiresAt = file === "knowledge.json" ? "2099-01-01" : "2099-01-01T00:00:00.000Z";
+    value.expiresAt = file === "checklist.json" ? "2099-01-01T00:00:00.000Z" : "2099-01-01";
     await writeFile(target, JSON.stringify(value));
   }
   indexFile = path.join(folder, "src/data/aion2/semantic-index.json"); originalIndex = await readFile(indexFile, "utf8");

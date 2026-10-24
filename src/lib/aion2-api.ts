@@ -151,20 +151,23 @@ export async function aionSnapshot(refInput: AionCharacterRef): Promise<AionSnap
   const params = new URLSearchParams({ lang: "en-US", region: ref.region, serverId: String(ref.serverId), characterId: ref.characterId });
   const [info, equipment] = await Promise.all(["info", "equipment"].map((part) => { const url = new URL(`/api/character/${part}`, SITE); url.search = params.toString(); return json(url, signal); }));
   const snapshot = normalizeAionSnapshot(ref, info, equipment);
-  // Only critical offensive pieces need detail requests. Missing optional metadata
-  // stays unknown and cannot produce a reroll/amplification recommendation.
+  // Preserve the critical item and white-board reads before spending the remaining
+  // shared deadline on the rest of the equipped gear. Optional failures stay unknown.
   const selected = snapshot.equipment.filter((item) => [1, 2, 13, 14].includes(item.slot));
-  for (let index = 0; index < selected.length && !signal.aborted; index += 2) {
-    await Promise.all(selected.slice(index, index + 2).map(async (item) => {
-      try {
-        const url = new URL("/api/character/equipment/item", SITE); url.search = params.toString();
-        url.searchParams.set("id", String(item.id)); url.searchParams.set("enchantLevel", String(item.enchantLevel)); url.searchParams.set("slotPos", String(item.slot));
-        const detail = record(await json(url, signal));
-        if (integer(detail.id) !== item.id) return;
-        item.details = normalizeItemDetails(detail);
-      } catch { /* Optional detail is unknown. Preserve the complete base profile. */ }
-    }));
-  }
+  const loadItemDetails = async (items: AionSnapshot["equipment"]) => {
+    for (let index = 0; index < items.length && !signal.aborted; index += 2) {
+      await Promise.all(items.slice(index, index + 2).map(async (item) => {
+        try {
+          const url = new URL("/api/character/equipment/item", SITE); url.search = params.toString();
+          url.searchParams.set("id", String(item.id)); url.searchParams.set("enchantLevel", String(item.enchantLevel)); url.searchParams.set("slotPos", String(item.slot));
+          const detail = record(await json(url, signal));
+          if (integer(detail.id) !== item.id) return;
+          item.details = normalizeItemDetails(detail);
+        } catch { /* Optional detail is unknown. Preserve the complete base profile. */ }
+      }));
+    }
+  };
+  await loadItemDetails(selected);
   const whiteBoards = snapshot.boards.filter((board) => [11, 12, 13, 14].includes(board.id));
   for (let index = 0; index < whiteBoards.length && !signal.aborted; index += 2) {
     await Promise.all(whiteBoards.slice(index, index + 2).map(async (board) => {
@@ -184,6 +187,8 @@ export async function aionSnapshot(refInput: AionCharacterRef): Promise<AionSnap
       } catch { /* Never infer missing board detail as zero unlocked skill levels. */ }
     }));
   }
+  await loadItemDetails(snapshot.equipment.filter((item) => !selected.includes(item) &&
+    (item.slot >= 1 && item.slot <= 24 || item.slot >= 41 && item.slot <= 45)));
   return snapshot;
 }
 
@@ -235,7 +240,11 @@ function normalizeItemDetails(input: unknown, stored = false): NonNullable<AionS
     maxEnchantLevel: integer(detail.maxEnchantLevel), maxAmpLevel: integer(stored ? detail.maxAmpLevel : detail.maxExceedEnchantLevel),
     randomStats: typeof (stored ? detail.randomStats : detail.subStatRandom) === "boolean" ? (stored ? detail.randomStats : detail.subStatRandom) as boolean : null,
     bindRate: numeric(stored ? detail.bindRate : detail.soulBindRate),
-    stats: array(stored ? detail.stats : detail.subStats).map((value) => { const row = record(value); return { name: clean(row.name), value: clean(String(row.value ?? "")) }; }).filter((value) => value.name),
+    stats: array(stored ? detail.stats : detail.subStats).map((value) => {
+      const row = record(value);
+      const id = typeof row.id === "string" || typeof row.id === "number" ? clean(String(row.id), 128) : "";
+      return { ...(id ? { id } : {}), name: clean(row.name), value: clean(String(row.value ?? "")) };
+    }).filter((value) => value.name),
     skills: array(stored ? detail.skills : detail.subSkills).map((value) => { const row = record(value); return { id: requiredInt(row.id, "item skill"), name: requiredText(row.name, "item skill name"), level: requiredInt(row.level, "item skill level") }; }),
   };
 }

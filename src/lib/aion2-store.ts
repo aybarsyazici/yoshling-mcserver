@@ -4,6 +4,7 @@ import { aionSnapshot, parseAionSnapshot, AionApiError } from "@/lib/aion2-api";
 import { aionRecommendations } from "@/lib/aion2-recommendations";
 import { aionKnowledgeStatus, refreshAionKnowledgeStatus } from "@/lib/aion2-knowledge";
 import { aionBoardPlan } from "@/lib/aion2-board-plan";
+import { aionGearPriorities } from "@/lib/aion2-gear-priorities";
 import { aionChecklist, aionChecklistPeriod, aionChecklistProgress, aionChecklistScope, type AionChecklistChange } from "@/lib/aion2-checklist";
 import { isAionRegion, type AionCharacterList, type AionCharacterRef, type AionSnapshot, type AionTrackedCharacter } from "@/lib/aion2-types";
 import type { Aion2Character, Aion2Snapshot } from "@/generated/prisma/client";
@@ -96,6 +97,7 @@ async function project(row: StoredCharacter): Promise<AionTrackedCharacter> {
     nextRefreshAt: row.nextRefreshAt.toISOString(), lastError: row.lastError,
     resources: { odyleEnergy: row.odyleEnergy, updatedAt: row.resourcesUpdatedAt?.toISOString() ?? null },
     snapshot,
+    gearPriorities: aionGearPriorities(row.lastError ? null : snapshot),
     checklist,
     boardPlans: snapshot && !row.lastError ? aionBoardPlan(snapshot) : [],
     history: [...(row.history ?? row.snapshots)].reverse().map((point) => ({ observedAt: point.observedAt.toISOString(), combatPower: point.combatPower, gearScore: point.gearScore })),

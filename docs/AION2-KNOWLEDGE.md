@@ -8,9 +8,11 @@ advice, or infer private game resources.
 
 - `src/data/aion2/knowledge.json`: scoped sources, review/expiry dates, rules,
   milestones, activities, ordered recipes and Daevanion presets.
+- `src/data/aion2/gear-priorities.json`: class/slot preferences, exact item pools,
+  mechanics, conditions and scoped source pins; see [gear guidance](AION2-GEAR-PRIORITIES.md).
 - `src/data/aion2/semantic-index.json`: normalized Titan embeddings of the authored
   game facts, pre-embedded progression questions, related evidence and similarity
-  groups. It records the model, dimensions, knowledge digest and build statistics.
+  groups. It records the model, dimensions, combined knowledge/gear digest and build statistics.
 - `src/data/aion2/timers.json`: reviewed event schedules with region/time-zone and
   provenance. Check its own sources when revising event times; a schedule is not
   evidence that a world boss is alive.
@@ -24,7 +26,7 @@ Similarity groups help a reviewer find related material; they are not truth or
 confidence labels. Repeated claims from one author are not independent corroboration.
 
 The site reads the saved index. It makes no AWS request. Runtime evidence selection
-checks the exact knowledge digest, class applicability and currently applicable step
+checks the exact combined knowledge/gear digest, class applicability and currently applicable step
 IDs, so a later-stage or another class's advice cannot be attached just because its
 embedding is similar. Rules and source expiry still control whether advice is shown.
 
@@ -154,7 +156,7 @@ Supported credential choices for that worker:
 
 | Route | What it supplies | Current setup |
 | --- | --- | --- |
-| Bedrock with AWS SSO/profile | Titan embeddings and, with model access, Claude inference; billed through AWS | Profile support implemented; SSO Start URL/Region and login still required |
+| Bedrock with AWS SSO/profile | Titan embeddings and, with model access, Claude inference; billed through AWS | Profile support implemented; SSO details provided, setup deferred while renewed `.env` credentials are used |
 | Codex Enterprise access token | Trusted `codex exec` maintenance using workspace identity/entitlements | User reports token creation requires admin enablement |
 | Claude Code Enterprise CI token | Supported private CLI maintenance using `claude setup-token` and `CLAUDE_CODE_OAUTH_TOKEN` | Availability not verified in this workspace |
 | Standard model API service key | Backend API access under its API organization/project billing | No key or billing configured for this updater |
@@ -168,3 +170,10 @@ support a Claude Code token for scripts. Standard model APIs remain a separate
 credential/billing route. No credentials should be put into repository files or the
 browser. A continuously unattended AWS worker needs an approved workload identity,
 such as a role/federated runner, rather than a promise that human SSO never expires.
+
+
+The gear-priority release adds 36 player-free rule/pool chunks to the original 54.
+Its bounded rebuild made 36 model calls and reused all 60 existing vectors; 90
+chunks/six queries are now saved. Both catalog inputs are checked for concurrent
+changes before index publication. The one-off Bedrock review and its manual
+disposition are recorded in [gear priorities](AION2-GEAR-PRIORITIES.md).

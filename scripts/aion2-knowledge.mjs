@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { validateAionKnowledge, validateAionChecklistLinks } from "../src/lib/aion2-knowledge-validation.ts";
 import { validateAionTimers } from "../src/lib/aion2-timer-validation.ts";
 import { validateAionChecklistManifest } from "../src/lib/aion2-checklist-validation.ts";
+import { validateAionGearPriorities } from "../src/lib/aion2-gear-validation.ts";
 
 const knowledge = JSON.parse(await readFile(new URL("../src/data/aion2/knowledge.json", import.meta.url), "utf8"));
 const errors = validateAionKnowledge(knowledge);
@@ -11,6 +12,9 @@ errors.push(...validateAionTimers(timers));
 const checklist = JSON.parse(await readFile(new URL("../src/data/aion2/checklist.json", import.meta.url), "utf8"));
 errors.push(...validateAionChecklistManifest(checklist));
 errors.push(...validateAionChecklistLinks(knowledge, checklist));
+const gear = JSON.parse(await readFile(new URL("../src/data/aion2/gear-priorities.json", import.meta.url), "utf8"));
+errors.push(...validateAionGearPriorities(gear));
+if (new Date() >= new Date(`${gear.expiresAt}T00:00:00Z`)) errors.push("Gear priority source review has expired");
 if (new Date() >= new Date(checklist.expiresAt)) errors.push("Checklist source review has expired");
 if (new Date() >= new Date(`${timers.expiresAt}T00:00:00Z`)) errors.push("Timer source review has expired");
 if (new Date() >= new Date(`${knowledge.expiresAt}T00:00:00Z`)) errors.push("Knowledge review has expired");
@@ -20,15 +24,21 @@ if (errors.length) {
   console.log(`Knowledge ${knowledge.version}: structure valid; review due ${knowledge.expiresAt}.`);
   console.log(`Timers ${timers.version}: structure valid; review due ${timers.expiresAt}.`);
   console.log(`Checklist ${checklist.version}: structure valid; review due ${checklist.expiresAt}.`);
+  console.log(`Gear priorities ${gear.version}: structure valid; review due ${gear.expiresAt}.`);
   if (process.argv.includes("--check-sources")) {
-    async function get(url) {
-      const response = await fetch(url, { headers: { Accept: "application/json, text/plain, text/html", "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const reader = response.body.getReader(), chunks = []; let total = 0;
-      try {
-        for (;;) { const part = await reader.read(); if (part.done) break; total += part.value.byteLength; if (total > 2_000_000) throw new Error("Response is too large"); chunks.push(part.value); }
-      } finally { await reader.cancel().catch(() => {}); }
-      return Buffer.concat(chunks).toString("utf8");
+    const reads = new Map();
+    function get(url) {
+      if (reads.has(url)) return reads.get(url);
+      const request = (async () => {
+        const response = await fetch(url, { headers: { Accept: "application/json, text/plain, text/html", "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const reader = response.body.getReader(), chunks = []; let total = 0;
+        try {
+          for (;;) { const part = await reader.read(); if (part.done) break; total += part.value.byteLength; if (total > 2_000_000) throw new Error("Response is too large"); chunks.push(part.value); }
+        } finally { await reader.cancel().catch(() => {}); }
+        return Buffer.concat(chunks).toString("utf8");
+      })();
+      reads.set(url, request); return request;
     }
     const digest = (text) => createHash("sha256").update(text).digest("hex");
     try {
@@ -41,11 +51,11 @@ if (errors.length) {
         const body = detail.article?.content?.content;
         if (typeof body !== "string" || digest(body.replace(/\r\n/g, "\n").trim()) !== patch.bodySha256) errors.push(`Patch ${patch.id}: body changed`);
       }
-      for (const source of [...knowledge.sources, ...timers.sources, ...checklist.sources]) if (source.fetchUrl) {
+      for (const source of [...knowledge.sources, ...timers.sources, ...checklist.sources, ...gear.sources]) if (source.fetchUrl) {
         if (digest(await get(source.fetchUrl)) !== source.sha256) errors.push(`Source ${source.id}: contents changed; review supported claims before updating its baseline`);
       }
       if (errors.length) { console.error(errors.join("\n")); process.exitCode = 1; }
-      else console.log("Reviewed patch revisions, patch bodies, pinned guides, timers and checklist sources match. This checks for change; it does not validate a strategy automatically.");
+      else console.log("Reviewed patch revisions, patch bodies, pinned guides, timers, checklist and gear sources match. This checks for change; it does not validate a strategy automatically.");
     } catch (error) { console.error(`Source check is unverified: ${error.message}`); process.exitCode = 1; }
   }
 }

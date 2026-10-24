@@ -1,0 +1,3216 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.10.24.1",
+  "reviewedAt": "2026-10-24",
+  "expiresAt": "2026-10-28",
+  "regions": [
+    "eu"
+  ],
+  "classes": [
+    "Gladiator"
+  ],
+  "sources": [
+    {
+      "id": "official-armory",
+      "title": "NCSOFT public item capabilities and observed lines",
+      "url": "https://aion2.plaync.com/en-us/characters/index",
+      "kind": "official-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28"
+    },
+    {
+      "id": "bible",
+      "title": "Kanon Global substat keep-list: rarity order, not damage order",
+      "url": "https://docs.google.com/document/d/11u4wLCG1WfL-xSka2Aze0rI9vYRa7mq3N3Gp1bt0AWY/export?format=txt",
+      "kind": "community-guide",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://docs.google.com/document/d/11u4wLCG1WfL-xSka2Aze0rI9vYRa7mq3N3Gp1bt0AWY/export?format=txt",
+      "sha256": "e547fb720501db068bc927c0e156a2f6610999728b9374fd148b20db8a94a9e3"
+    },
+    {
+      "id": "gladiator-guide",
+      "title": "Gladiator PvE skill and stat preferences; Oct16 client reference, not a DPS simulation",
+      "url": "https://aion2.gg/guides/gladiator-pve-build",
+      "kind": "community-guide",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2.gg/guides/gladiator-pve-build",
+      "sha256": "f5b9da6d85af0944db13553ecb0dab52ded1298828e62aa10d9cc521f7b08402"
+    },
+    {
+      "id": "item-110130050",
+      "title": "Aulamus Greatsword allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/110130050-aulamus-greatsword",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/110130050-aulamus-greatsword",
+      "sha256": "7cc28e9c71142655f747bc194f2ab344ddd48498295752c74d7d5945f3dd344e"
+    },
+    {
+      "id": "item-115030041",
+      "title": "Spiritforged Guard allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/115030041-spiritforged-guard",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/115030041-spiritforged-guard",
+      "sha256": "4c5cc959104d444b1444d35ccc172e0bec4d66a50303c1585af8869740f6f73b"
+    },
+    {
+      "id": "item-210130052",
+      "title": "Vakron Breastplate allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210130052-vakron-breastplate",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210130052-vakron-breastplate",
+      "sha256": "24e5c0ba7900e2a354e1524eb615f90234fabd071e2138967b8c2855bcb9c1db"
+    },
+    {
+      "id": "item-210230038",
+      "title": "Bakarma Greaves allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210230038-bakarma-greaves",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210230038-bakarma-greaves",
+      "sha256": "db90f45597235c7843588c441217b3133b6dcd045483813e916f93b2bcdc0744"
+    },
+    {
+      "id": "item-210330052",
+      "title": "Vakron Helm allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210330052-vakron-helm",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210330052-vakron-helm",
+      "sha256": "86154739d77a69c4fccd6a1bb1080f9115545f683e046af8e9a48ac185d4ee06"
+    },
+    {
+      "id": "item-210430038",
+      "title": "Bakarma Pauldrons allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210430038-bakarma-pauldrons",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210430038-bakarma-pauldrons",
+      "sha256": "0f9b7822db0537849b120f216501558205d35471ebc4190c030a47e188676a22"
+    },
+    {
+      "id": "item-210540047",
+      "title": "Unyielding Gloves allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210540047-unyielding-gloves",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210540047-unyielding-gloves",
+      "sha256": "d6817415792934346ab75147e6fea6f12138787fc753e36409eb339bbaeb6ed9"
+    },
+    {
+      "id": "item-210640043",
+      "title": "Divine Canyon Boots allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210640043-divine-canyon-boots",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210640043-divine-canyon-boots",
+      "sha256": "ae52a707142b63755a370402e9a17d1ed8f6c308e4eee667a59f134afcfbcf66"
+    },
+    {
+      "id": "item-210740043",
+      "title": "Divine Canyon Cloak allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/210740043-divine-canyon-cloak",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210740043-divine-canyon-cloak",
+      "sha256": "5258626ecc054d11f93fe7810be048199515deb253e010c5e37cebee86144903"
+    },
+    {
+      "id": "item-215240001",
+      "title": "Noble Belt allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/215240001-noble-belt",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/215240001-noble-belt",
+      "sha256": "2907e36fdfce15790313513ef51879ec1e7edf65dfb06cd5f5605876420c8a75"
+    },
+    {
+      "id": "item-310130050",
+      "title": "Aulamus Necklace allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/310130050-aulamus-necklace",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310130050-aulamus-necklace",
+      "sha256": "4220690a871dc309ac0a0caeae39a19c4bf9cc622c280aae6b2e3e2c2677544f"
+    },
+    {
+      "id": "item-310230052",
+      "title": "Aulamus Earrings allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/310230052-aulamus-earrings",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310230052-aulamus-earrings",
+      "sha256": "615b9019231d39f792e2a0f01e9d20117b22e4b733f36276622de41045314223"
+    },
+    {
+      "id": "item-310330052",
+      "title": "Aulamus Ring allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/310330052-aulamus-ring",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310330052-aulamus-ring",
+      "sha256": "7fa59cb45d65c7af2c80f46ed2e4cd95174a8e918b89f195905052156c43b7fc"
+    },
+    {
+      "id": "item-310430047",
+      "title": "Ascension Bracelet allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/310430047-ascension-bracelet",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310430047-ascension-bracelet",
+      "sha256": "4d8d2ffe03f24dc396d4d86c177c49777caa6bb057c0aa6241c243ec13b6e172"
+    },
+    {
+      "id": "item-310440018",
+      "title": "Liberator Bracelet allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/310440018-liberator-bracelet",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310440018-liberator-bracelet",
+      "sha256": "a755dc4171d15bfee22e062c4280ede5bf92f584f034d0ce60365b4e94c6aadb"
+    },
+    {
+      "id": "item-310900001",
+      "title": "Clash Rune allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/310900001-clash-rune",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310900001-clash-rune",
+      "sha256": "d6ff120b9f7b5a77099c053631df07b334b353ff232619dd728c17efa1f1b1b5"
+    },
+    {
+      "id": "item-311030001",
+      "title": "Revelation Amulet allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/311030001-revelation-amulet",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/311030001-revelation-amulet",
+      "sha256": "814ff7dfa4dba04be8c47b96873b260266191f01f5a3a0c95f333ab72d3531ad"
+    },
+    {
+      "id": "item-810160001",
+      "title": "Chalice of Vigor allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/810160001-chalice-of-vigor",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810160001-chalice-of-vigor",
+      "sha256": "de4a01442c7f4427b772d6fca049bd80d048499b843672d066225b9388c5e9c0"
+    },
+    {
+      "id": "item-810260002",
+      "title": "Parchment of Magic allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/810260002-parchment-of-magic",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810260002-parchment-of-magic",
+      "sha256": "b037de15b4f5494a909465c6d37c1dede1ffe9ecb633416336e95de106282b6d"
+    },
+    {
+      "id": "item-810560001",
+      "title": "Mirror of Vigor allowed lines: GlobalOct21 client interpretation",
+      "url": "https://aion2data.com/items/810560001-mirror-of-vigor",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810560001-mirror-of-vigor",
+      "sha256": "71da08cefa16b02a6c9910af2906c9696fc78f9343f1e8ca11062fab963584e3"
+    }
+  ],
+  "slotRules": [
+    {
+      "id": "weapon-and-guard",
+      "className": "Gladiator",
+      "slots": [
+        1,
+        2
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11170000",
+          "label": "Overhead Slam +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Reach the level16 cooldown specialty first, then level20 for the third specialty slot; select the specialty in game.",
+          "when": {
+            "skillId": 11170000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "11010000",
+          "label": "Rending Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core Gladiator damage skill in the reviewed group route; preserve a useful existing line."
+        },
+        {
+          "id": "11100000",
+          "label": "Ruinous Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core skill and buff action in the reviewed Gladiator route."
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Community Gladiator preference: fit more actions into damage windows; no universal speed target is assumed."
+        },
+        {
+          "id": "weapon-damage-boost",
+          "label": "Weapon Damage Boost",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "The class guide prefers this damage multiplier before Damage Boost after skill and Combat Speed goals."
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "General damage line listed by both guides; a useful keeper, not a guaranteed best roll."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Offensive primary stat listed by both reviewed guides; compare the actual roll and total build."
+        },
+        {
+          "id": "multi-hit-chance",
+          "label": "Multi-hit Chance",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Offensive keeper listed for weapons; tied here because relative value changes with the build."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 7,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 8,
+          "reason": "Conditional accuracy/critical support; its value depends on your target and existing stats. No unverified cap is used."
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit",
+          "kind": "stat",
+          "rank": 8,
+          "reason": "Conditional support for attacks that can benefit; no fixed critical target or universal cap is assumed."
+        }
+      ]
+    },
+    {
+      "id": "helmet",
+      "className": "Gladiator",
+      "slots": [
+        3
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; rarity does not prove a higher DPS gain than every other line."
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; actual roll value and current gear determine its benefit.",
+          "aliases": [
+            "Attack increase",
+            "Attack Increase"
+          ]
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "shoulder",
+      "className": "Gladiator",
+      "slots": [
+        4
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; rarity does not prove a higher DPS gain than every other line."
+        },
+        {
+          "id": "critical-damage-boost",
+          "label": "Critical Damage Boost",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Slot-specific offensive keeper from the reviewed list; actual critical uptime affects its value."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "torso",
+      "className": "Gladiator",
+      "slots": [
+        5
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; compare the complete item rather than fishing at any cost."
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Slot-specific offensive keeper; tied with the other rare offensive line, not a proven DPS ordering."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "pants",
+      "className": "Gladiator",
+      "slots": [
+        6
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; actual roll value and current gear determine its benefit.",
+          "aliases": [
+            "Attack increase",
+            "Attack Increase"
+          ]
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; compare the complete item rather than fishing at any cost."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        },
+        {
+          "id": "damage-tolerance",
+          "label": "Damage Tolerance",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Optional survival keeper from the slot list; this is defensive value, not added damage."
+        }
+      ]
+    },
+    {
+      "id": "gloves",
+      "className": "Gladiator",
+      "slots": [
+        7
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Community Gladiator preference: fit more actions into damage windows; no universal speed target is assumed."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Rare offensive keeper from the slot list; compare the complete item rather than fishing at any cost."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "boots",
+      "className": "Gladiator",
+      "slots": [
+        8
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; compare the complete item rather than fishing at any cost."
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Utility keeper from the slot list; movement can help mechanics but is not a direct DPS guarantee.",
+          "aliases": [
+            "Move Speed",
+            "Movement Speed"
+          ]
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "cape",
+      "className": "Gladiator",
+      "slots": [
+        19
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; rarity does not prove a higher DPS gain than every other line."
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; actual roll value and current gear determine its benefit.",
+          "aliases": [
+            "Attack increase",
+            "Attack Increase"
+          ]
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Rare offensive keeper from the slot list; compare the complete item rather than fishing at any cost."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "necklace",
+      "className": "Gladiator",
+      "slots": [
+        10
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Community Gladiator preference: fit more actions into damage windows; no universal speed target is assumed."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Offensive primary stat listed by both reviewed guides; compare the actual roll and total build."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Conditional fallback if attacks miss; no universal accuracy threshold is supplied."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Conditional accuracy/critical support; its value depends on your target and existing stats. No unverified cap is used."
+        }
+      ]
+    },
+    {
+      "id": "earrings",
+      "className": "Gladiator",
+      "slots": [
+        11,
+        12
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Offensive primary stat listed by both reviewed guides; compare the actual roll and total build."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Conditional accuracy/critical support; its value depends on your target and existing stats. No unverified cap is used."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Utility keeper from the slot list, tied with fallbacks rather than claimed as best damage.",
+          "aliases": [
+            "Move Speed",
+            "Movement Speed"
+          ]
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Conditional fallback if attacks miss; inspect target and current stats before spending."
+        }
+      ]
+    },
+    {
+      "id": "rings",
+      "className": "Gladiator",
+      "slots": [
+        13,
+        14
+      ],
+      "basis": "Conservative Gladiator PvE community priorities: skill goals first, then applicable offensive or utility keepers. Kanon supplies slot-specific rare-line preferences, not a numerical DPS ranking; equal ranks are alternatives, not required simultaneous rolls.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11170000",
+          "label": "Overhead Slam +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Reach the level16 cooldown specialty first, then level20 for the third specialty slot; select the specialty in game.",
+          "when": {
+            "skillId": 11170000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "11010000",
+          "label": "Rending Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core Gladiator damage skill in the reviewed group route; preserve a useful existing line."
+        },
+        {
+          "id": "11100000",
+          "label": "Ruinous Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core skill and buff action in the reviewed Gladiator route."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Offensive primary stat listed by both reviewed guides; compare the actual roll and total build."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Conditional accuracy/critical support; its value depends on your target and existing stats. No unverified cap is used."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Useful offensive fallback from the per-slot keep-list; it is not an instruction to replace a stronger existing roll."
+        }
+      ]
+    },
+    {
+      "id": "chalice",
+      "className": "Gladiator",
+      "slots": [
+        41
+      ],
+      "basis": "Gladiator PvE community skill goals filtered to this card family. These compare candidate cards; they do not instruct Sync or Reset of Arcana. A Common card has only one skill line.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11170000",
+          "label": "Overhead Slam +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Reach the level16 cooldown specialty first, then level20 for the third specialty slot; select the specialty in game.",
+          "when": {
+            "skillId": 11170000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "11010000",
+          "label": "Rending Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core Gladiator damage skill in the reviewed group route; preserve a useful existing line."
+        },
+        {
+          "id": "11100000",
+          "label": "Ruinous Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core skill and buff action in the reviewed Gladiator route."
+        },
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 3,
+          "reason": "The class guide prioritizes this passive; its front-attack benefit requires suitable positioning."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 4,
+          "reason": "Reviewed offensive passive target; tied with other damage passives because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 4,
+          "reason": "Reviewed offensive passive target; total build and actual rank affect the next level."
+        },
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 4,
+          "reason": "Reviewed offensive passive target; compare the complete roll rather than replacing a keeper blindly."
+        },
+        {
+          "id": "11760000",
+          "label": "Impact Hit +1",
+          "kind": "skill",
+          "rank": 4,
+          "reason": "Reviewed offensive passive target; tied here because the sources do not prove a universal DPS order."
+        }
+      ]
+    },
+    {
+      "id": "parchment",
+      "className": "Gladiator",
+      "slots": [
+        42
+      ],
+      "basis": "Gladiator PvE community skill goals filtered to this card family. These compare candidate cards; they do not instruct Sync or Reset of Arcana. A Common card has only one skill line.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11170000",
+          "label": "Overhead Slam +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Reach the level16 cooldown specialty first, then level20 for the third specialty slot; select the specialty in game.",
+          "when": {
+            "skillId": 11170000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "11100000",
+          "label": "Ruinous Blow +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "A core skill and buff action in the reviewed Gladiator route."
+        },
+        {
+          "id": "11020000",
+          "label": "Keen Strike +1",
+          "kind": "skill",
+          "rank": 3,
+          "reason": "Another core group-route skill; prioritize an Overhead breakpoint over this fallback."
+        }
+      ]
+    },
+    {
+      "id": "compass",
+      "className": "Gladiator",
+      "slots": [
+        43
+      ],
+      "basis": "Gladiator PvE community skill goals filtered to this card family. These compare candidate cards; they do not instruct Sync or Reset of Arcana. A Common card has only one skill line.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11010000",
+          "label": "Rending Blow +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "A core Gladiator damage skill in the reviewed group route; preserve a useful existing line."
+        },
+        {
+          "id": "11050000",
+          "label": "Crushing Wave +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed Compass target, especially for solo or area damage; this family cannot roll Overhead Slam."
+        }
+      ]
+    },
+    {
+      "id": "bell",
+      "className": "Gladiator",
+      "slots": [
+        44
+      ],
+      "basis": "Gladiator PvE community skill goals filtered to this card family. These compare candidate cards; they do not instruct Sync or Reset of Arcana. A Common card has only one skill line.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11750000",
+          "label": "Attack Preparation +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "The reviewed Gladiator Arcana table names this offensive Bell target."
+        }
+      ]
+    },
+    {
+      "id": "mirror",
+      "className": "Gladiator",
+      "slots": [
+        45
+      ],
+      "basis": "Gladiator PvE community skill goals filtered to this card family. These compare candidate cards; they do not instruct Sync or Reset of Arcana. A Common card has only one skill line.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "bible",
+        "gladiator-guide"
+      ],
+      "priorities": [
+        {
+          "id": "11780000",
+          "label": "Experienced Counterstrike +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "First passive target in the class guide; front positioning affects its benefit."
+        },
+        {
+          "id": "11800000",
+          "label": "Murderous Burst +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed Mirror target; tied with Identify Weakness because no universal marginal ranking is proved."
+        },
+        {
+          "id": "11740000",
+          "label": "Identify Weakness +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Reviewed Mirror target; compare the actual skill level and card roll."
+        }
+      ]
+    }
+  ],
+  "itemPools": [
+    {
+      "itemId": 110130050,
+      "slots": [
+        1
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "critical-attack",
+          "label": "Critical Attack"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "back-attack",
+          "label": "Back Attack"
+        },
+        {
+          "id": "front-attack",
+          "label": "Front Attack"
+        },
+        {
+          "id": "multi-hit-chance",
+          "label": "Multi-hit Chance"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "weapon-damage-boost",
+          "label": "Weapon Damage Boost"
+        },
+        {
+          "id": "status-effect-chance",
+          "label": "Status Effect Chance"
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed"
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11050000,
+          "label": "Crushing Wave"
+        },
+        {
+          "id": 11260000,
+          "label": "Defiance"
+        },
+        {
+          "id": 11360000,
+          "label": "Rush Strike"
+        },
+        {
+          "id": 11280000,
+          "label": "Sword Aura Rampage"
+        },
+        {
+          "id": 11300000,
+          "label": "Aerial Snare"
+        },
+        {
+          "id": 11200000,
+          "label": "Ankle Slice"
+        },
+        {
+          "id": 11020000,
+          "label": "Keen Strike"
+        },
+        {
+          "id": 11190000,
+          "label": "Leaping Slam"
+        },
+        {
+          "id": 11290000,
+          "label": "Mocking Blade"
+        },
+        {
+          "id": 11170000,
+          "label": "Overhead Slam"
+        },
+        {
+          "id": 11010000,
+          "label": "Rending Blow"
+        },
+        {
+          "id": 11100000,
+          "label": "Ruinous Blow"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-110130050"
+      ]
+    },
+    {
+      "itemId": 115030041,
+      "slots": [
+        2
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-115030041"
+      ]
+    },
+    {
+      "itemId": 210130052,
+      "slots": [
+        5
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "double-resist",
+          "label": "Double Resist"
+        },
+        {
+          "id": "weapon-damage-tolerance",
+          "label": "Weapon Damage Tolerance"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210130052"
+      ]
+    },
+    {
+      "itemId": 210230038,
+      "slots": [
+        6
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "damage-tolerance",
+          "label": "Damage Tolerance"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "endurance",
+          "label": "Endurance"
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "aliases": [
+            "Attack increase",
+            "Attack Increase"
+          ]
+        },
+        {
+          "id": "double-resist",
+          "label": "Double Resist"
+        },
+        {
+          "id": "multi-hit-resist",
+          "label": "Multi-hit Resist"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210230038"
+      ]
+    },
+    {
+      "itemId": 210330052,
+      "slots": [
+        3
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "incoming-heal",
+          "label": "Incoming Heal"
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance"
+        },
+        {
+          "id": "endurance",
+          "label": "Endurance"
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "aliases": [
+            "Attack increase",
+            "Attack Increase"
+          ]
+        },
+        {
+          "id": "perfect-resist",
+          "label": "Perfect Resist"
+        },
+        {
+          "id": "weapon-damage-tolerance",
+          "label": "Weapon Damage Tolerance"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210330052"
+      ]
+    },
+    {
+      "itemId": 210430038,
+      "slots": [
+        4
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "critical-damage-boost",
+          "label": "Critical Damage Boost"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        },
+        {
+          "id": "perfect-resist",
+          "label": "Perfect Resist"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210430038"
+      ]
+    },
+    {
+      "itemId": 210540047,
+      "slots": [
+        7
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        },
+        {
+          "id": "multi-hit-resist",
+          "label": "Multi-hit Resist"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210540047"
+      ]
+    },
+    {
+      "itemId": 210640043,
+      "slots": [
+        8
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed",
+          "aliases": [
+            "Move Speed",
+            "Movement Speed"
+          ]
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "perfect-resist",
+          "label": "Perfect Resist"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210640043"
+      ]
+    },
+    {
+      "itemId": 210740043,
+      "slots": [
+        19
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-damage-tolerance",
+          "label": "Critical Damage Tolerance"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance"
+        },
+        {
+          "id": "endurance",
+          "label": "Endurance"
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "aliases": [
+            "Attack increase",
+            "Attack Increase"
+          ]
+        },
+        {
+          "id": "weapon-damage-tolerance",
+          "label": "Weapon Damage Tolerance"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210740043"
+      ]
+    },
+    {
+      "itemId": 215240001,
+      "slots": [
+        17
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-215240001"
+      ]
+    },
+    {
+      "itemId": 310130050,
+      "slots": [
+        10
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "flight-power",
+          "label": "Flight Power"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "intelligence",
+          "label": "Intelligence"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-310130050"
+      ]
+    },
+    {
+      "itemId": 310230052,
+      "slots": [
+        11,
+        12
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "flight-power",
+          "label": "Flight Power"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed",
+          "aliases": [
+            "Move Speed",
+            "Movement Speed"
+          ]
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "intelligence",
+          "label": "Intelligence"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-310230052"
+      ]
+    },
+    {
+      "itemId": 310330052,
+      "slots": [
+        13,
+        14
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "flight-power",
+          "label": "Flight Power"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "intelligence",
+          "label": "Intelligence"
+        }
+      ],
+      "skills": [
+        {
+          "id": 11050000,
+          "label": "Crushing Wave"
+        },
+        {
+          "id": 11260000,
+          "label": "Defiance"
+        },
+        {
+          "id": 11360000,
+          "label": "Rush Strike"
+        },
+        {
+          "id": 11280000,
+          "label": "Sword Aura Rampage"
+        },
+        {
+          "id": 11300000,
+          "label": "Aerial Snare"
+        },
+        {
+          "id": 11200000,
+          "label": "Ankle Slice"
+        },
+        {
+          "id": 11020000,
+          "label": "Keen Strike"
+        },
+        {
+          "id": 11190000,
+          "label": "Leaping Slam"
+        },
+        {
+          "id": 11290000,
+          "label": "Mocking Blade"
+        },
+        {
+          "id": 11170000,
+          "label": "Overhead Slam"
+        },
+        {
+          "id": 11010000,
+          "label": "Rending Blow"
+        },
+        {
+          "id": 11100000,
+          "label": "Ruinous Blow"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-310330052"
+      ]
+    },
+    {
+      "itemId": 310430047,
+      "slots": [
+        15
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310430047"
+      ]
+    },
+    {
+      "itemId": 310440018,
+      "slots": [
+        16
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310440018"
+      ]
+    },
+    {
+      "itemId": 310900001,
+      "slots": [
+        23,
+        24
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310900001"
+      ]
+    },
+    {
+      "itemId": 311030001,
+      "slots": [
+        22
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-311030001"
+      ]
+    },
+    {
+      "itemId": 810160001,
+      "slots": [
+        41
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 11750000,
+          "label": "Attack Preparation"
+        },
+        {
+          "id": 11730000,
+          "label": "Blood Absorption"
+        },
+        {
+          "id": 11260000,
+          "label": "Defiance"
+        },
+        {
+          "id": 11770000,
+          "label": "Destructive Impulse"
+        },
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        },
+        {
+          "id": 11710000,
+          "label": "Survival Stance"
+        },
+        {
+          "id": 11790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 11280000,
+          "label": "Sword Aura Rampage"
+        },
+        {
+          "id": 11300000,
+          "label": "Aerial Snare"
+        },
+        {
+          "id": 11200000,
+          "label": "Ankle Slice"
+        },
+        {
+          "id": 11050000,
+          "label": "Crushing Wave"
+        },
+        {
+          "id": 11020000,
+          "label": "Keen Strike"
+        },
+        {
+          "id": 11190000,
+          "label": "Leaping Slam"
+        },
+        {
+          "id": 11290000,
+          "label": "Mocking Blade"
+        },
+        {
+          "id": 11170000,
+          "label": "Overhead Slam"
+        },
+        {
+          "id": 11010000,
+          "label": "Rending Blow"
+        },
+        {
+          "id": 11100000,
+          "label": "Ruinous Blow"
+        },
+        {
+          "id": 11360000,
+          "label": "Rush Strike"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810160001"
+      ]
+    },
+    {
+      "itemId": 810260002,
+      "slots": [
+        42
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 11300000,
+          "label": "Aerial Snare"
+        },
+        {
+          "id": 11200000,
+          "label": "Ankle Slice"
+        },
+        {
+          "id": 11170000,
+          "label": "Overhead Slam"
+        },
+        {
+          "id": 11100000,
+          "label": "Ruinous Blow"
+        },
+        {
+          "id": 11020000,
+          "label": "Keen Strike"
+        },
+        {
+          "id": 11190000,
+          "label": "Leaping Slam"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810260002"
+      ]
+    },
+    {
+      "itemId": 810560001,
+      "slots": [
+        45
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 11780000,
+          "label": "Experienced Counterstrike"
+        },
+        {
+          "id": 11740000,
+          "label": "Identify Weakness"
+        },
+        {
+          "id": 11760000,
+          "label": "Impact Hit"
+        },
+        {
+          "id": 11800000,
+          "label": "Murderous Burst"
+        },
+        {
+          "id": 11720000,
+          "label": "Protection Armor"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810560001"
+      ]
+    }
+  ]
+}

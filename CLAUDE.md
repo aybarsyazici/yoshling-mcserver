@@ -61,10 +61,7 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 
 Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft spotlight onboarding, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
 
-`/aion2` is a separate authenticated character helper. Lists are account-owned, with public armory polling, history and reviewed PvE guidance. Its three-table tracking migration was applied on 2026-10-23; no migration runs on boot. Versioned knowledge has source/patch pins, expiry and change detection; see `docs/AION2-HELPER.md` before modifying advice or deploying it.
-
-Embedding rebuilds honor AWS profiles; cache-only runs need no AWS access.
-Open guidance gap: standalone belt Morph inspection at +10; see the October 24 source review.
+`/aion2` provides account-owned public armory tracking/history, reviewed PvE plans and per-item stat priorities. Its additive migration was applied 2026-10-23; never migrate on boot. Source/catalog gates withhold stale advice. Read `docs/AION2-HELPER.md` and `docs/AION2-KNOWLEDGE.md` before changing guidance. AWS is offline-only; explicit profiles are supported. Belt +10 standalone Morph applicability remains open.
 
 ## Required safety and success rules
 

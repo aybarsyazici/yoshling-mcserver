@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import knowledge from "@/data/aion2/knowledge.json";
+import gear from "@/data/aion2/gear-priorities.json";
 import realIndex from "@/data/aion2/semantic-index.json";
-import { semanticHash, aionEvidenceCorpus, unitVector, cosine, relatedEvidence, evidenceClusters, validSemanticIndex } from "../scripts/aion2-semantic-core.mjs";
+import { semanticHash, semanticKnowledgeDigest, aionEvidenceCorpus, unitVector, cosine, relatedEvidence, evidenceClusters, validSemanticIndex } from "../scripts/aion2-semantic-core.mjs";
 
 type Chunk = { id: string; ruleId: string | null; kind: string; classes: string[]; sourceIds: string[]; text: string; textHash: string; vector: number[] };
 type CorpusChunk = Omit<Chunk, "vector">;
@@ -72,6 +73,33 @@ describe("semantic corpus and fingerprints", () => {
     input.rules[0].action += " Reviewed correction.";
     expect(semanticHash(input)).not.toBe(semanticHash(knowledge));
   });
+
+  it("binds gear priorities and exact item pools into the release digest", () => {
+    const current = semanticKnowledgeDigest(knowledge, gear), changed = structuredClone(gear);
+    expect(current).not.toBe(semanticKnowledgeDigest(knowledge));
+    changed.slotRules[0].priorities[0].rank += 1;
+    expect(semanticKnowledgeDigest(knowledge, changed)).not.toBe(current);
+    const pool = structuredClone(gear);
+    pool.itemPools[0].stats[0].label += " reviewed correction";
+    expect(semanticKnowledgeDigest(knowledge, pool)).not.toBe(current);
+  });
+
+  it("embeds only authored gear rules and pools with scoped source IDs", () => {
+    const input = structuredClone(gear);
+    Object.defineProperty(input, "characters", { get() { throw new Error("Player data must not be read"); } });
+    const chunks = aionEvidenceCorpus(knowledge, input).filter((value: CorpusChunk) => value.kind.startsWith("gear-"));
+    const sources = new Set(gear.sources.map(source => `gear:${source.id}`));
+    expect(chunks).toHaveLength(gear.slotRules.length + gear.itemPools.length);
+    expect(new Set(chunks.map((value: CorpusChunk) => value.id)).size).toBe(chunks.length);
+    expect(chunks.every((value: CorpusChunk) => value.sourceIds.every(id => sources.has(id)))).toBe(true);
+    expect(chunks.map((value: CorpusChunk) => value.text).join(" ")).not.toMatch(/Yoshiane|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN/);
+  });
+
+  it("keeps gear pool similarity from displacing a progression rule's related steps", () => {
+    const gearChunk = { ...chunk("gear-rule:fixture", ["Gladiator"], [1, 0]), kind: "gear-priority", ruleId: null };
+    const step = { ...chunk("step:glad:fixture", ["Gladiator"], [0.8, 0.6]), kind: "step" };
+    expect(relatedEvidence([gearChunk, step], { ruleId: "glad", classes: ["Gladiator"], vector: [1, 0] }, 1)).toEqual([{ id: step.id, score: 0.8 }]);
+  });
 });
 
 describe("embedding normalization and class-safe retrieval", () => {
@@ -129,8 +157,8 @@ describe("embedding normalization and class-safe retrieval", () => {
 
 describe("published semantic index validation", () => {
   it("validates the generated real index against the exact current reviewed knowledge", () => {
-    expect(validSemanticIndex(realIndex, semanticHash(knowledge), knowledge.version)).toBe(true);
-    const corpus = aionEvidenceCorpus(knowledge);
+    expect(validSemanticIndex(realIndex, semanticKnowledgeDigest(knowledge, gear), knowledge.version)).toBe(true);
+    const corpus = aionEvidenceCorpus(knowledge, gear);
     expect(realIndex.chunks.map((value) => value.id).sort()).toEqual(corpus.map((value: CorpusChunk) => value.id).sort());
     for (const query of realIndex.queries) {
       for (const match of query.matches) {

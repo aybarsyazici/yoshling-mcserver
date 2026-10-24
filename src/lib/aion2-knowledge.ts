@@ -1,15 +1,17 @@
 import manifest from "@/data/aion2/knowledge.json";
 import timerManifest from "@/data/aion2/timers.json";
 import checklistManifest from "@/data/aion2/checklist.json";
+import gearManifest from "@/data/aion2/gear-priorities.json";
 import type { AionKnowledgeStatus } from "./aion2-types";
 import { validateAionKnowledge, validateAionChecklistLinks } from "./aion2-knowledge-validation";
 import { validateAionTimers } from "./aion2-timer-validation";
 import { validateAionChecklistManifest } from "./aion2-checklist-validation";
+import { validateAionGearPriorities } from "./aion2-gear-validation";
 import { createHash } from "node:crypto";
 
 export const aionKnowledge = manifest;
-const validationErrors = [...validateAionKnowledge(manifest), ...validateAionTimers(timerManifest), ...validateAionChecklistManifest(checklistManifest), ...validateAionChecklistLinks(manifest, checklistManifest)];
-const reviewVersion = `${manifest.version}:${timerManifest.version}:${checklistManifest.version}`;
+const validationErrors = [...validateAionKnowledge(manifest), ...validateAionTimers(timerManifest), ...validateAionChecklistManifest(checklistManifest), ...validateAionChecklistLinks(manifest, checklistManifest), ...validateAionGearPriorities(gearManifest)];
+const reviewVersion = `${manifest.version}:${timerManifest.version}:${checklistManifest.version}:${gearManifest.version}`;
 const globals = globalThis as typeof globalThis & { __aionKnowledge?: { version: string; checkedAt: number; attemptedAt: number; changed: boolean; reason: string | null; error: string | null; pending?: Promise<AionKnowledgeStatus> } };
 if (globals.__aionKnowledge?.version !== reviewVersion) globals.__aionKnowledge = { version: reviewVersion, checkedAt: 0, attemptedAt: 0, changed: false, reason: null, error: null };
 const state = globals.__aionKnowledge!;
@@ -17,7 +19,7 @@ const CHECK_MS = 30 * 60_000;
 
 export function aionKnowledgeStatus(now = new Date()): AionKnowledgeStatus {
   const expires = (value: string) => Date.parse(value.length === 10 ? `${value}T00:00:00Z` : value);
-  const expired = [manifest, timerManifest, checklistManifest, ...manifest.sources, ...manifest.rules, ...manifest.activities, ...timerManifest.sources, ...checklistManifest.sources].some((source) => now.getTime() >= expires(source.expiresAt));
+  const expired = [manifest, timerManifest, checklistManifest, gearManifest, ...manifest.sources, ...manifest.rules, ...manifest.activities, ...timerManifest.sources, ...checklistManifest.sources, ...gearManifest.sources].some((source) => now.getTime() >= expires(source.expiresAt));
   const status = validationErrors.length ? "review-required" : expired ? "expired" : state.changed ? "review-required" : !state.checkedAt || now.getTime() - state.checkedAt > CHECK_MS * 2 ? "unverified" : "current";
   return {
     version: manifest.version, reviewedAt: manifest.reviewedAt, expiresAt: manifest.expiresAt, status,
@@ -44,7 +46,12 @@ export function refreshAionKnowledgeStatus(options: { maximumCheckAgeMs?: number
   const promise = (async () => {
     try {
       const signal = AbortSignal.timeout(8000);
-      const text = (await readSource(manifest.patchFeed, signal)).toString("utf8");
+      const reads = new Map<string, Promise<Buffer>>();
+      const read = (url: string) => {
+        const previous = reads.get(url); if (previous) return previous;
+        const request = readSource(url, signal); reads.set(url, request); return request;
+      };
+      const text = (await read(manifest.patchFeed)).toString("utf8");
       const data = JSON.parse(text) as { contentList?: { id?: unknown; timestamps?: { updatedAt?: unknown } }[] };
       if (!Array.isArray(data.contentList) || !data.contentList.length) throw new Error("Official patch-note response could not be verified.");
       const latest = data.contentList[0];
@@ -55,23 +62,23 @@ export function refreshAionKnowledgeStatus(options: { maximumCheckAgeMs?: number
       const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
       const checks = await Promise.all([
         ...manifest.patches.map(async (patch) => {
-          const detail = JSON.parse((await readSource(`https://api-global-community.plaync.com/aion2_global/board/update_en/article/${patch.id}`, signal)).toString("utf8"));
+          const detail = JSON.parse((await read(`https://api-global-community.plaync.com/aion2_global/board/update_en/article/${patch.id}`)).toString("utf8"));
           const body = detail.article?.content?.content;
           if (typeof body !== "string") throw new Error("Unverified patch body");
           return hash(body.replace(/\r\n/g, "\n").trim()) !== patch.bodySha256;
         }),
-        ...[...manifest.sources, ...timerManifest.sources, ...checklistManifest.sources].filter((source) => "fetchUrl" in source).map(async (source) => {
+        ...[...manifest.sources, ...timerManifest.sources, ...checklistManifest.sources, ...gearManifest.sources].filter((source) => "fetchUrl" in source).map(async (source) => {
           if (!("fetchUrl" in source) || !source.fetchUrl) return false;
-          return hash(await readSource(source.fetchUrl, signal)) !== source.sha256;
+          return hash(await read(source.fetchUrl)) !== source.sha256;
         }),
       ]);
       changed ||= checks.some(Boolean);
       // A stale upstream replica cannot clear a review that was already required.
       // Only a reviewed knowledge version resets this process's latch.
       state.changed ||= changed;
-      if (state.changed) state.reason = "Official patch notes, a pinned guide, timer or checklist source changed after review. Recommendations are withheld until the knowledge base is reviewed.";
+      if (state.changed) state.reason = "Official patch notes, a pinned guide, timer, checklist or gear source changed after review. Recommendations are withheld until the knowledge base is reviewed.";
       state.checkedAt = Date.now(); state.error = null;
-    } catch { state.error = "A patch, guide, timer or checklist source check failed. Its last verified result is retained for at most one hour."; }
+    } catch { state.error = "A patch, guide, timer, checklist or gear source check failed. Its last verified result is retained for at most one hour."; }
     return aionKnowledgeStatus();
   })().finally(() => { state.pending = undefined; });
   state.pending = promise; return promise;
