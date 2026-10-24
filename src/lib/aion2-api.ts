@@ -2,6 +2,7 @@ import {
   isAionRegion, type AionRegion, type AionServer, type AionSearchCharacter,
   type AionCharacterRef, type AionSnapshot,
 } from "./aion2-types";
+import { aionWhiteBoardIds } from "./aion2-knowledge-validation";
 
 export class AionApiError extends Error {
   constructor(message: string, public status = 502, public retryAfter?: number) { super(message); }
@@ -168,13 +169,14 @@ export async function aionSnapshot(refInput: AionCharacterRef): Promise<AionSnap
     }
   };
   await loadItemDetails(selected);
-  const whiteBoards = snapshot.boards.filter((board) => [11, 12, 13, 14].includes(board.id));
+  const whiteBoards = snapshot.boards.filter((board) => aionWhiteBoardIds(snapshot.profile.className).includes(board.id));
   for (let index = 0; index < whiteBoards.length && !signal.aborted; index += 2) {
     await Promise.all(whiteBoards.slice(index, index + 2).map(async (board) => {
       try {
         const url = new URL("/api/character/daevanion/detail", SITE); url.search = params.toString(); url.searchParams.set("boardId", String(board.id));
         const detail = record(await json(url, signal));
         if (!Array.isArray(detail.openSkillEffectList)) return;
+        if (Array.isArray(detail.nodeList) && detail.nodeList.some(value => integer(record(value).boardId) !== board.id)) return;
         if (Array.isArray(detail.nodeList)) board.nodes = detail.nodeList.slice(0, 250).map((value) => {
           const node = record(value);
           return { id: requiredInt(node.nodeId, "board node"), row: requiredInt(node.row, "node row"), col: requiredInt(node.col, "node column"), name: clean(node.name), kind: clean(node.type), grade: clean(node.grade), unlocked: node.open === 1, effects: array(node.effectList).map((effect) => clean(record(effect).desc)).filter(Boolean), icon: icon(node.icon) };

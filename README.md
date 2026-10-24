@@ -30,6 +30,8 @@ track public armory observations and see reviewed PvE progression guidance. Its
 knowledge base records sources and review dates and withholds stale advice. Expand
 an equipped item to see its reviewed substat priorities, observed matches and sources;
 fixed items and reference-only comparisons are labeled separately.
+Cleric characters can choose Group healing, Solo damage or Both for reviewed skill,
+gear and Daevanion comparisons; [coverage and sources](docs/AION2-CLERIC.md).
 The visual polish adds Catppuccin accents to roster selection, character
 metrics, daily/weekly reports and timer contexts, with status labels alongside colour.
 The helper is deployed at [yoshling.xyz/aion2](https://yoshling.xyz/aion2).

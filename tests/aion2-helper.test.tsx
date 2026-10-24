@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { AionHelper, isAionCharacterList, isAionTrackedCharacter } from "@/components/aion2-helper";
 import type { AionCharacterList, AionTrackedCharacter } from "@/lib/aion2-types";
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); localStorage.clear(); });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 async function findPriorityText(text: Parameters<typeof screen.findByText>[0]) {
   return within(await screen.findByRole("region", { name: "What to work on next" })).findByText(text);
@@ -402,4 +402,96 @@ it("rejects unsafe or unreviewed semantic evidence metadata before rendering rec
   expect(isAionTrackedCharacter(c)).toBe(false);
   c.recommendations[0].relatedEvidence[0].sources[0] = { title: "Missing review", url: "https://aion2.gg/example", kind: "client-data", reviewedAt: "unknown" };
   expect(isAionTrackedCharacter(c)).toBe(false);
+});
+
+function clericCharacter(id = "cleric-a"): AionTrackedCharacter {
+  const c = character(); c.id = id; c.characterId = id; c.name = id;
+  c.snapshot!.ref.characterId = id; c.snapshot!.profile.name = id; c.snapshot!.profile.className = "Cleric";
+  c.snapshot!.boards = [{ id: 71, name: "Nezekan", openNodes: 0, totalNodes: 88 }];
+  c.recommendations = [
+    { ...c.recommendations[0], id: "common", title: "Common gear plan" },
+    { ...c.recommendations[0], id: "healing", title: "Healing skill plan", focus: "group" },
+    { ...c.recommendations[0], id: "damage", title: "Damage skill plan", focus: "solo" },
+  ];
+  c.boardPlans = ["group", "solo"].map(focus => ({ boardId: 71, label: focus === "group" ? "Cleric group healing" : "Cleric solo damage", focus: focus as "group" | "solo", source: "https://aion2.gg/guides/cleric-pve-build", targets: [], missingNodeIds: [], pathNodeIds: [], cost: 0, notices: [] }));
+  return c;
+}
+
+it("asks for a Cleric focus and filters recommendations and Daevanion together without changing observed data", async () => {
+  localStorage.clear(); const c = clericCharacter();
+  backend(url => url === "/api/aion2/characters" ? json(list([c])) : undefined);
+  render(<AionHelper />); await screen.findByText("Common gear plan");
+  expect(screen.getByRole("group", { name: "Cleric focus" })).toBeTruthy();
+  expect(screen.queryByText("Healing skill plan")).toBeNull(); expect(screen.queryByText("Damage skill plan")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "boards" }));
+  expect(screen.queryByRole("combobox", { name: "Daevanion build comparison" })).toBeNull();
+  expect(screen.getByText(/Choose a Cleric focus above to compare/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Group healing" }));
+  expect(screen.getByText("Healing skill plan")).toBeTruthy(); expect(screen.queryByText("Damage skill plan")).toBeNull();
+  expect(screen.getByText("Cleric group healing")).toBeTruthy(); expect(screen.queryByRole("combobox", { name: "Daevanion build comparison" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Solo damage" }));
+  expect(screen.getByText("Damage skill plan")).toBeTruthy(); expect(screen.queryByText("Healing skill plan")).toBeNull();
+  expect(screen.getByText("Cleric solo damage")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Both" }));
+  expect(screen.getByText("Healing skill plan")).toBeTruthy(); expect(screen.getByText("Damage skill plan")).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Daevanion build comparison" }).querySelectorAll("option")).toHaveLength(2);
+  expect(screen.getByText("73,000")).toBeTruthy();
+});
+
+it("remembers Cleric focus per tracked row and never writes it to the character API", async () => {
+  localStorage.clear(); const one = clericCharacter("cleric-one"), two = clericCharacter("cleric-two");
+  const calls = backend(url => url === "/api/aion2/characters" ? json(list([one, two])) : undefined);
+  const ui = render(<AionHelper />); await screen.findByText("Common gear plan");
+  fireEvent.click(screen.getByRole("button", { name: "Group healing" }));
+  fireEvent.click(screen.getByRole("button", { name: /cleric-two/ }));
+  expect(screen.queryByText("Healing skill plan")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Solo damage" }));
+  fireEvent.click(screen.getByRole("button", { name: /cleric-one/ }));
+  await screen.findByText("Healing skill plan"); expect(screen.queryByText("Damage skill plan")).toBeNull();
+  ui.unmount(); render(<AionHelper />); await screen.findByText("Healing skill plan");
+  expect(calls.mock.calls.every(([, options]) => !options?.method)).toBe(true); localStorage.clear();
+});
+
+it("ignores an invalid stored Cleric focus and keeps an unsaved choice usable after storage failure", async () => {
+  localStorage.clear(); localStorage.setItem("aion2:cleric-focus:cleric-a", "invalid-role");
+  const c = clericCharacter(); backend(url => url === "/api/aion2/characters" ? json(list([c])) : undefined);
+  render(<AionHelper />); await screen.findByText("Common gear plan");
+  expect(screen.queryByText("Healing skill plan")).toBeNull();
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+  fireEvent.click(screen.getByRole("button", { name: "Group healing" }));
+  expect(screen.getByText("Healing skill plan")).toBeTruthy(); expect(screen.getByText(/could not save this choice/)).toBeTruthy();
+});
+
+it("rejects invalid recommendation and board focus metadata and leaves Gladiator free of the Cleric chooser", async () => {
+  const c = clericCharacter();
+  expect(isAionTrackedCharacter(c)).toBe(true);
+  expect(isAionTrackedCharacter({ ...c, recommendations: [{ ...c.recommendations[0], focus: "tank" }] })).toBe(false);
+  expect(isAionTrackedCharacter({ ...c, boardPlans: [{ ...c.boardPlans![0], focus: "tank" }] })).toBe(false);
+  backend(url => url === "/api/aion2/characters" ? json(list([character()])) : undefined);
+  render(<AionHelper />); await screen.findByText("Work toward Overhead Slam level 20");
+  expect(screen.queryByRole("group", { name: "Cleric focus" })).toBeNull();
+});
+
+it("reports an unconfirmed browser preference write and still allows a temporary Cleric choice", async () => {
+  localStorage.clear(); const c = clericCharacter();
+  backend(url => url === "/api/aion2/characters" ? json(list([c])) : undefined);
+  render(<AionHelper />); await screen.findByText("Common gear plan");
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {});
+  fireEvent.click(screen.getByRole("button", { name: "Group healing" }));
+  expect(screen.getByText("Healing skill plan")).toBeTruthy();
+  expect(screen.getByText(/could not save this choice/)).toBeTruthy();
+});
+
+it("does not infer a focus after browser storage read failure or bypass held guidance after a choice", async () => {
+  localStorage.clear(); const read = Storage.prototype.getItem;
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(function(this: Storage, key: string) { if (key.startsWith("aion2:cleric-focus:")) throw new Error("blocked"); return read.call(this, key); });
+  const c = clericCharacter(); const value = list([c]); value.knowledge!.status = "review-required";
+  backend(url => url === "/api/aion2/characters" ? json(value) : undefined);
+  render(<AionHelper />); await screen.findByText(/could not read your saved choice/);
+  expect((screen.getByRole("button", { name: "Group healing" })).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Group healing" }));
+  expect(screen.queryByText("Healing skill plan")).toBeNull(); expect(screen.queryByText("Damage skill plan")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "boards" }));
+  expect(screen.queryByText("Cleric group healing")).toBeNull();
+  expect(priorityText(/updated patch or reference information has been reviewed/)).toBeTruthy();
 });

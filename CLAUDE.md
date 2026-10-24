@@ -61,7 +61,7 @@ Web runs as root with Docker CLI, Compose, `/var/run/docker.sock`, and the host 
 
 Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/settings, Minecraft and PZ mods, Minecraft spotlight onboarding, plus `/users`, `/whitelist` and `/activity`. API details belong beside their implementation and in the topic docs rather than an exhaustive list here.
 
-`/aion2` provides account-owned public armory tracking/history, reviewed PvE plans and per-item stat priorities. Its additive migration was applied 2026-10-23; never migrate on boot. Source/catalog gates withhold stale advice. Read `docs/AION2-HELPER.md` and `docs/AION2-KNOWLEDGE.md` before changing guidance. Scoped fingerprints require review under `docs/AION2-SOURCE-CHECKS.md`. AWS is offline-only; explicit profiles are supported. Belt +10 standalone Morph applicability remains open.
+`/aion2` provides account-owned public tracking, Gladiator/Cleric PvE plans and gear priorities. Cleric focus is a per-character browser choice; see `docs/AION2-CLERIC.md`. Its additive migration was applied 2026-10-23; never migrate on boot. Read `docs/AION2-HELPER.md` and `docs/AION2-KNOWLEDGE.md` before changing advice. Source/catalog gates withhold stale guidance; scoped fingerprints require `docs/AION2-SOURCE-CHECKS.md` review. AWS is offline-only. Belt +10 standalone Morph applicability remains open.
 
 ## Required safety and success rules
 

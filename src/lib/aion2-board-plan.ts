@@ -1,5 +1,6 @@
 import { aionKnowledge, aionKnowledgeStatus } from "./aion2-knowledge";
 import type { AionBoardComparison, AionBoardNode, AionSnapshot } from "./aion2-types";
+import { aionWhiteBoardIds } from "./aion2-knowledge-validation";
 
 type BoardTarget = { effect: string; reason: string };
 type PathModel = {
@@ -10,6 +11,7 @@ type PathModel = {
 };
 type BoardPreset = {
   id: string; className: string; label: string; sourceIds: string[];
+  focus?: "group" | "solo";
   reviewedAt: string; expiresAt: string; boardIds: number[]; targets: BoardTarget[]; pathModel?: PathModel;
 };
 type Source = { id: string; url: string; reviewedAt: string; expiresAt: string };
@@ -23,7 +25,8 @@ function reviewed(value: { reviewedAt?: unknown; expiresAt?: unknown }, now: num
 
 function preset(value: unknown, now: number): BoardPreset | null {
   const data = record(value);
-  if (typeof data.id !== "string" || typeof data.className !== "string" || typeof data.label !== "string" || !Array.isArray(data.sourceIds) || !data.sourceIds.length || data.sourceIds.some((id) => typeof id !== "string") || !reviewed(data, now) || !Array.isArray(data.targets) || !data.targets.length || !Array.isArray(data.boardIds) || !data.boardIds.length || data.boardIds.some((id) => ![11, 12, 13, 14].includes(id)) || new Set(data.boardIds).size !== data.boardIds.length) return null;
+  if (data.focus !== undefined && data.focus !== "group" && data.focus !== "solo") return null;
+  if (typeof data.id !== "string" || typeof data.className !== "string" || typeof data.label !== "string" || !Array.isArray(data.sourceIds) || !data.sourceIds.length || data.sourceIds.some((id) => typeof id !== "string") || !reviewed(data, now) || !Array.isArray(data.targets) || !data.targets.length || !Array.isArray(data.boardIds) || !data.boardIds.length || data.boardIds.some((id) => !aionWhiteBoardIds(data.className as string).includes(id)) || new Set(data.boardIds).size !== data.boardIds.length) return null;
   if (data.targets.some((value) => { const target = record(value); return typeof target.effect !== "string" || !target.effect.trim() || typeof target.reason !== "string" || !target.reason.trim(); })) return null;
   return data as unknown as BoardPreset;
 }
@@ -137,7 +140,7 @@ export function aionBoardPlan(snapshot: AionSnapshot): AionBoardComparison[] {
         } else notices.push("Node links or costs are unverified. Missing target nodes are identified, but connecting paths and crystal costs need an in-game check.");
         notices.push("Your available Daevanion Crystals and allocation limits are not public. Compare the estimated cost with your in-game balance before unlocking nodes.");
       }
-      result.push({ boardId: board.id, label: baseline.label, source: reviewedSources[0]!.url, targets: [...targets].map(([nodeId, reason]) => ({ nodeId, reason })), pathNodeIds, missingNodeIds, cost, nodeCosts, notices });
+      result.push({ boardId: board.id, label: baseline.label, ...(baseline.focus ? { focus: baseline.focus } : {}), source: reviewedSources[0]!.url, targets: [...targets].map(([nodeId, reason]) => ({ nodeId, reason })), pathNodeIds, missingNodeIds, cost, nodeCosts, notices });
     }
   }
   return result;

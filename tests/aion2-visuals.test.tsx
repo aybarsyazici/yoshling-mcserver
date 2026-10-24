@@ -13,8 +13,32 @@ const board: AionBoard = { id: 11, name: "Nezekan", openNodes: 1, totalNodes: 3,
 ] };
 const plan: AionBoardComparison = { boardId: 11, label: "Gladiator PvE: skills first", source: "https://aion2.gg/en/calculator/daevanion", targets: [{ nodeId: 3, reason: "Adds a level to your main active skill." }], pathNodeIds: [1,2,3], missingNodeIds: [2,3], cost: 4, nodeCosts: [{ nodeId: 2, cost: 1 }, { nodeId: 3, cost: 3 }], notices: ["A reviewed progression preset."] };
 
+it("compares explicitly chosen Cleric healing and solo baselines on the reviewed Cleric board", () => {
+  const current = { ...board, id: 71, nodes: board.nodes!.map(node => node.id === 2 ? { ...node, name: "Reviewed Heal", effects: ["Reviewed Heal +1"] } : node.id === 3 ? { ...node, name: "Condemnation", effects: ["Condemnation +1"] } : node) };
+  const healing = { ...plan, boardId: 71, label: "Cleric group healing", targets: [{ nodeId: 2, reason: "Reviewed group healing target" }], missingNodeIds: [2], pathNodeIds: [2], cost: 1 };
+  const solo = { ...plan, boardId: 71, label: "Cleric solo damage", targets: [{ nodeId: 3, reason: "Reviewed optional solo target" }] };
+  const view = render(<AionBoards boards={[current]} plans={[healing,solo]} characterClass="Cleric" />);
+  expect(screen.getByRole("img", { name: "Cleric Daevanion emblem" }).getAttribute("src")).toContain("board_icon_start_cleric.png");
+  expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(2);
+  expect((screen.getByRole("combobox", { name: "Daevanion build comparison" }) as HTMLSelectElement).value).toBe("Cleric group healing");
+  expect(within(screen.getByRole("region", { name: "Selected node details" })).getByText("Reviewed group healing target")).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: "Daevanion build comparison" }), { target: { value: "Cleric solo damage" } });
+  expect(within(screen.getByRole("region", { name: "Selected node details" })).getByText("Reviewed optional solo target")).toBeTruthy();
+  expect(screen.getByText(/armory does not establish your preferred playstyle/)).toBeTruthy();
+  view.rerender(<AionBoards boards={[current]} plans={[healing,solo]} characterClass="Cleric" planNotice="Sources need review" />);
+  expect(screen.queryByRole("combobox", { name: "Daevanion build comparison" })).toBeNull();
+  expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(0);
+});
+
+it("does not draw a class's reviewed graph when the class is absent or mismatches its board IDs", () => {
+  const view = render(<AionBoards boards={[{ ...board, id: 71 }]} plans={[{ ...plan, boardId: 71 }]} characterClass="Gladiator" />);
+  expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(0);
+  view.rerender(<AionBoards boards={[board]} plans={[plan]} />);
+  expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(0);
+});
+
 it("shows sourced preset targets, the additional route cost and the selected target’s effects", () => {
-  const view = render(<AionBoards boards={[board]} plans={[plan]} />);
+  const view = render(<AionBoards characterClass="Gladiator" boards={[board]} plans={[plan]} />);
   expect(screen.getByText("Gladiator PvE: skills first")).toBeTruthy();
   expect(screen.getByText(/Additional crystals \(route estimate\): 4/)).toBeTruthy();
   expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(2);
@@ -30,17 +54,17 @@ it("shows sourced preset targets, the additional route cost and the selected tar
 });
 
 it("keeps unverified or unavailable preset graphs free of invented connections", () => {
-  const view = render(<AionBoards boards={[board]} />);
+  const view = render(<AionBoards characterClass="Gladiator" boards={[board]} />);
   expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(0);
   expect(screen.getByText(/No reviewed preset is available/)).toBeTruthy();
-  view.rerender(<AionBoards boards={[board]} plans={[{ ...plan, cost: null }]} />);
+  view.rerender(<AionBoards characterClass="Gladiator" boards={[board]} plans={[{ ...plan, cost: null }]} />);
   expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(0);
-  view.rerender(<AionBoards boards={[{ ...board, id: 15 }]} plans={[{ ...plan, boardId: 15 }]} />);
+  view.rerender(<AionBoards characterClass="Gladiator" boards={[{ ...board, id: 15 }]} plans={[{ ...plan, boardId: 15 }]} />);
   expect(view.container.querySelectorAll('[data-board-connection="reviewed"]')).toHaveLength(0);
 });
 
 it("keeps current nodes visible while stale source status withholds the comparison", () => {
-  const view = render(<AionBoards boards={[board]} plans={[plan]} planNotice="Recommendations are withheld because the source review has expired." />);
+  const view = render(<AionBoards characterClass="Gladiator" boards={[board]} plans={[plan]} planNotice="Recommendations are withheld because the source review has expired." />);
   expect(screen.getByRole("group", { name: "Nezekan node map" })).toBeTruthy();
   expect(screen.queryByText("Gladiator PvE: skills first")).toBeNull();
   expect(screen.queryByRole("button", { name: "Compare preset" })).toBeNull();
@@ -48,7 +72,7 @@ it("keeps current nodes visible while stale source status withholds the comparis
 });
 
 it("supports node selection, keyboard movement and zoom without changing character state", () => {
-  render(<AionBoards boards={[board]} plans={[plan]} />);
+  render(<AionBoards characterClass="Gladiator" boards={[board]} plans={[plan]} />);
   fireEvent.click(screen.getByRole("button", { name: /Start, unlocked, suggested route/ }));
   expect(within(screen.getByRole("region", { name: "Selected node details" })).getByText("Unlocked")).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("button", { name: /Start, unlocked, suggested route/ }), { key: "ArrowRight" });
@@ -60,7 +84,7 @@ it("supports node selection, keyboard movement and zoom without changing charact
 });
 
 it("shows the ordered connector nodes and individual costs from the reviewed plan", () => {
-  render(<AionBoards boards={[board]} plans={[plan]} />);
+  render(<AionBoards characterClass="Gladiator" boards={[board]} plans={[plan]} />);
   const order = within(screen.getByRole("list", { name: "Suggested node unlock order" }));
   const buttons = order.getAllByRole("button");
   expect(buttons).toHaveLength(2);
@@ -74,7 +98,7 @@ it("shows the ordered connector nodes and individual costs from the reviewed pla
 
 it("does not treat a free starting node as a missing paid unlock", () => {
   const current = { ...board, nodes: board.nodes!.map(n => n.id === 1 ? { ...n, unlocked: false } : n) };
-  render(<AionBoards boards={[current]} plans={[plan]} />);
+  render(<AionBoards characterClass="Gladiator" boards={[current]} plans={[plan]} />);
   fireEvent.click(screen.getByRole("button", { name: /Start, free start, suggested route/ }));
   expect(within(screen.getByRole("region", { name: "Selected node details" })).getByText("Free starting node")).toBeTruthy();
   expect(within(screen.getByRole("list", { name: "Suggested node unlock order" })).getAllByRole("button")).toHaveLength(2);
@@ -95,17 +119,16 @@ it("uses only public image hosts and recovers to a fallback when an icon fails",
 it("replaces failed SVG icon URLs with text across the board and only attempts changed URLs", () => {
   const brokenUrl = "https://assets.playnccdn.com/static-aion2/characters/img/daevanion/board_icon_legend.png";
   const current = { ...board, nodes: board.nodes!.map(node => node.id === 1 ? node : { ...node, grade: "Legend", icon: "https://assets.playnccdn.com/static-aion2-gamedata/resources/UT_FWindow_Daevanion_Node_Legend_Sprite.png" }) };
-  const view = render(<AionBoards boards={[current]} plans={[plan]} />);
-  expect(view.container.querySelectorAll("svg image")).toHaveLength(2);
-  fireEvent.error(view.container.querySelector("svg image")!);
-  expect(view.container.querySelectorAll("svg image")).toHaveLength(0);
+  const view = render(<AionBoards characterClass="Gladiator" boards={[current]} plans={[plan]} />);
+  expect(view.container.querySelectorAll(`svg image[href="${brokenUrl}"]`)).toHaveLength(2);
+  fireEvent.error(view.container.querySelector(`svg image[href="${brokenUrl}"]`)!);
+  expect(view.container.querySelectorAll(`svg image[href="${brokenUrl}"]`)).toHaveLength(0);
   expect(screen.getByRole("button", { name: /Overhead Slam, locked, preset target/ }).querySelector("text")?.textContent).toBe("S");
-  view.rerender(<AionBoards boards={[{ ...current }]} plans={[plan]} />);
-  expect(view.container.querySelectorAll("svg image")).toHaveLength(0);
+  view.rerender(<AionBoards characterClass="Gladiator" boards={[{ ...current }]} plans={[plan]} />);
+  expect(view.container.querySelectorAll(`svg image[href="${brokenUrl}"]`)).toHaveLength(0);
   const nextUrl = "https://assets.playnccdn.com/static-aion2/characters/img/daevanion/board_icon_legend_open.png";
-  view.rerender(<AionBoards boards={[{ ...current, nodes: current.nodes!.map(node => node.id === 3 ? { ...node, unlocked: true } : node) }]} plans={[plan]} />);
-  expect(view.container.querySelectorAll("svg image")).toHaveLength(1);
-  expect(view.container.querySelector("svg image")?.getAttribute("href")).toBe(nextUrl);
+  view.rerender(<AionBoards characterClass="Gladiator" boards={[{ ...current, nodes: current.nodes!.map(node => node.id === 3 ? { ...node, unlocked: true } : node) }]} plans={[plan]} />);
+  expect(view.container.querySelectorAll(`svg image[href="${nextUrl}"]`)).toHaveLength(1);
   expect(view.container.querySelector(`svg image[href="${brokenUrl}"]`)).toBeNull();
 });
 

@@ -1,6 +1,6 @@
 import { aionKnowledge, aionKnowledgeStatus } from "./aion2-knowledge";
 import type { AionSnapshot, AionRecommendation } from "./aion2-types";
-import { aionActionPlan, aionSkillBoardContribution, type AionResourceContext } from "./aion2-action-plan";
+import { aionActionPlan, aionSkillBoardContribution, aionLoadoutSummary, type AionResourceContext } from "./aion2-action-plan";
 import { aionPlanEvidence } from "./aion2-semantic-evidence";
 
 export function aionRecommendations(snapshot: AionSnapshot, resources: AionResourceContext = {}): AionRecommendation[] {
@@ -14,11 +14,18 @@ export function aionRecommendations(snapshot: AionSnapshot, resources: AionResou
     if (profile.level < rule.minimumLevel || classes.length && !classes.includes(profile.className)) continue;
     let title = "", evidence = "";
     switch (rule.strategy) {
+      case "loadout-review": {
+        const reviewedRule = rule as typeof rule & { title?: string; requiredSkillIds?: number[] };
+        if (!snapshot.coverage.skills || !reviewedRule.title || !reviewedRule.requiredSkillIds?.length) break;
+        title = reviewedRule.title;
+        evidence = `${aionLoadoutSummary(snapshot, reviewedRule.requiredSkillIds)}. This is a loadout review, not an unmet acquisition goal. Specialty selections and the full hotbar/rotation must be checked in game.`;
+        break;
+      }
       case "skill-target": {
         const skill = snapshot.coverage.skills && snapshot.skills.find((value) => value.id === rule.skillId);
         if (skill && skill.acquired && rule.target && skill.level < rule.target) {
           const next = "milestones" in rule && rule.milestones ? rule.milestones.find((level) => level > skill.level) ?? rule.target : rule.target;
-          title = `Unlock ${skill.name}'s level ${next} breakpoint`;
+          title = "title" in rule && typeof rule.title === "string" ? rule.title.replace(/\{nextLevel\}/g, String(next)).replace(/\{skillName\}/g, skill.name) : `Unlock ${skill.name}'s level ${next} breakpoint`;
           const boards = aionSkillBoardContribution(snapshot, skill.id);
           evidence = `${skill.name} is level ${skill.level}; ${next - skill.level} more levels reach ${next}. ${boards === 4 ? `All four ${skill.name} board bonuses are already owned; this route uses cards or gear instead of sending you back to those nodes.` : "The next steps first check your skill-point and board bonuses."}`;
         }
@@ -60,11 +67,14 @@ export function aionRecommendations(snapshot: AionSnapshot, resources: AionResou
     if (!title) continue;
     const sources = aionKnowledge.sources.filter((source) => rule.sourceIds.includes(source.id));
     const community = sources.some((source) => source.kind === "community-guide" || source.kind === "client-data");
-    const skill = "skillId" in rule ? snapshot.skills.find((value) => value.id === rule.skillId) : undefined;
+    const requiredIds = "requiredSkillIds" in rule && Array.isArray(rule.requiredSkillIds) ? rule.requiredSkillIds as number[] : [];
+    const skill = snapshot.skills.find((value) => value.id === ("skillId" in rule ? rule.skillId : requiredIds[0]));
     const next = skill && "milestones" in rule && rule.milestones ? rule.milestones.find((level) => level > skill.level) ?? rule.target! : ("target" in rule ? rule.target : 20) ?? 20;
-    const action = rule.action.replace(/\{nextLevel\}/g, String(next)).replace(/\{missingLevels\}/g, String(Math.max(0, next - (skill?.level ?? 0))));
+    const action = rule.action.replace(/\{nextLevel\}/g, String(next)).replace(/\{missingLevels\}/g, String(Math.max(0, next - (skill?.level ?? 0)))).replace(/\{skillName\}/g, skill?.name ?? "the reviewed skill").replace(/\{skillLevel\}/g, skill ? String(skill.level) : "unavailable").replace(/\{loadoutSummary\}/g, aionLoadoutSummary(snapshot, requiredIds));
     const plan = aionActionPlan(snapshot, rule.id, resources);
-    recommendations.push({ id: rule.id, priority: rule.priority as AionRecommendation["priority"], title, evidence: `${evidence} ${community ? "Reviewed build / client-data guidance" : "Official item metadata"}; reviewed ${aionKnowledge.reviewedAt}.`, action, source: sources[0].url, ...plan, ...aionPlanEvidence(rule.id, profile.className, plan.steps?.map((step) => step.id) ?? []) });
+    const focus = "focus" in rule && (rule.focus === "group" || rule.focus === "solo") ? rule.focus : undefined;
+    recommendations.push({ id: rule.id, priority: rule.priority as AionRecommendation["priority"], ...(focus ? { focus } : {}), title, evidence: `${evidence} ${community ? "Reviewed build / client-data guidance" : "Official item metadata"}; reviewed ${aionKnowledge.reviewedAt}.`, action, source: sources[0].url, ...plan, ...aionPlanEvidence(rule.id, profile.className, plan.steps?.map((step) => step.id) ?? []) });
   }
-  return recommendations;
+  const order = { high: 0, medium: 1, low: 2 };
+  return recommendations.sort((a, b) => order[a.priority] - order[b.priority]);
 }

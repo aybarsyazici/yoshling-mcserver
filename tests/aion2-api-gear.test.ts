@@ -14,18 +14,18 @@ const equipment = { equipment: { equipmentList: slots.map(slot => ({ id: 100000 
 beforeEach(() => { vi.restoreAllMocks(); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-function transport(options: { failExtra?: boolean; abortExtra?: AbortController } = {}) {
-  const calls: { path: string; slot: number; signal: AbortSignal | null | undefined }[] = [];
+function transport(options: { failExtra?: boolean; abortExtra?: AbortController; cleric?: boolean; mismatchedBoard?: boolean } = {}) {
+  const calls: { path: string; slot: number; board: number; signal: AbortSignal | null | undefined }[] = [];
   let active = 0, maximum = 0;
   vi.stubGlobal("fetch", vi.fn(async (input: URL, init?: RequestInit) => {
     const url = new URL(String(input)), slot = Number(url.searchParams.get("slotPos"));
-    calls.push({ path: url.pathname, slot, signal: init?.signal });
+    calls.push({ path: url.pathname, slot, board: Number(url.searchParams.get("boardId")), signal: init?.signal });
     active++; maximum = Math.max(maximum, active);
     try {
       await Promise.resolve();
-      if (url.pathname.endsWith("/info")) return reply(info);
+      if (url.pathname.endsWith("/info")) return reply(options.cleric ? { ...info, profile: { ...info.profile, className: "Cleric" }, daevanion: { boardList: [71,72,73,74,76,11].map(id => ({ id, name: `Observed board ${id}`, openNodeCount: 1, totalNodeCount: 88 })) } } : info);
       if (url.pathname.endsWith("/equipment")) return reply(equipment);
-      if (url.pathname.endsWith("/daevanion/detail")) return reply({ openSkillEffectList: [{ desc: "Fixture skill +1" }], nodeList: [] });
+      if (url.pathname.endsWith("/daevanion/detail")) return reply({ openSkillEffectList: [{ desc: "Fixture skill +1" }], nodeList: options.mismatchedBoard ? [{ boardId: 11, nodeId: 110001, row: 1, col: 1, name: "Other class node", type: "SkillLevel", grade: "Rare", open: 1, effectList: [] }] : [] });
       if (url.pathname.endsWith("/equipment/item")) {
         if (slot === 3 && options.abortExtra) { options.abortExtra.abort(); throw new Error("Synthetic optional deadline"); }
         if (slot === 3 && options.failExtra) return reply({}, 503);
@@ -38,6 +38,19 @@ function transport(options: { failExtra?: boolean; abortExtra?: AbortController 
 }
 
 describe("optional equipped gear metadata", () => {
+  it("requests Cleric whiteboard details by reviewed class IDs without borrowing Gladiator or Azphel IDs", async () => {
+    const net = transport({ cleric: true }), snapshot = await aionSnapshot(ref);
+    expect(net.calls.filter(call => call.path.endsWith("/daevanion/detail")).map(call => call.board)).toEqual([71,72,73,74]);
+    expect(snapshot.boards.filter(board => [71,72,73,74].includes(board.id)).every(board => Array.isArray(board.nodes) && Array.isArray(board.skillBonuses))).toBe(true);
+    expect(snapshot.boards.filter(board => [11,76].includes(board.id)).every(board => board.nodes === undefined && board.skillBonuses === undefined)).toBe(true);
+    expect(net.maximum()).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps Cleric board details unknown when an upstream payload identifies another board", async () => {
+    transport({ cleric: true, mismatchedBoard: true });
+    const value = await aionSnapshot(ref);
+    expect(value.boards.filter(board => [71,72,73,74].includes(board.id)).every(board => board.nodes === undefined && board.skillBonuses === undefined)).toBe(true);
+  });
   it("loads supported gear after critical items and boards with bounded concurrency and one deadline", async () => {
     const control = new AbortController(), deadline = vi.spyOn(AbortSignal, "timeout").mockReturnValue(control.signal);
     const net = transport(), snapshot = await aionSnapshot(ref);

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AionBoardNode, AionSnapshot } from "@/lib/aion2-types";
 import knowledgeManifest from "@/data/aion2/knowledge.json";
-import { validateAionKnowledge } from "@/lib/aion2-knowledge-validation";
+import { aionWhiteBoardIds, validateAionKnowledge } from "@/lib/aion2-knowledge-validation";
 
 const fixture = vi.hoisted(() => ({ manifest: {} as Record<string, unknown>, status: "current" }));
 vi.mock("@/lib/aion2-knowledge", () => ({ aionKnowledge: fixture.manifest, aionKnowledgeStatus: () => ({ status: fixture.status }) }));
@@ -38,6 +38,27 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("reviewed board comparison", () => {
+  it("uses only exact reviewed Cleric whiteboards for a Cleric preset and crystal route", () => {
+    baseline({ id: "cleric-support", className: "Cleric", focus: "group", label: "Cleric group healing", boardIds: [71,72,73,74], targets: [{ effect: "Radiant Recovery", reason: "Reviewed group healing skill" }] });
+    const value = snapshot([start(), node(2, 0, 1, "HP"), node(3, 0, 2, "Radiant Recovery", "Rare")]);
+    value.profile.className = "Cleric"; value.boards[0].id = 74;
+    expect(aionBoardPlan(value)[0]).toMatchObject({ boardId: 74, focus: "group", label: "Cleric group healing", pathNodeIds: [2,3], cost: 3 });
+    value.boards[0].id = 14; expect(aionBoardPlan(value)).toEqual([]);
+    value.boards[0].id = 76; expect(aionBoardPlan(value)).toEqual([]);
+    baseline({ className: "Cleric", boardIds: [11,12,13,14], targets: [{ effect: "Radiant Recovery", reason: "Reviewed group healing skill" }] }); value.boards[0].id = 14;
+    expect(aionBoardPlan(value)).toEqual([]);
+  });
+
+  it("withholds an unrecognized preset focus instead of assigning a playstyle", () => {
+    baseline({ focus: "healer" });
+    expect(aionBoardPlan(snapshot([start(),node(2,0,1,"Overhead Slam")]))).toEqual([]);
+  });
+
+  it("does not infer whiteboard IDs from unknown class names", () => {
+    expect(aionWhiteBoardIds("Cleric")).toEqual([71,72,73,74]);
+    expect(aionWhiteBoardIds("Gladiator")).toEqual([11,12,13,14]);
+    expect(aionWhiteBoardIds("Templar")).toEqual([]); expect(aionWhiteBoardIds("cleric")).toEqual([]);
+  });
   it("compares actual owned targets instead of treating summary completion percent as missing skills", () => {
     const value = snapshot([start(), node(2, 0, 1, "Overhead Slam", "Legend", true), node(3, 0, 2, "Rending Blow", "Legend", true)]);
     value.boards[0].openNodes = 2; value.boards[0].totalNodes = 116;
@@ -166,6 +187,14 @@ describe("reviewed board comparison", () => {
 });
 
 describe("reviewed board preset configuration", () => {
+  it("validates Cleric board scopes and rejects another class's boards or Azphel", () => {
+    const value = structuredClone(knowledgeManifest);
+    const entry = { ...structuredClone(value.boardPresets[0]), id: "cleric-reviewed-test", className: "Cleric", boardIds: [71,72,73,74] };
+    value.boardPresets.push(entry);
+    expect(validateAionKnowledge(value)).toEqual([]);
+    entry.boardIds = [11,12,13,14]; expect(validateAionKnowledge(value).join(" ")).toMatch(/whiteboards/);
+    entry.boardIds = [76]; expect(validateAionKnowledge(value).join(" ")).toMatch(/whiteboards/);
+  });
   it("accepts the checked-in reviewed board preset", () => {
     expect(validateAionKnowledge(knowledgeManifest)).toEqual([]);
   });

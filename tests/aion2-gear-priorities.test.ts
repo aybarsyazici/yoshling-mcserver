@@ -145,9 +145,17 @@ describe("reviewed per-item gear comparisons", () => {
     const result = project(character); expect(result.status).toBe("stale"); expect(result.items[0].priorities).toEqual([]);
   });
 
-  it.each(["Templar", "Cleric", "Ranger"])("does not apply the Gladiator matrix to %s", (className) => {
+  it.each(["Templar", "Ranger"])("does not apply the Gladiator matrix to %s", (className) => {
     const character = snapshot(); character.profile.className = className;
     expect(project(character)).toMatchObject({ status: "unsupported", items: [{ priorities: [] }] });
+  });
+
+  it("never substitutes a Gladiator item skill pool for the reviewed Cleric matrix", () => {
+    const character = snapshot(); character.profile.className = "Cleric";
+    const result = project(character);
+    expect(result.status).toBe("current");
+    expect(result.items[0].priorities.some(priority => priority.id === "11170000")).toBe(false);
+    expect(result.items[0].currentLines.find(line => line.label === "Overhead Slam")?.priorityRank).toBeNull();
   });
 
   it("requires reviewed region and equipment coverage", () => {

@@ -18,9 +18,9 @@ const gear = JSON.parse(await readFile(path.join(root, "src/data/aion2/gear-prio
 const failures = [...validateAionKnowledge(knowledge), ...validateAionChecklistManifest(checklist), ...validateAionChecklistLinks(knowledge, checklist), ...validateAionGearPriorities(gear)];
 if (failures.length || Date.now() >= Date.parse(`${knowledge.expiresAt}T00:00:00Z`) || Date.now() >= Date.parse(checklist.expiresAt) || Date.now() >= Date.parse(`${gear.expiresAt}T00:00:00Z`)) throw new Error("Review and validate the knowledge base before building its semantic index");
 const chunks = aionEvidenceCorpus(knowledge, gear);
-const queries = knowledge.rules.map((rule) => ({ id: `query:${rule.id}`, ruleId: rule.id, classes: rule.classes, text: `${rule.classes.join(" ")} ${rule.id} ${rule.evidence} ${rule.action}`, textHash: "" }));
+const queries = knowledge.rules.map((rule) => ({ id: `query:${rule.id}`, ruleId: rule.id, classes: rule.classes, ...(rule.focus ? { focus: rule.focus } : {}), text: `${rule.focus === "group" ? "Group healing. " : rule.focus === "solo" ? "Solo damage. " : ""}${rule.classes.join(" ")} ${rule.id} ${rule.evidence} ${rule.action}`, textHash: "" }));
 for (const query of queries) query.textHash = semanticHash(query.text);
-if (chunks.length + queries.length > 128 || [...chunks, ...queries].some((item) => item.text.length > 12000)) throw new Error("Embedding batch exceeds the reviewed 128-item/12000-character limits");
+if (chunks.length + queries.length > 256 || [...chunks, ...queries].some((item) => item.text.length > 12000)) throw new Error("Embedding batch exceeds the reviewed 256-item/12000-character limits");
 const destination = path.join(root, "src/data/aion2/semantic-index.json");
 if (!options.build) {
   console.log(JSON.stringify({ dryRun: true, chunks: chunks.length, queries: queries.length, model: "amazon.titan-embed-text-v2:0", dimensions: 512, sendsOnly: "Reviewed authored game facts, never character snapshots or credentials" }));

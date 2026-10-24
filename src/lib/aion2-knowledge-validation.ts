@@ -1,3 +1,13 @@
+/** Exact class-specific IDs observed in the reviewed Global armory. Names alone
+ * do not establish a board's currency or graph model. */
+const WHITE_BOARDS: Readonly<Record<string, readonly number[]>> = Object.freeze({
+  Gladiator: Object.freeze([11, 12, 13, 14]),
+  Cleric: Object.freeze([71, 72, 73, 74]),
+});
+export function aionWhiteBoardIds(className?: string): readonly number[] {
+  return className && Object.hasOwn(WHITE_BOARDS, className) ? WHITE_BOARDS[className] : [];
+}
+
 /** Pure validation shared by runtime, tests and the knowledge maintenance CLI. */
 export function validateAionKnowledge(value: unknown): string[] {
   const errors: string[] = [];
@@ -35,15 +45,18 @@ export function validateAionKnowledge(value: unknown): string[] {
     activityIds.add(id);
   }
   // Available enhancement headroom is a capability, not an investment strategy.
-  const strategies = ["skill-target", "arcana-slots", "starter-guard", "fixed-weapon", "amulet-scrolls", "belt-scrolls"];
+  const strategies = ["skill-target", "loadout-review", "arcana-slots", "starter-guard", "fixed-weapon", "amulet-scrolls", "belt-scrolls"];
   if (!Array.isArray(data.rules) || !data.rules.length) errors.push("At least one reviewed rule is required");
   else for (const value of data.rules) {
     const rule = object(value), id = String(rule.id ?? ""); period(rule, `Rule ${id}`);
     if (!/^[a-z][a-z0-9-]+$/.test(id) || ids.has(id)) errors.push(`Invalid/duplicate rule: ${id}`); ids.add(id);
     if (!strategies.includes(String(rule.strategy)) || !["high", "medium", "low"].includes(String(rule.priority)) || !positive(rule.minimumLevel) || !text(rule.action) || !text(rule.evidence)) errors.push(`Rule ${id}: strategy, priority, level, evidence and action are required`);
+    if (rule.title !== undefined && !text(rule.title)) errors.push(`Rule ${id}: an optional title must be nonempty text`);
+    if (rule.focus !== undefined && !["group", "solo"].includes(String(rule.focus))) errors.push(`Rule ${id}: focus must be group or solo`);
     if (!Array.isArray(rule.classes) || rule.classes.some((v) => !text(v))) errors.push(`Rule ${id}: explicit class scope is required (empty means all classes)`);
     if (!Array.isArray(rule.sourceIds) || !rule.sourceIds.length || rule.sourceIds.some((id) => !sourceIds.has(id))) errors.push(`Rule ${id}: every source must exist`);
     if (rule.strategy === "skill-target" && (!positive(rule.target) || !positive(rule.skillId) || !Array.isArray(rule.classes) || !rule.classes.length)) errors.push(`Rule ${id}: skill target needs a skill ID, target and class scope`);
+    if (rule.strategy === "loadout-review" && (!text(rule.title) || !Array.isArray(rule.classes) || !rule.classes.length || !Array.isArray(rule.requiredSkillIds) || !rule.requiredSkillIds.length || rule.requiredSkillIds.length > 30 || rule.requiredSkillIds.some(value => !positive(value)) || new Set(rule.requiredSkillIds).size !== rule.requiredSkillIds.length)) errors.push(`Rule ${id}: loadout review needs a title, class scope and unique exact skill IDs`);
     if (rule.milestones !== undefined && (!Array.isArray(rule.milestones) || !rule.milestones.length || rule.milestones.some((value, index, values) => !positive(value) || Number(value) > Number(rule.target) || index > 0 && Number(value) <= Number(values[index - 1])) || rule.milestones.at(-1) !== rule.target)) errors.push(`Rule ${id}: milestones must increase to the final target`);
     if (rule.strategy === "arcana-slots" && (!positive(rule.target) || !positive(rule.minimumGearScore))) errors.push(`Rule ${id}: Arcana requires an explicit card target and entry assumption`);
     if (["amulet-scrolls", "belt-scrolls"].includes(String(rule.strategy)) && (!Array.isArray(rule.itemIds) || !rule.itemIds.length || rule.itemIds.some((v) => !positive(v)))) errors.push(`Rule ${id}: item-specific scroll advice needs verified item IDs`);
@@ -70,7 +83,9 @@ export function validateAionKnowledge(value: unknown): string[] {
         const preset = object(value), id = String(preset.id ?? ""); period(preset, `Board preset ${id}`);
         if (!/^[a-z][a-z0-9-]+$/.test(id) || presetIds.has(id)) errors.push(`Invalid/duplicate board preset: ${id}`); presetIds.add(id);
         if (!text(preset.className) || !text(preset.label)) errors.push(`Board preset ${id}: an explicit class and label are required`);
-        if (!Array.isArray(preset.boardIds) || !preset.boardIds.length || preset.boardIds.some((boardId) => ![11, 12, 13, 14].includes(boardId)) || new Set(preset.boardIds).size !== preset.boardIds.length) errors.push(`Board preset ${id}: boardIds must explicitly name reviewed whiteboards 11 to 14 without duplicates`);
+        if (preset.focus !== undefined && !["group", "solo"].includes(String(preset.focus))) errors.push(`Board preset ${id}: focus must be group or solo`);
+        const boards = aionWhiteBoardIds(typeof preset.className === "string" ? preset.className : undefined);
+        if (!Array.isArray(preset.boardIds) || !preset.boardIds.length || preset.boardIds.some((boardId) => !boards.includes(boardId)) || new Set(preset.boardIds).size !== preset.boardIds.length) errors.push(`Board preset ${id}: boardIds must explicitly name reviewed whiteboards for its class without duplicates`);
         if (!Array.isArray(preset.sourceIds) || !preset.sourceIds.length || preset.sourceIds.some((sourceId) => !sourceIds.has(sourceId))) errors.push(`Board preset ${id}: every source must exist`);
         if (!Array.isArray(preset.targets) || !preset.targets.length) errors.push(`Board preset ${id}: reviewed target effects are required`);
         else {

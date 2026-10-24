@@ -7,12 +7,15 @@ that every listed line can coexist or has the same calculated damage gain.
 
 ## Evidence and scope
 
-`src/data/aion2/gear-priorities.json` is a separately versioned catalog with 16
-Gladiator PvE slot rules, 20 exact item pools and 23 sources. Its initial review
-covers the EU example's 23 equipped rows and expires October 28, 2026. Other classes,
+`src/data/aion2/gear-priorities.json` is a separately versioned catalog with 16 slot
+rules for each of Gladiator and Cleric, 46 class-scoped exact pools and 37 sources.
+The review covers both EU examples and expires October 28, 2026. Other classes,
 regions and unreviewed replacement items do not inherit Gladiator/item-specific
 rankings. Adding reviewed data uses this catalog; no UI code change is required
 for another supported item using the same mechanics.
+Cleric role selection, exact card coverage and class isolation are documented in
+[Cleric guidance](AION2-CLERIC.md). Untagged legacy item pools remain Gladiator-only;
+they are not shared with Cleric merely because the item ID matches.
 
 The original Kanon substat list is explicitly ordered by **roll rarity**, not
 damage value. The Gladiator guide provides community preferences and skill goals;

@@ -6,7 +6,7 @@ import type { AionEquipment, AionEvidenceSource, AionGearPriority, AionGearPrior
 type Source = AionEvidenceSource & { id: string; expiresAt: string };
 type Priority = AionGearPriority & { aliases?: string[]; when?: { skillId: number; belowLevel: number } };
 type SlotRule = { id: string; className: string; slots: number[]; basis: string; mechanic: "soulbinding" | "arcana"; sourceIds: string[]; priorities: Priority[] };
-type Pool = { itemId: number; slots: number[]; mechanic: "soulbinding" | "arcana" | "fixed"; capability: "random" | "fixed"; known: boolean; stats: { id: string; label: string; aliases?: string[] }[]; skills: { id: number; label: string }[]; sourceIds: string[] };
+type Pool = { itemId: number; slots: number[]; classes?: string[]; mechanic: "soulbinding" | "arcana" | "fixed"; capability: "random" | "fixed"; known: boolean; stats: { id: string; label: string; aliases?: string[] }[]; skills: { id: number; label: string }[]; sourceIds: string[] };
 type Catalog = { version: string; reviewedAt: string; expiresAt: string; regions: string[]; classes: string[]; sources: Source[]; slotRules: SlotRule[]; itemPools: Pool[] };
 const catalog = manifest as Catalog;
 const validation = validateAionGearPriorities(catalog);
@@ -30,20 +30,20 @@ function statId(stat: NonNullable<AionEquipment["details"]>["stats"][number], po
 export function aionGearPriorities(snapshot: AionSnapshot | null, now = new Date()): AionGearPriorityReport {
   const epoch = now.getTime();
   let status: AionGearPriorityReport["status"] = "current";
-  let notice = "Reviewed Gladiator PvE keep/compare preferences. Equal ranks are alternatives; listed lines are not a promise that they can all coexist. Confirm the actual item screen before spending.";
+  let notice = `Reviewed ${snapshot?.profile.className ?? "class"} keep/compare preferences; each slot states its build basis. Equal ranks are alternatives; listed lines are not a promise that they can all coexist. Confirm the actual item screen before spending.`;
   if (validation.length || !Number.isFinite(epoch) || !reviewed(catalog, epoch) || catalog.sources.some((source) => !reviewed(source, epoch)) || aionKnowledgeStatus(now).status !== "current") {
     status = "review-required"; notice = "Gear priorities need a current source review. Observed lines remain visible; ranked guidance is withheld.";
   } else if (!snapshot || !snapshot.coverage.equipment) {
     status = "unverified"; notice = "Current equipped items could not be verified. Refresh the character before comparing gear.";
   } else if (!catalog.regions.includes(snapshot.ref.region) || !catalog.classes.includes(snapshot.profile.className)) {
-    status = "unsupported"; notice = "A reviewed gear-priority build is not available for this class or region. No Gladiator list is substituted.";
+    status = "unsupported"; notice = "A reviewed gear-priority build is not available for this class or region. Another class's list is not substituted.";
   } else {
     const age = epoch - Date.parse(snapshot.observedAt);
     if (!Number.isFinite(age) || age > 30 * 60_000 || age < -5 * 60_000) { status = "stale"; notice = "The character observation is too old or has an invalid time. Refresh it before using gear priorities."; }
   }
   const items = (snapshot?.equipment ?? []).map<AionGearPriorityItem>((item) => {
     const rule = catalog.slotRules.find((entry) => entry.className === snapshot?.profile.className && entry.slots.includes(item.slot));
-    const pool = catalog.itemPools.find((entry) => entry.itemId === item.id && entry.slots.includes(item.slot));
+    const pool = catalog.itemPools.find((entry) => entry.itemId === item.id && entry.slots.includes(item.slot) && (entry.classes ?? ["Gladiator"]).includes(snapshot?.profile.className ?? ""));
     const sourceIds = [...new Set([...(rule?.sourceIds ?? []), ...(pool?.sourceIds ?? ["official-armory"])])];
     const sources = sourceIds.flatMap((id) => { const source = catalog.sources.find((entry) => entry.id === id); return source ? [{ title: source.title, url: source.url, kind: source.kind, reviewedAt: source.reviewedAt }] : []; });
     const result: AionGearPriorityItem = { slot: item.slot, slotName: item.slotName, itemId: item.id, itemName: item.name, basis: rule?.basis ?? "This item's fixed or unreviewed lines do not establish a randomized stat preference.", status: "unsupported", priorities: [], currentLines: observed(item), notices: [], sources };
@@ -52,7 +52,7 @@ export function aionGearPriorities(snapshot: AionSnapshot | null, now = new Date
       if (!priority.when) return true;
       const skill = snapshot?.coverage.skills && snapshot.skills.find((skill) => skill.id === priority.when!.skillId && skill.acquired);
       return !!skill && skill.level < priority.when.belowLevel;
-    }).map(({ id, label, kind, rank, reason }) => ({ id, label, kind, rank, reason })).sort((a, b) => a.rank - b.rank);
+    }).map(({ id, label, kind, rank, reason, focus }) => ({ id, label, kind, rank, reason, ...(focus ? { focus } : {}) })).sort((a, b) => a.rank - b.rank);
     if (pool?.capability === "fixed" && item.details?.randomStats === true) {
       result.status = "unverified"; result.notices.push("The observed capability conflicts with the reviewed item metadata. Check this exact item in game; no reroll guidance is shown."); return result;
     }

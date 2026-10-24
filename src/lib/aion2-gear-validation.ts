@@ -18,7 +18,9 @@ export function validateAionGearPriorities(input: unknown): string[] {
   if (input.schemaVersion !== 1 || !text(input.version, 100)) errors.push("Gear priority version is invalid");
   period(input, "Gear priorities");
   if (!uniqueStrings(input.regions) || input.regions.some((region) => !["eu", "nae", "naw", "la", "as"].includes(region))) errors.push("Gear priority regions must be explicit supported Global shards");
-  if (!Array.isArray(input.classes) || input.classes.length !== 1 || input.classes[0] !== "Gladiator") errors.push("Only the reviewed Gladiator class is supported");
+  const supportedClasses = ["Gladiator", "Cleric"];
+  if (!uniqueStrings(input.classes) || input.classes.some(className => !supportedClasses.includes(className))) errors.push("Gear priorities must explicitly name reviewed Gladiator or Cleric classes");
+  const classDeclared = (value: unknown) => typeof value === "string" && Array.isArray(input.classes) && input.classes.includes(value) && supportedClasses.includes(value);
   const sources = new Set<string>();
   if (!Array.isArray(input.sources) || !input.sources.length || input.sources.length > 100) errors.push("Gear priority sources are required");
   for (const source of Array.isArray(input.sources) ? input.sources : []) {
@@ -35,7 +37,7 @@ export function validateAionGearPriorities(input: unknown): string[] {
   for (const rule of Array.isArray(input.slotRules) ? input.slotRules : []) {
     if (!object(rule)) { errors.push("Gear slot rule must be an object"); continue; }
     if (!text(rule.id, 100) || ruleIds.has(rule.id)) errors.push("Gear slot rule IDs must be unique"); else ruleIds.add(rule.id);
-    if (rule.className !== "Gladiator" || !slots(rule.slots) || !text(rule.basis) || !["soulbinding", "arcana"].includes(String(rule.mechanic)) || !references(rule.sourceIds)) errors.push("Gear slot rules need explicit class, slots, basis, mechanic and known sources");
+    if (!classDeclared(rule.className) || !slots(rule.slots) || !text(rule.basis) || !["soulbinding", "arcana"].includes(String(rule.mechanic)) || !references(rule.sourceIds)) errors.push("Gear slot rules need explicit class, slots, basis, mechanic and known sources");
     for (const slot of Array.isArray(rule.slots) ? rule.slots : []) { const key = `${String(rule.className)}:${slot}`; if (usedSlots.has(key)) errors.push("Gear slot rules cannot overlap for one class"); usedSlots.add(key); }
     const priorityIds = new Set<string>();
     if (!Array.isArray(rule.priorities) || !rule.priorities.length || rule.priorities.length > 60) errors.push("A gear slot rule needs reviewed priorities");
@@ -45,15 +47,22 @@ export function validateAionGearPriorities(input: unknown): string[] {
       if (!text(priority.id, 100) || priorityIds.has(identity) || !["stat", "skill"].includes(String(priority.kind)) || !text(priority.label, 200) || !positive(priority.rank) || priority.rank > 50 || !text(priority.reason)) errors.push("Gear priorities need unique IDs, ordered ranks and reasons");
       priorityIds.add(identity);
       if (priority.kind === "skill" && (typeof priority.id !== "string" || !/^[1-9]\d*$/.test(priority.id))) errors.push("Gear skill priorities need exact decimal skill IDs");
+      if (priority.focus !== undefined && (priority.kind !== "skill" || !["group", "solo"].includes(String(priority.focus)))) errors.push("Gear skill priority focus must be group or solo; common stats have no focus");
       if (priority.aliases !== undefined && !uniqueStrings(priority.aliases, true)) errors.push("Gear stat aliases must be explicit unique labels");
       if (priority.when !== undefined && (!object(priority.when) || !positive(priority.when.skillId) || !positive(priority.when.belowLevel) || priority.when.belowLevel > 100)) errors.push("Gear priority conditions need a verified skill and level milestone");
     }
   }
-  const itemIds = new Set<number>();
+  const itemScopes = new Set<string>();
   if (!Array.isArray(input.itemPools) || !input.itemPools.length || input.itemPools.length > 200) errors.push("Reviewed item pools are required");
   for (const pool of Array.isArray(input.itemPools) ? input.itemPools : []) {
     if (!object(pool)) { errors.push("Gear item pool must be an object"); continue; }
-    if (!positive(pool.itemId) || itemIds.has(pool.itemId)) errors.push("Gear item pool IDs must be unique exact item IDs"); else itemIds.add(pool.itemId);
+    if (!positive(pool.itemId)) errors.push("Gear item pool IDs must be exact positive item IDs");
+    const classes = pool.classes === undefined ? ["Gladiator"] : pool.classes;
+    if (!uniqueStrings(classes) || classes.some(className => !classDeclared(className))) errors.push("Gear item pools require declared classes; legacy pools are Gladiator only");
+    for (const className of Array.isArray(classes) ? classes : []) for (const slot of Array.isArray(pool.slots) ? pool.slots : []) {
+      const key = `${String(className)}:${String(pool.itemId)}:${String(slot)}`;
+      if (itemScopes.has(key)) errors.push("Gear item pools cannot overlap for the same class, exact item and slot"); itemScopes.add(key);
+    }
     if (!slots(pool.slots) || !["soulbinding", "arcana", "fixed"].includes(String(pool.mechanic)) || !["random", "fixed"].includes(String(pool.capability)) || typeof pool.known !== "boolean" || !references(pool.sourceIds)) errors.push("Gear item pools need explicit slots, capability, mechanic, known state and sources");
     if ((pool.mechanic === "fixed") !== (pool.capability === "fixed")) errors.push("Fixed item capability must match its fixed mechanic");
     const statIds = new Set<string>(), skillIds = new Set<number>();
@@ -82,6 +91,7 @@ export function isAionGearPriorityReport(value: unknown, equipment: Pick<AionEqu
     let lastRank = 0; const priorityIds = new Set<string>();
     for (const priority of row.priorities) {
       if (!object(priority) || !text(priority.id, 100) || !text(priority.label, 200) || !["stat", "skill"].includes(String(priority.kind)) || !positive(priority.rank) || priority.rank < lastRank || priority.rank > 50 || !text(priority.reason)) return false;
+      if (priority.focus !== undefined && (priority.kind !== "skill" || !["group", "solo"].includes(String(priority.focus)))) return false;
       const id = `${priority.kind}:${priority.id}`; if (priorityIds.has(id)) return false; priorityIds.add(id); lastRank = priority.rank;
     }
     for (const line of row.currentLines) if (!object(line) || !text(line.label, 200) || typeof line.value !== "string" || line.value.length > 300 || !["stat", "skill"].includes(String(line.kind)) || !(line.priorityRank === null || positive(line.priorityRank) && row.status === "item-pool-verified" && value.status === "current" && row.priorities.some((priority) => object(priority) && priority.rank === line.priorityRank))) return false;

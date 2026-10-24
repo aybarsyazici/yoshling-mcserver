@@ -1,13 +1,14 @@
 {
   "schemaVersion": 1,
-  "version": "2026.10.24.1",
+  "version": "2026.10.24.2",
   "reviewedAt": "2026-10-24",
   "expiresAt": "2026-10-28",
   "regions": [
     "eu"
   ],
   "classes": [
-    "Gladiator"
+    "Gladiator",
+    "Cleric"
   ],
   "sources": [
     {
@@ -237,6 +238,146 @@
       "expiresAt": "2026-10-28",
       "fetchUrl": "https://aion2data.com/items/810560001-mirror-of-vigor",
       "sha256": "71da08cefa16b02a6c9910af2906c9696fc78f9343f1e8ca11062fab963584e3"
+    },
+    {
+      "id": "item-110730048",
+      "title": "Spiritforged Mace fixed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/110730048-spiritforged-mace",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/110730048-spiritforged-mace",
+      "sha256": "bd5855f5d4d63eccd50547d70c0c27f7a7a903b1be44f170ede3bd84be159175"
+    },
+    {
+      "id": "item-210130038",
+      "title": "Bakarma Breastplate allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/210130038-bakarma-breastplate",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210130038-bakarma-breastplate",
+      "sha256": "a3bb8d78f6c81bc35635058f37e52625f86c819b08a8e206f7b6ab1d02057b8e"
+    },
+    {
+      "id": "item-210240043",
+      "title": "Divine Canyon Greaves allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/210240043-divine-canyon-greaves",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210240043-divine-canyon-greaves",
+      "sha256": "dce56b875f0a33f5791722227ae6c426dd850bf430db4683c86e5b1a1e759c19"
+    },
+    {
+      "id": "item-210340043",
+      "title": "Divine Canyon Helm allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/210340043-divine-canyon-helm",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210340043-divine-canyon-helm",
+      "sha256": "6a5edbef2fc3db1fadf31368a4b96dc628298024ff3104246ac0bd8d8fc463b6"
+    },
+    {
+      "id": "item-210440043",
+      "title": "Divine Canyon Pauldrons allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/210440043-divine-canyon-pauldrons",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210440043-divine-canyon-pauldrons",
+      "sha256": "8f8eb38404ff8c9d680852a4d5a84e1eaa3c7be5a56a8e7aef18dedebe6e4d8e"
+    },
+    {
+      "id": "item-210630052",
+      "title": "Vakron Boots allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/210630052-vakron-boots",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210630052-vakron-boots",
+      "sha256": "6b0652d37c4777c9f515e13e0cd1692815a91b52a9cb6cc8ac827428f2927baa"
+    },
+    {
+      "id": "item-210740047",
+      "title": "Unyielding Cloak allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/210740047-unyielding-cloak",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/210740047-unyielding-cloak",
+      "sha256": "1cd7971cb6f201bbec8889a62786fb5d16f65dc6577d22b4c9a5c022c82b6aa1"
+    },
+    {
+      "id": "item-310340035",
+      "title": "Liberator Ring fixed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/310340035-liberator-ring",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/310340035-liberator-ring",
+      "sha256": "49ad527da51ba2adac8b346e7e70a2df259784c47eb7efdcebf48029c7e57b2f"
+    },
+    {
+      "id": "cleric-guide",
+      "title": "Aion2.gg Cleric PvE guide: group healing and damage choices (community advice)",
+      "url": "https://aion2.gg/guides/cleric-pve-build",
+      "kind": "community-guide",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2.gg/guides/cleric-pve-build",
+      "sha256": "dcfb2a4ad612bd91f52e17247bd09e008746eb4088678b9ace91f62a44a42e5b"
+    },
+    {
+      "id": "item-110730050",
+      "title": "Aulamus Mace allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/110730050-aulamus-mace",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/110730050-aulamus-mace",
+      "sha256": "c463471ca4d7b2d895bed0b4ffea622bae3f99d823009391c643cb81a5536e44"
+    },
+    {
+      "id": "item-810360001",
+      "title": "Compass of Vigor Cleric allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/810360001-compass-of-vigor",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810360001-compass-of-vigor",
+      "sha256": "4bde3219d9604adfadd8a12ade2a3f3c1755ee135fbafbb557e296b3f4ac5d94"
+    },
+    {
+      "id": "item-810460001",
+      "title": "Bell of Vigor Cleric allowed lines: Global Oct21 client reference",
+      "url": "https://aion2data.com/items/810460001-bell-of-vigor",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810460001-bell-of-vigor",
+      "sha256": "16f4202c52ae0f0a5b97d831a2287a2af82282d2c03cb46ff7783dfdd4ea8149"
+    },
+    {
+      "id": "item-810260001",
+      "title": "Common Parchment of Vigor Cleric skill pool: Global Oct21 client interpretation",
+      "url": "https://aion2data.com/items/810260001-parchment-of-vigor",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810260001-parchment-of-vigor",
+      "sha256": "b12d470b33d8d5c8908094413655e5d35f127b91b84f19bf207e417b1785f081"
+    },
+    {
+      "id": "item-810550002",
+      "title": "Rare Mirror of Magic Cleric skill pool: Global Oct21 client interpretation",
+      "url": "https://aion2data.com/items/810550002-mirror-of-magic",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/810550002-mirror-of-magic",
+      "sha256": "5fd14aad680f58effd79239548272e6404b99bb27c887a1b0a01ddc9b6864092"
     }
   ],
   "slotRules": [
@@ -1300,6 +1441,1142 @@
           "kind": "skill",
           "rank": 2,
           "reason": "Reviewed Mirror target; compare the actual skill level and card roll."
+        }
+      ]
+    },
+    {
+      "id": "cleric-weapon-and-guard",
+      "className": "Cleric",
+      "slots": [
+        1,
+        2
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17350000",
+          "label": "Condemnation (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: a core repeatable attack in the Chain of Torment and Earth Punishment window; compare toward level20.",
+          "when": {
+            "skillId": 17350000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "17120000",
+          "label": "Radiant Recovery (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: party recovery and cleansing; compare toward level20 for another Specialty slot.",
+          "when": {
+            "skillId": 17120000,
+            "belowLevel": 20
+          },
+          "focus": "group"
+        },
+        {
+          "id": "17100000",
+          "label": "Healing Light (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing alternative for focused healing; choose useful skill bonuses for the role you play.",
+          "focus": "group"
+        },
+        {
+          "id": "17090000",
+          "label": "Light of Regeneration (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing alternative for sustained party recovery.",
+          "focus": "group"
+        },
+        {
+          "id": "17010000",
+          "label": "Earth's Retribution (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage alternative that also feeds the no-MP-cost chain; useful while attacking between heals."
+        },
+        {
+          "id": "17070000",
+          "label": "Chain of Torment (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage alternative: supplies the condition for Condemnation and a party damage debuff."
+        },
+        {
+          "id": "17060000",
+          "label": "Bolt (solo damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Solo damage alternative from the reviewed Cleric route; not a required healing roll.",
+          "focus": "solo"
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only keeper from the slot reference; it does not establish a direct healing increase."
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Cleric guide preference for faster actions during damage and healing windows."
+        },
+        {
+          "id": "weapon-damage-boost",
+          "label": "Weapon Damage Boost",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Offensive keeper from the rarity reference; compare rather than assume a healing benefit."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Attack scaling supports both damage and heals through Healing Enhancement."
+        },
+        {
+          "id": "multi-hit-chance",
+          "label": "Multi-hit Chance",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Damage-only keeper from the rarity reference; no universal output ranking is claimed."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Accuracy and Critical Hit utility; check actual needs rather than assume a cap."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 6,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-helmet",
+      "className": "Cleric",
+      "slots": [
+        3
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; it is not a measured healing priority."
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Attack scaling can also feed Healing Enhancement; a useful rare-line comparison."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-shoulder",
+      "className": "Cleric",
+      "slots": [
+        4
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; it is not a measured healing priority."
+        },
+        {
+          "id": "critical-damage-boost",
+          "label": "Critical Damage Boost",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Damage-only rare-line reference for critical attacks."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-torso",
+      "className": "Cleric",
+      "slots": [
+        5
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; compare the actual roll and role."
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Damage-only keeper from the slot reference; it does not establish a direct healing increase."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-pants",
+      "className": "Cleric",
+      "slots": [
+        6
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Attack scaling can also feed Healing Enhancement; a useful rare-line comparison."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; compare the actual roll and role."
+        },
+        {
+          "id": "damage-tolerance",
+          "label": "Damage Tolerance",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Survival keeper from the slot reference; choose it when survival is the constraint."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-gloves",
+      "className": "Cleric",
+      "slots": [
+        7
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; compare the actual roll and role."
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Cleric guide preference for faster actions during damage and healing windows."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-boots",
+      "className": "Cleric",
+      "slots": [
+        8
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; compare the actual roll and role."
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Movement utility from the slot reference, not damage or healing output."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-cape",
+      "className": "Cleric",
+      "slots": [
+        19
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; it is not a measured healing priority."
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Attack scaling can also feed Healing Enhancement; a useful rare-line comparison."
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Damage-only rare-line reference; compare the actual roll and role."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-necklace",
+      "className": "Cleric",
+      "slots": [
+        10
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Cleric guide preference for faster actions during damage and healing windows."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Attack scaling supports both damage and heals through Healing Enhancement."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Conditional utility: check whether your attacks miss before prioritizing another Accuracy line."
+        }
+      ]
+    },
+    {
+      "id": "cleric-earrings",
+      "className": "Cleric",
+      "slots": [
+        11,
+        12
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        },
+        {
+          "id": "17750000",
+          "label": "Immortal Veil (survival) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Survival alternative from the reviewed group build; not a universal damage priority."
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Movement utility from the slot reference, not damage or healing output."
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Attack scaling supports both damage and heals through Healing Enhancement."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Accuracy and Critical Hit utility; check actual needs rather than assume a cap."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy",
+          "kind": "stat",
+          "rank": 5,
+          "reason": "Conditional utility: check whether your attacks miss before prioritizing another Accuracy line."
+        }
+      ]
+    },
+    {
+      "id": "cleric-rings",
+      "className": "Cleric",
+      "slots": [
+        13,
+        14
+      ],
+      "basis": "Cleric PvE comparison: tied skill choices depend on group healing, damage or survival. Choose for your role; they are not required simultaneous rolls. After skills, numbered stat tiers follow the Global slot rarity/keep reference, not a calculated damage or healing ranking. Only lines in this exact item pool are shown.",
+      "mechanic": "soulbinding",
+      "sourceIds": [
+        "cleric-guide",
+        "bible"
+      ],
+      "priorities": [
+        {
+          "id": "17350000",
+          "label": "Condemnation (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: a core repeatable attack in the Chain of Torment and Earth Punishment window; compare toward level20.",
+          "when": {
+            "skillId": 17350000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "17120000",
+          "label": "Radiant Recovery (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: party recovery and cleansing; compare toward level20 for another Specialty slot.",
+          "when": {
+            "skillId": 17120000,
+            "belowLevel": 20
+          },
+          "focus": "group"
+        },
+        {
+          "id": "17100000",
+          "label": "Healing Light (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing alternative for focused healing; choose useful skill bonuses for the role you play.",
+          "focus": "group"
+        },
+        {
+          "id": "17090000",
+          "label": "Light of Regeneration (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing alternative for sustained party recovery.",
+          "focus": "group"
+        },
+        {
+          "id": "17010000",
+          "label": "Earth's Retribution (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage alternative that also feeds the no-MP-cost chain; useful while attacking between heals."
+        },
+        {
+          "id": "17070000",
+          "label": "Chain of Torment (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage alternative: supplies the condition for Condemnation and a party damage debuff."
+        },
+        {
+          "id": "17060000",
+          "label": "Bolt (solo damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Solo damage alternative from the reviewed Cleric route; not a required healing roll.",
+          "focus": "solo"
+        },
+        {
+          "id": "might",
+          "label": "Might",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Attack scaling supports both damage and heals through Healing Enhancement."
+        },
+        {
+          "id": "precision",
+          "label": "Precision",
+          "kind": "stat",
+          "rank": 3,
+          "reason": "Accuracy and Critical Hit utility; check actual needs rather than assume a cap."
+        },
+        {
+          "id": "attack",
+          "label": "Attack",
+          "kind": "stat",
+          "rank": 4,
+          "reason": "Attack can support healing through Healing Enhancement as well as damage."
+        }
+      ]
+    },
+    {
+      "id": "cleric-chalice",
+      "className": "Cleric",
+      "slots": [
+        41
+      ],
+      "basis": "Cleric PvE Arcana comparison: tied choices depend on group healing or damage. The reviewed family limits which skills can roll; this is not an inventory check or a universal output ranking. Arcana lines use card enhancement/transmutation, not gear Sync.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "cleric-guide"
+      ],
+      "priorities": [
+        {
+          "id": "17350000",
+          "label": "Condemnation (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: a core repeatable attack in the Chain of Torment and Earth Punishment window; compare toward level20.",
+          "when": {
+            "skillId": 17350000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "17120000",
+          "label": "Radiant Recovery (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: party recovery and cleansing; compare toward level20 for another Specialty slot.",
+          "when": {
+            "skillId": 17120000,
+            "belowLevel": 20
+          },
+          "focus": "group"
+        },
+        {
+          "id": "17100000",
+          "label": "Healing Light (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing alternative for focused healing; choose useful skill bonuses for the role you play.",
+          "focus": "group"
+        },
+        {
+          "id": "17090000",
+          "label": "Light of Regeneration (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing alternative for sustained party recovery.",
+          "focus": "group"
+        },
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
+        }
+      ]
+    },
+    {
+      "id": "cleric-parchment",
+      "className": "Cleric",
+      "slots": [
+        42
+      ],
+      "basis": "Cleric PvE Arcana comparison: tied choices depend on group healing or damage. The reviewed family limits which skills can roll; this is not an inventory check or a universal output ranking. Arcana lines use card enhancement/transmutation, not gear Sync.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "cleric-guide"
+      ],
+      "priorities": [
+        {
+          "id": "17350000",
+          "label": "Condemnation (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: a core repeatable attack in the Chain of Torment and Earth Punishment window; compare toward level20.",
+          "when": {
+            "skillId": 17350000,
+            "belowLevel": 20
+          }
+        },
+        {
+          "id": "17120000",
+          "label": "Radiant Recovery (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: party recovery and cleansing; compare toward level20 for another Specialty slot.",
+          "when": {
+            "skillId": 17120000,
+            "belowLevel": 20
+          },
+          "focus": "group"
+        },
+        {
+          "id": "17010000",
+          "label": "Earth's Retribution (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage alternative that also feeds the no-MP-cost chain; useful while attacking between heals."
+        },
+        {
+          "id": "17070000",
+          "label": "Chain of Torment (damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Damage alternative: supplies the condition for Condemnation and a party damage debuff."
+        },
+        {
+          "id": "17060000",
+          "label": "Bolt (solo damage) +1",
+          "kind": "skill",
+          "rank": 2,
+          "reason": "Solo damage alternative from the reviewed Cleric route; not a required healing roll.",
+          "focus": "solo"
+        }
+      ]
+    },
+    {
+      "id": "cleric-compass",
+      "className": "Cleric",
+      "slots": [
+        43
+      ],
+      "basis": "Cleric PvE Arcana comparison: tied choices depend on group healing or damage. The reviewed family limits which skills can roll; this is not an inventory check or a universal output ranking. Arcana lines use card enhancement/transmutation, not gear Sync.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "cleric-guide"
+      ],
+      "priorities": [
+        {
+          "id": "17100000",
+          "label": "Healing Light (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing alternative for focused healing; choose useful skill bonuses for the role you play.",
+          "focus": "group"
+        },
+        {
+          "id": "17090000",
+          "label": "Light of Regeneration (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing alternative for sustained party recovery.",
+          "focus": "group"
+        }
+      ]
+    },
+    {
+      "id": "cleric-bell",
+      "className": "Cleric",
+      "slots": [
+        44
+      ],
+      "basis": "Cleric PvE Arcana comparison: tied choices depend on group healing or damage. The reviewed family limits which skills can roll; this is not an inventory check or a universal output ranking. Arcana lines use card enhancement/transmutation, not gear Sync.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "cleric-guide"
+      ],
+      "priorities": [
+        {
+          "id": "17730000",
+          "label": "Empyrean Lord's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice: adds an attack-triggered damage effect."
+        }
+      ]
+    },
+    {
+      "id": "cleric-mirror",
+      "className": "Cleric",
+      "slots": [
+        45
+      ],
+      "basis": "Cleric PvE Arcana comparison: tied choices depend on group healing or damage. The reviewed family limits which skills can roll; this is not an inventory check or a universal output ranking. Arcana lines use card enhancement/transmutation, not gear Sync.",
+      "mechanic": "arcana",
+      "sourceIds": [
+        "cleric-guide"
+      ],
+      "priorities": [
+        {
+          "id": "17740000",
+          "label": "Healing Enhancement (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: converts Attack into Heal Boost.",
+          "focus": "group"
+        },
+        {
+          "id": "17800000",
+          "label": "Radiant Benediction (group healing) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Group healing choice: attacks trigger party recovery."
+        },
+        {
+          "id": "17780000",
+          "label": "Earth's Grace (damage) +1",
+          "kind": "skill",
+          "rank": 1,
+          "reason": "Damage choice from the reviewed Cleric route; compare with your role and existing lines."
         }
       ]
     }
@@ -3210,6 +4487,2184 @@
       "sourceIds": [
         "official-armory",
         "item-810560001"
+      ]
+    },
+    {
+      "itemId": 110730048,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        1
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-110730048"
+      ]
+    },
+    {
+      "itemId": 115030041,
+      "slots": [
+        2
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-115030041"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 210130038,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        5
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "double-resist",
+          "label": "Double Resist"
+        },
+        {
+          "id": "weapon-damage-tolerance",
+          "label": "Weapon Damage Tolerance"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210130038"
+      ]
+    },
+    {
+      "itemId": 210240043,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        6
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "damage-tolerance",
+          "label": "Damage Tolerance"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "endurance",
+          "label": "Endurance"
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase"
+        },
+        {
+          "id": "double-resist",
+          "label": "Double Resist"
+        },
+        {
+          "id": "multi-hit-resist",
+          "label": "Multi-hit Resist"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210240043"
+      ]
+    },
+    {
+      "itemId": 210340043,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        3
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "incoming-heal",
+          "label": "Incoming Heal"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance"
+        },
+        {
+          "id": "endurance",
+          "label": "Endurance"
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase"
+        },
+        {
+          "id": "perfect-resist",
+          "label": "Perfect Resist"
+        },
+        {
+          "id": "weapon-damage-tolerance",
+          "label": "Weapon Damage Tolerance"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210340043"
+      ]
+    },
+    {
+      "itemId": 210440043,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        4
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-damage-boost",
+          "label": "Critical Damage Boost"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        },
+        {
+          "id": "perfect-resist",
+          "label": "Perfect Resist"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210440043"
+      ]
+    },
+    {
+      "itemId": 210540047,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        7
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        },
+        {
+          "id": "multi-hit-resist",
+          "label": "Multi-hit Resist"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210540047"
+      ]
+    },
+    {
+      "itemId": 210630052,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        8
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed"
+        },
+        {
+          "id": "perfect-chance",
+          "label": "Perfect Chance"
+        },
+        {
+          "id": "regeneration",
+          "label": "Regeneration"
+        },
+        {
+          "id": "defense-increase",
+          "label": "Defense increase"
+        },
+        {
+          "id": "perfect-resist",
+          "label": "Perfect Resist"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210630052"
+      ]
+    },
+    {
+      "itemId": 210740047,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        19
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-damage-defense",
+          "label": "Critical Damage Defense"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "back-defense",
+          "label": "Back Defense"
+        },
+        {
+          "id": "front-defense",
+          "label": "Front Defense"
+        },
+        {
+          "id": "dexterity",
+          "label": "Dexterity"
+        },
+        {
+          "id": "constitution",
+          "label": "Constitution"
+        },
+        {
+          "id": "willpower",
+          "label": "Willpower"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-damage-tolerance",
+          "label": "Critical Damage Tolerance"
+        },
+        {
+          "id": "status-effect-resist",
+          "label": "Status Effect Resist"
+        },
+        {
+          "id": "double-chance",
+          "label": "Double Chance"
+        },
+        {
+          "id": "endurance",
+          "label": "Endurance"
+        },
+        {
+          "id": "attack-increase",
+          "label": "Attack increase"
+        },
+        {
+          "id": "weapon-damage-tolerance",
+          "label": "Weapon Damage Tolerance"
+        },
+        {
+          "id": "endurance-penetration",
+          "label": "Endurance Penetration"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-210740047"
+      ]
+    },
+    {
+      "itemId": 215240001,
+      "slots": [
+        17
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-215240001"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 310130050,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        10
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "flight-power",
+          "label": "Flight Power"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "intelligence",
+          "label": "Intelligence"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-310130050"
+      ]
+    },
+    {
+      "itemId": 310230052,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        11,
+        12
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "flight-power",
+          "label": "Flight Power"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "move-speed",
+          "label": "Move Speed"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "intelligence",
+          "label": "Intelligence"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-310230052"
+      ]
+    },
+    {
+      "itemId": 310330052,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        13,
+        14
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        },
+        {
+          "id": "natural-hp-regen",
+          "label": "Natural HP Regen"
+        },
+        {
+          "id": "critical-hit-resist",
+          "label": "Critical Hit Resist"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "flight-power",
+          "label": "Flight Power"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "intelligence",
+          "label": "Intelligence"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17240000,
+          "label": "Defiance"
+        },
+        {
+          "id": 17100000,
+          "label": "Healing Light"
+        },
+        {
+          "id": 17090000,
+          "label": "Light of Regeneration"
+        },
+        {
+          "id": 17370000,
+          "label": "Lightning Strike Scattershot"
+        },
+        {
+          "id": 17060000,
+          "label": "Bolt"
+        },
+        {
+          "id": 17070000,
+          "label": "Chain of Torment"
+        },
+        {
+          "id": 17350000,
+          "label": "Condemnation"
+        },
+        {
+          "id": 17080000,
+          "label": "Debilitating Mark"
+        },
+        {
+          "id": 17150000,
+          "label": "Divine Aura"
+        },
+        {
+          "id": 17010000,
+          "label": "Earth's Retribution"
+        },
+        {
+          "id": 17040000,
+          "label": "Judgment Thunder"
+        },
+        {
+          "id": 17120000,
+          "label": "Radiant Recovery"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-310330052"
+      ]
+    },
+    {
+      "itemId": 310340035,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        13,
+        14
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "defense",
+          "label": "Defense"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310340035"
+      ]
+    },
+    {
+      "itemId": 310430047,
+      "slots": [
+        15
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "evasion",
+          "label": "Evasion"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310430047"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 310440018,
+      "slots": [
+        16
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "natural-mp-regen",
+          "label": "Natural MP Regen"
+        }
+      ],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310440018"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 310900001,
+      "slots": [
+        23,
+        24
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-310900001"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 311030001,
+      "slots": [
+        22
+      ],
+      "mechanic": "fixed",
+      "capability": "fixed",
+      "known": true,
+      "stats": [],
+      "skills": [],
+      "sourceIds": [
+        "official-armory",
+        "item-311030001"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 810160001,
+      "slots": [
+        41
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17240000,
+          "label": "Defiance"
+        },
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17370000,
+          "label": "Lightning Strike Scattershot"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        },
+        {
+          "id": 17060000,
+          "label": "Bolt"
+        },
+        {
+          "id": 17070000,
+          "label": "Chain of Torment"
+        },
+        {
+          "id": 17350000,
+          "label": "Condemnation"
+        },
+        {
+          "id": 17080000,
+          "label": "Debilitating Mark"
+        },
+        {
+          "id": 17150000,
+          "label": "Divine Aura"
+        },
+        {
+          "id": 17010000,
+          "label": "Earth's Retribution"
+        },
+        {
+          "id": 17100000,
+          "label": "Healing Light"
+        },
+        {
+          "id": 17040000,
+          "label": "Judgment Thunder"
+        },
+        {
+          "id": 17090000,
+          "label": "Light of Regeneration"
+        },
+        {
+          "id": 17120000,
+          "label": "Radiant Recovery"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810160001"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 810260002,
+      "slots": [
+        42
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17060000,
+          "label": "Bolt"
+        },
+        {
+          "id": 17070000,
+          "label": "Chain of Torment"
+        },
+        {
+          "id": 17350000,
+          "label": "Condemnation"
+        },
+        {
+          "id": 17120000,
+          "label": "Radiant Recovery"
+        },
+        {
+          "id": 17080000,
+          "label": "Debilitating Mark"
+        },
+        {
+          "id": 17010000,
+          "label": "Earth's Retribution"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810260002"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 810560001,
+      "slots": [
+        45
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810560001"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 110730050,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        1
+      ],
+      "mechanic": "soulbinding",
+      "capability": "random",
+      "known": true,
+      "stats": [
+        {
+          "id": "accuracy",
+          "label": "Accuracy"
+        },
+        {
+          "id": "mp",
+          "label": "MP"
+        },
+        {
+          "id": "hp",
+          "label": "HP"
+        },
+        {
+          "id": "critical-attack",
+          "label": "Critical Attack"
+        },
+        {
+          "id": "block",
+          "label": "Block"
+        },
+        {
+          "id": "precision",
+          "label": "Precision"
+        },
+        {
+          "id": "attack",
+          "label": "Attack"
+        },
+        {
+          "id": "critical-hit",
+          "label": "Critical Hit"
+        },
+        {
+          "id": "back-attack",
+          "label": "Back Attack"
+        },
+        {
+          "id": "front-attack",
+          "label": "Front Attack"
+        },
+        {
+          "id": "multi-hit-chance",
+          "label": "Multi-hit Chance"
+        },
+        {
+          "id": "might",
+          "label": "Might"
+        },
+        {
+          "id": "weapon-damage-boost",
+          "label": "Weapon Damage Boost"
+        },
+        {
+          "id": "status-effect-chance",
+          "label": "Status Effect Chance"
+        },
+        {
+          "id": "combat-speed",
+          "label": "Combat Speed"
+        },
+        {
+          "id": "damage-boost",
+          "label": "Damage Boost"
+        }
+      ],
+      "skills": [
+        {
+          "id": 17240000,
+          "label": "Defiance"
+        },
+        {
+          "id": 17100000,
+          "label": "Healing Light"
+        },
+        {
+          "id": 17090000,
+          "label": "Light of Regeneration"
+        },
+        {
+          "id": 17370000,
+          "label": "Lightning Strike Scattershot"
+        },
+        {
+          "id": 17060000,
+          "label": "Bolt"
+        },
+        {
+          "id": 17070000,
+          "label": "Chain of Torment"
+        },
+        {
+          "id": 17350000,
+          "label": "Condemnation"
+        },
+        {
+          "id": 17080000,
+          "label": "Debilitating Mark"
+        },
+        {
+          "id": 17150000,
+          "label": "Divine Aura"
+        },
+        {
+          "id": 17010000,
+          "label": "Earth's Retribution"
+        },
+        {
+          "id": 17040000,
+          "label": "Judgment Thunder"
+        },
+        {
+          "id": 17120000,
+          "label": "Radiant Recovery"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-110730050"
+      ]
+    },
+    {
+      "itemId": 810360001,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        43
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17240000,
+          "label": "Defiance"
+        },
+        {
+          "id": 17100000,
+          "label": "Healing Light"
+        },
+        {
+          "id": 17090000,
+          "label": "Light of Regeneration"
+        },
+        {
+          "id": 17370000,
+          "label": "Lightning Strike Scattershot"
+        },
+        {
+          "id": 17150000,
+          "label": "Divine Aura"
+        },
+        {
+          "id": 17040000,
+          "label": "Judgment Thunder"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810360001"
+      ]
+    },
+    {
+      "itemId": 810460001,
+      "classes": [
+        "Cleric"
+      ],
+      "slots": [
+        44
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17730000,
+          "label": "Empyrean Lord's Grace"
+        },
+        {
+          "id": 17750000,
+          "label": "Immortal Veil"
+        },
+        {
+          "id": 17770000,
+          "label": "Prayer of Concentration"
+        },
+        {
+          "id": 17790000,
+          "label": "Survival Willpower"
+        },
+        {
+          "id": 17710000,
+          "label": "Warm Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810460001"
+      ]
+    },
+    {
+      "itemId": 810260001,
+      "slots": [
+        42
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17060000,
+          "label": "Bolt"
+        },
+        {
+          "id": 17070000,
+          "label": "Chain of Torment"
+        },
+        {
+          "id": 17350000,
+          "label": "Condemnation"
+        },
+        {
+          "id": 17120000,
+          "label": "Radiant Recovery"
+        },
+        {
+          "id": 17080000,
+          "label": "Debilitating Mark"
+        },
+        {
+          "id": 17010000,
+          "label": "Earth's Retribution"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810260001"
+      ],
+      "classes": [
+        "Cleric"
+      ]
+    },
+    {
+      "itemId": 810550002,
+      "slots": [
+        45
+      ],
+      "mechanic": "arcana",
+      "capability": "random",
+      "known": true,
+      "stats": [],
+      "skills": [
+        {
+          "id": 17780000,
+          "label": "Earth's Grace"
+        },
+        {
+          "id": 17720000,
+          "label": "Empyrean Lords' Benediction"
+        },
+        {
+          "id": 17760000,
+          "label": "Heal Block"
+        },
+        {
+          "id": 17740000,
+          "label": "Healing Enhancement"
+        },
+        {
+          "id": 17800000,
+          "label": "Radiant Benediction"
+        }
+      ],
+      "sourceIds": [
+        "official-armory",
+        "item-810550002"
+      ],
+      "classes": [
+        "Cleric"
       ]
     }
   ]

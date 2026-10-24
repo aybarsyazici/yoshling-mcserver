@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026.10.24.3",
+  "version": "2026.10.24.4",
   "reviewedAt": "2026-10-24",
   "expiresAt": "2026-10-28",
   "regions": [
@@ -236,6 +236,92 @@
       "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Gladiator pool includes Overhead Slam +1 and Rending Blow +1. Multiple distinct skills were corroborated by an official same-item sample; duplicate-same-skill prohibition is a client-reference rule. Material acceptance remains an in-game check."
+    },
+    {
+      "id": "cleric-build",
+      "title": "Cleric PvE support and solo guide; community preferences, Oct16 dataset",
+      "kind": "community-guide",
+      "url": "https://aion2.gg/guides/cleric-pve-build",
+      "fetchUrl": "https://aion2.gg/guides/cleric-pve-build",
+      "sha256": "dcfb2a4ad612bd91f52e17247bd09e008746eb4088678b9ace91f62a44a42e5b",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "notes": "Scope is the reviewed Cleric mechanic. Source dataset is Oct16; the unchanged officialOct7/14/21 patches and currentOct21 client references were checked. No critical cap, perfect build, private point balance or numeric healing formula is adopted."
+    },
+    {
+      "id": "cleric-board-guide",
+      "title": "Cleric white-board layouts, costs and adjacency; client interpretation",
+      "kind": "client-data",
+      "url": "https://aion2.gg/builds/cleric/daevanion",
+      "fetchUrl": "https://aion2.gg/builds/cleric/daevanion",
+      "sha256": "8d577691b916e1a1c7c7d3848f6117cd560b8eedde1d63123aa3de7dec0b6544",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "notes": "Scope is the reviewed Cleric mechanic. Source dataset is Oct16; the unchanged officialOct7/14/21 patches and currentOct21 client references were checked. No critical cap, perfect build, private point balance or numeric healing formula is adopted."
+    },
+    {
+      "id": "cleric-radiant-recovery-skill",
+      "title": "Radiant Recovery16HP-restoration option and20specialty slot",
+      "kind": "client-data",
+      "url": "https://aion2.gg/database/skills/radiant-recovery-17120000",
+      "fetchUrl": "https://aion2.gg/database/skills/radiant-recovery-17120000",
+      "sha256": "52daf0f68261d8e6649bab6419b1378e0ac7f5720051e4d3c627b99457531972",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "notes": "Scope is the reviewed Cleric mechanic. Source dataset is Oct16; the unchanged officialOct7/14/21 patches and currentOct21 client references were checked. No critical cap, perfect build, private point balance or numeric healing formula is adopted."
+    },
+    {
+      "id": "cleric-healing-light",
+      "title": "Healing Light specialty options, including16cooldown reduction",
+      "kind": "client-data",
+      "url": "https://aion2.gg/database/skills/healing-light-17100000",
+      "fetchUrl": "https://aion2.gg/database/skills/healing-light-17100000",
+      "sha256": "6012b74abd43e786e5932bc4fee7ac80fb6f08dae2ab2d87891b6fa22321fa1e",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "notes": "Scope is the reviewed Cleric mechanic. Source dataset is Oct16; the unchanged officialOct7/14/21 patches and currentOct21 client references were checked. No critical cap, perfect build, private point balance or numeric healing formula is adopted."
+    },
+    {
+      "id": "cleric-condemnation",
+      "title": "Condemnation12critical reset,16Multi-Hit option and20specialty slot",
+      "kind": "client-data",
+      "url": "https://aion2.gg/database/skills/condemnation-17350000",
+      "fetchUrl": "https://aion2.gg/database/skills/condemnation-17350000",
+      "sha256": "ac136d1a54f6b6da6528b1009cc7407a1681585767dbfdde4c552dd4bede920d",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "notes": "Scope is the reviewed Cleric mechanic. Source dataset is Oct16; the unchanged officialOct7/14/21 patches and currentOct21 client references were checked. No critical cap, perfect build, private point balance or numeric healing formula is adopted."
+    },
+    {
+      "id": "cleric-earth-punishment",
+      "title": "Earth Punishment stigma tiers5/10/15/20",
+      "kind": "client-data",
+      "url": "https://aion2.gg/database/skills/earth-punishment-17400000",
+      "fetchUrl": "https://aion2.gg/database/skills/earth-punishment-17400000",
+      "sha256": "b696f3f9e220d5db7b26bc4c6f058f800aa8e59b514a80cc84ce421cd7cbe226",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "notes": "Scope is the reviewed Cleric mechanic. Source dataset is Oct16; the unchanged officialOct7/14/21 patches and currentOct21 client references were checked. No critical cap, perfect build, private point balance or numeric healing formula is adopted."
+    },
+    {
+      "id": "cleric-mace-candidate",
+      "title": "Aulamus Mace capabilities, regular Conquest drop and Mace transfer group",
+      "url": "https://aion2data.com/items/110730050-aulamus-mace",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "fetchUrl": "https://aion2data.com/items/110730050-aulamus-mace",
+      "sha256": "c463471ca4d7b2d895bed0b4ffea622bae3f99d823009391c643cb81a5536e44"
+    },
+    {
+      "id": "cleric-nightmare-shop",
+      "title": "Nightmare Stigma Shard price and permanent character allowance",
+      "url": "https://aion2data.com/shops/990003-trade-shop-nightmare",
+      "fetchUrl": "https://aion2data.com/shops/990003-trade-shop-nightmare",
+      "sha256": "6826fc7496d747be3192ce875b70357f434e714b7ee5f0ad6ce0b2cadc1586c1",
+      "kind": "client-data",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28"
     }
   ],
   "rules": [
@@ -272,7 +358,7 @@
         {
           "id": "base-rank",
           "title": "Check bought skill ranks before spending on random rolls",
-          "instruction": "Open Skills \u2192 Overhead Slam and inspect the rank bought with Skill Points. Bought ranks stop at 10; the displayed total also includes board and equipment bonuses. If the bought rank is below 10, compare the next Skill Point cost first. Collect any remaining Regional Quest / Sealed Dungeon skill-point rewards you can actually claim.",
+          "instruction": "Open Skills → Overhead Slam and inspect the rank bought with Skill Points. Bought ranks stop at 10; the displayed total also includes board and equipment bonuses. If the bought rank is below 10, compare the next Skill Point cost first. Collect any remaining Regional Quest / Sealed Dungeon skill-point rewards you can actually claim.",
           "reason": "Owning four board bonuses does not prove the bought rank is already 10. This check can reveal a route that needs no Odyle or random gear roll. Completion of those quests is not visible.",
           "sourceId": "glad-build"
         },
@@ -287,14 +373,14 @@
         {
           "id": "owned-cards",
           "title": "Check stored cards and unopened bags before farming",
-          "instruction": "Inspect your inventory, storage and unopened Arcana bags, then open Arcana \u2192 Equip. Look for an owned Parchment or Chalice with Overhead Slam +1 or better. Equip useful cards before deciding to spend Odyle. Empty equipped slots do not prove that your inventory is empty.",
+          "instruction": "Inspect your inventory, storage and unopened Arcana bags, then open Arcana → Equip. Look for an owned Parchment or Chalice with Overhead Slam +1 or better. Equip useful cards before deciding to spend Odyle. Empty equipped slots do not prove that your inventory is empty.",
           "reason": "Two existing +1 contributions may already supply the missing levels. Do not feed useful skill cards or buy/farm duplicates before checking what you own.",
           "sourceId": "arcana-guide"
         },
         {
           "id": "boss-window",
           "title": "Check the Rage Burst window for boss fights",
-          "instruction": "For the boss-focused Slam route, inspect Skills \u2192 Stigmas \u2192 Rage Burst. Its effect allows Overhead Slam against any target during its window. Equip it if this is the build you intend to play, and read the current level/cooldown before spending shards. Do not remove a defensive stigma without considering your role.",
+          "instruction": "For the boss-focused Slam route, inspect Skills → Stigmas → Rage Burst. Its effect allows Overhead Slam against any target during its window. Equip it if this is the build you intend to play, and read the current level/cooldown before spending shards. Do not remove a defensive stigma without considering your role.",
           "reason": "Removing Overhead Slam cooldown does not remove its target condition by itself. Bosses normally resist knockdown. Your armory does not currently show an equipped, acquired Rage Burst.",
           "sourceId": "rage-burst",
           "when": "rage-burst-missing"
@@ -302,7 +388,7 @@
         {
           "id": "shattered",
           "title": "Choose an eligible Shattered Arkanis tier for the missing cards",
-          "instruction": "Open Escape \u2192 Transcendence \u2192 Shattered Arkanis \u2192 Stage 1, then find a party. Entry is level 45 and {activityGearScore} Gear Score; your armory lists {gearScore}. Clear the bosses and use the reward cube when you have at least {activityCost} Odyle and a reward claim available. Select the normal single claim; inspect the displayed cost before confirming. Stage 1 is the reviewed baseline. If your Gear Score is higher, compare tiers you have actually unlocked and can clear reliably; inspect their own reward cost. Gear Score alone does not prove their S-rank unlock.",
+          "instruction": "Open Escape → Transcendence → Shattered Arkanis → Stage 1, then find a party. Entry is level 45 and {activityGearScore} Gear Score; your armory lists {gearScore}. Clear the bosses and use the reward cube when you have at least {activityCost} Odyle and a reward claim available. Select the normal single claim; inspect the displayed cost before confirming. Stage 1 is the reviewed baseline. If your Gear Score is higher, compare tiers you have actually unlocked and can clear reliably; inspect their own reward cost. Gear Score alone does not prove their S-rank unlock.",
           "reason": "Stage 1 is the eligible starting tier, not Exploration or the 1,900-GS Stage 2. Energy pays for the reward claim. A drop or the desired skill line is not guaranteed.",
           "sourceId": "shattered",
           "when": "transcendence-eligible",
@@ -311,7 +397,7 @@
         {
           "id": "open-and-equip",
           "title": "Open the card bags and inspect Parchment / Chalice",
-          "instruction": "Use the Arcana bag items you receive, then open Escape \u2192 Arcana \u2192 Equip. For Overhead Slam, keep a Parchment or Chalice showing Overhead Slam +1 or better. Compass cannot roll Overhead Slam. Vigor and Magic versions share the skill pool, so keep the useful skill roll while building your set.",
+          "instruction": "Use the Arcana bag items you receive, then open Escape → Arcana → Equip. For Overhead Slam, keep a Parchment or Chalice showing Overhead Slam +1 or better. Compass cannot roll Overhead Slam. Vigor and Magic versions share the skill pool, so keep the useful skill roll while building your set.",
           "reason": "At level 14, two separate +1 contributions reach level 16: Parchment +1 plus Chalice +1, or one card +1 plus one ring +1. Card enhance level +2 does not guarantee +2 to Overhead; card-line upgrades are random.",
           "sourceId": "arcana-guide",
           "when": "transcendence-eligible"
@@ -319,7 +405,7 @@
         {
           "id": "sync-ring",
           "title": "Alternative: use a ring you already own",
-          "instruction": "Choose one observed random-line ring and work only on that ring:\n{ringPlan}\nOpen Enhancement \u2192 Soul Binding \u2192 Sync, select the unwanted line on the chosen ring, and add a Sync Stone or material the current window accepts. Inspect consumption, success chance and the skill pool before rolling for Overhead Slam +1. Set a Kina/material spending limit first. Stop when it lands or when that limit is reached; success is not guaranteed within your budget.",
+          "instruction": "Choose one observed random-line ring and work only on that ring:\n{ringPlan}\nOpen Enhancement → Soul Binding → Sync, select the unwanted line on the chosen ring, and add a Sync Stone or material the current window accepts. Inspect consumption, success chance and the skill pool before rolling for Overhead Slam +1. Set a Kina/material spending limit first. Stop when it lands or when that limit is reached; success is not guaranteed within your budget.",
           "reason": "Sync changes one selected line and consumes its material; it does not guarantee the target skill. Reset changes every line. Bind raises existing values and does not turn Flight Power into Overhead Slam. Inventory and Kina are not visible to the helper.",
           "sourceId": "ring-pool",
           "when": "random-ring"
@@ -327,7 +413,7 @@
         {
           "id": "ring-fodder",
           "title": "Only if you need another ring or Sync material",
-          "instruction": "If you lack an accepted Sync material, check your stored spare Unique items first. For a replacement or spare Aulamus Ring, run Escape \u2192 Expedition \u2192 Urugugu Canyon \u2192 Conquest (level 45, {activityGearScore} Gear Score). Keep the ring and suitable Unique fodder instead of extracting everything. If its Guaranteed Reward selection is ready, select the needed accessory.",
+          "instruction": "If you lack an accepted Sync material, check your stored spare Unique items first. For a replacement or spare Aulamus Ring, run Escape → Expedition → Urugugu Canyon → Conquest (level 45, {activityGearScore} Gear Score). Keep the ring and suitable Unique fodder instead of extracting everything. If its Guaranteed Reward selection is ready, select the needed accessory.",
           "reason": "The ring is random loot, not a guaranteed drop each run. The client lists an accessory selection after 21 reward claims; your existing claim counter is unknown. Do not confuse that counter with 21 clears.",
           "sourceId": "urugugu",
           "when": "ring-materials-needed",
@@ -336,7 +422,7 @@
         {
           "id": "specialty",
           "title": "At level 16, equip the cooldown specialty",
-          "instruction": "After equipping new rings/cards, refresh the character and check Skills \u2192 Overhead Slam \u2192 Specialty. At level 16, select the option labeled Remove cooldown and put it into an available Specialty slot. Level 20 is the later goal that opens the third slot. The cooldown option does not remove the target restriction: against bosses, use the any-target window supplied by Rage Burst. {rageState}.",
+          "instruction": "After equipping new rings/cards, refresh the character and check Skills → Overhead Slam → Specialty. At level 16, select the option labeled Remove cooldown and put it into an available Specialty slot. Level 20 is the later goal that opens the third slot. The cooldown option does not remove the target restriction: against bosses, use the any-target window supplied by Rage Burst. {rageState}.",
           "reason": "An unlocked option is not automatically selected. At 14 you need only two more levels for the level-16 option, not six before the build can improve. Keep the boss-window requirement separate from the skill-level breakpoint.",
           "sourceId": "overhead-skill",
           "when": "below-first-milestone"
@@ -380,14 +466,14 @@
         {
           "id": "inspect-owned",
           "title": "Inspect equipped slots and your existing cards first",
-          "instruction": "Open Arcana \u2192 Equip and compare all five slots with your inventory, storage and unopened bags. The observed unequipped slot families are {missingArcana}. Equip suitable owned cards first; farming is only for gaps that remain after this check.",
+          "instruction": "Open Arcana → Equip and compare all five slots with your inventory, storage and unopened bags. The unreported or unequipped slot families are {missingArcana}. Equip suitable owned cards first; farming is only for gaps that remain after this check.",
           "reason": "The public armory shows equipped cards, not the contents of bags or storage. A higher card grade is not automatically a better skill roll.",
           "sourceId": "arcana-guide"
         },
         {
           "id": "first-cards",
           "title": "For missing Parchment / Chalice / Mirror, consider Shattered Arkanis",
-          "instruction": "If those slots still need usable cards after your inventory check, open Transcendence \u2192 Shattered Arkanis \u2192 Stage 1 (level {activityLevel}, {activityGearScore} Gear Score). Its pools are Parchment, Chalice and Mirror. Inspect available reward charges and the normal {activityCost}-Odyle cube cost. At higher Gear Score, compare the highest tier you have actually unlocked and can clear reliably; Stage 1 is a baseline, not a universal best farm.",
+          "instruction": "If those slots still need usable cards after your inventory check, open Transcendence → Shattered Arkanis → Stage 1 (level {activityLevel}, {activityGearScore} Gear Score). Its pools are Parchment, Chalice and Mirror. Inspect available reward charges and the normal {activityCost}-Odyle cube cost. At higher Gear Score, compare the highest tier you have actually unlocked and can clear reliably; Stage 1 is a baseline, not a universal best farm.",
           "reason": "This is card farming, not the similarly named Exploration tier.",
           "sourceId": "shattered",
           "activityId": "shattered-stage1",
@@ -396,7 +482,7 @@
         {
           "id": "other-slots",
           "title": "Fill Compass and Bell from Deus Research Base",
-          "instruction": "If Compass / Bell or a remaining Chalice is the gap after checking owned cards, open Transcendence \u2192 Deus Research Base \u2192 Stage 1 (level {activityLevel}, {activityGearScore} Gear Score). The pools are Compass, Bell and Chalice. Inspect available charges and the normal {activityCost}-Odyle cube cost. Compare higher unlocked, reliably clearable tiers in game; Gear Score alone does not prove a tier is unlocked.",
+          "instruction": "If Compass / Bell or a remaining Chalice is the gap after checking owned cards, open Transcendence → Deus Research Base → Stage 1 (level {activityLevel}, {activityGearScore} Gear Score). The pools are Compass, Bell and Chalice. Inspect available charges and the normal {activityCost}-Odyle cube cost. Compare higher unlocked, reliably clearable tiers in game; Gear Score alone does not prove a tier is unlocked.",
           "reason": "Five slots are Chalice, Parchment, Compass, Bell and Mirror. Skill pools differ by class and slot.",
           "sourceId": "deus-stage1",
           "activityId": "deus-stage1",
@@ -405,7 +491,7 @@
         {
           "id": "preserve-cards",
           "title": "Keep good skill lines before enhancing",
-          "instruction": "Read every skill line. Equip cards that support the skills you use; only feed unwanted cards through Arcana \u2192 Enhance. A higher enhancement level can improve a random line, so it is not a guaranteed level on your chosen skill.",
+          "instruction": "Read every skill line. Equip cards that support the skills you use; only feed unwanted cards through Arcana → Enhance. A higher enhancement level can improve a random line, so it is not a guaranteed level on your chosen skill.",
           "reason": "Do not delete or feed a desired skill card just because another has a higher grade.",
           "sourceId": "arcana-guide"
         }
@@ -441,7 +527,7 @@
         {
           "id": "stones-weekly",
           "title": "Use remaining weekly Daily Dungeon entries for Enhance Stones",
-          "instruction": "Open Escape \u2192 Daily Dungeon and check remaining entries in the weekly allowance shared by your own characters on this server. Use suitable available runs for Enhance Stones, then inspect what you actually received. If you have marked this activity done for the week, move to the remaining material checks; a checkmark does not add stones to your inventory.",
+          "instruction": "Open Escape → Daily Dungeon and check remaining entries in the weekly allowance shared by your own characters on this server. Use suitable available runs for Enhance Stones, then inspect what you actually received. If you have marked this activity done for the week, move to the remaining material checks; a checkmark does not add stones to your inventory.",
           "reason": "Daily Dungeon is a weekly-entry activity despite its name. Scrolls alone do not cover the amulet or belt upgrade cost. Reward amounts depend on your result; the public armory cannot read remaining entries or stones.",
           "sourceId": "screamheart",
           "checklistActivityIds": [
@@ -487,7 +573,7 @@
         {
           "id": "stones-weekly",
           "title": "Use remaining weekly Daily Dungeon entries for Enhance Stones",
-          "instruction": "Open Escape \u2192 Daily Dungeon and check remaining entries in the weekly allowance shared by your own characters on this server. Use suitable available runs for Enhance Stones, then inspect what you actually received. If you have marked this activity done for the week, move to the remaining material checks; a checkmark does not add stones to your inventory.",
+          "instruction": "Open Escape → Daily Dungeon and check remaining entries in the weekly allowance shared by your own characters on this server. Use suitable available runs for Enhance Stones, then inspect what you actually received. If you have marked this activity done for the week, move to the remaining material checks; a checkmark does not add stones to your inventory.",
           "reason": "Daily Dungeon is a weekly-entry activity despite its name. Scrolls alone do not cover the amulet or belt upgrade cost. Reward amounts depend on your result; the public armory cannot read remaining entries or stones.",
           "sourceId": "screamheart",
           "checklistActivityIds": [
@@ -525,7 +611,7 @@
         {
           "id": "candidate",
           "title": "Get a random-line weapon candidate",
-          "instruction": "Check inventory and storage for an already-owned candidate first. If you need a drop, Urugugu Canyon \u2192 Conquest (level {activityLevel}, {activityGearScore} Gear Score) can drop an Aulamus Greatsword. Inspect its random Soul Binding lines and base stats before replacing your equipped greatsword. Do not choose a lower-stat weapon solely for one roll.",
+          "instruction": "Check inventory and storage for an already-owned candidate first. If you need a drop, Urugugu Canyon → Conquest (level {activityLevel}, {activityGearScore} Gear Score) can drop an Aulamus Greatsword. Inspect its random Soul Binding lines and base stats before replacing your equipped greatsword. Do not choose a lower-stat weapon solely for one roll.",
           "reason": "Your fixed Spiritforged weapon cannot roll new skill/damage lines. A dungeon candidate can be checked before any transfer.",
           "sourceId": "urugugu",
           "activityId": "urugugu-conquest"
@@ -533,14 +619,14 @@
         {
           "id": "growth-transfer",
           "title": "Preview the +{weaponUpgrade} story weapon transfer first",
-          "instruction": "Keep both items. Unequip the old fixed-line Spiritforged Greatsword and remove it from presets. Open Enhancement \u2192 Transfer. Select it as material and the chosen greatsword as destination. Check that the final preview shows your intended +{weaponUpgrade} and preserves the destination lines you want. Confirm only if the preview matches; the material item is consumed. The current first-transfer row requires a destination with zero previous transfers and one Transfer Stone (Unique). Check the current window accepts that exact source/destination; stop if it does not.",
+          "instruction": "Keep both items. Unequip the old fixed-line Spiritforged Greatsword and remove it from presets. Open Enhancement → Transfer. Select it as material and the chosen greatsword as destination. Check that the final preview shows your intended +{weaponUpgrade} and preserves the destination lines you want. Confirm only if the preview matches; the material item is consumed. The current first-transfer row requires a destination with zero previous transfers and one Transfer Stone (Unique). Check the current window accepts that exact source/destination; stop if it does not.",
           "reason": "The current client explicitly says a fixed-Soul-Binding source transfers enhancement only, not its fixed Soul Binding effects. Normal random-line donors behave differently. Never assume growth levels are added together.",
           "sourceId": "succession"
         },
         {
           "id": "sync-new",
           "title": "Then polish the random-line candidate",
-          "instruction": "On the destination weapon, use Soul Binding \u2192 Sync to change one unwanted line, using an accepted material shown in the current window. Preserve good Combat Speed / Weapon Damage Boost or useful skill lines. Bind improves values after choosing the lines; Reset replaces all of them.",
+          "instruction": "On the destination weapon, use Soul Binding → Sync to change one unwanted line, using an accepted material shown in the current window. Preserve good Combat Speed / Weapon Damage Boost or useful skill lines. Bind improves values after choosing the lines; Reset replaces all of them.",
           "reason": "A skill line is a random roll, not a guaranteed result of Sync. Save expensive socket and Philosopher-line work until the transfer path is settled.",
           "sourceId": "kanon"
         }
@@ -589,7 +675,7 @@
         {
           "id": "guard-candidate",
           "title": "Compare a regular Vakron Guard candidate",
-          "instruction": "After checking stored gear, open Escape \u2192 Expedition \u2192 Vakron Sky Island \u2192 Conquest, not Hard (level {activityLevel}, {activityGearScore} Gear Score; your armory lists {gearScore}). A normal claimed reward cube costs {activityCost} Odyle. The Guard is random loot. Inspect the actual drop, useful class lines and final transfer stats before choosing it; item level alone is not a proven DPS upgrade. Prioritize the still-missing skill/card milestone before allocating limited Odyle to this secondary farm. This is the reviewed early-progression baseline for the 1,638-Gear-Score example. If you are at a higher tier, compare higher eligible expedition guards and existing drops before committing energy to Vakron.",
+          "instruction": "After checking stored gear, open Escape → Expedition → Vakron Sky Island → Conquest, not Hard (level {activityLevel}, {activityGearScore} Gear Score; your armory lists {gearScore}). A normal claimed reward cube costs {activityCost} Odyle. The Guard is random loot. Inspect the actual drop, useful class lines and final transfer stats before choosing it; item level alone is not a proven DPS upgrade. Prioritize the still-missing skill/card milestone before allocating limited Odyle to this secondary farm. This is the reviewed early-progression baseline for the 1,638-Gear-Score example. If you are at a higher tier, compare higher eligible expedition guards and existing drops before committing energy to Vakron.",
           "reason": "The current reference lists an item-level-70 random-line Guard, versus the item-level-45 fixed starter. An already-owned Bakarma drop/voucher can be a cheaper stopgap; unknown inventory prevents a universal best-dungeon claim.",
           "sourceId": "vakron-data",
           "activityId": "vakron-conquest"
@@ -597,30 +683,411 @@
         {
           "id": "guard-voucher",
           "title": "Check the complete voucher fallback before grinding for it",
-          "instruction": "The regular Conquest guaranteed selection is reached after 21 reward claims and can supply a Vakron voucher, not a direct Guard. If you already have two vouchers and 1,500,000 Kina, inspect Substance Morph \u2192 Vakron Guard. Your existing vouchers and partial counter are unknown. Do not blindly farm 42 claims to force this route.",
+          "instruction": "The regular Conquest guaranteed selection is reached after 21 reward claims and can supply a Vakron voucher, not a direct Guard. If you already have two vouchers and 1,500,000 Kina, inspect Substance Morph → Vakron Guard. Your existing vouchers and partial counter are unknown. Do not blindly farm 42 claims to force this route.",
           "reason": "Two vouchers are required by the current Guard recipe. Two complete 21-claim cycles from zero would be 42 claims, but that is not your remaining counter or a recommendation to spend that energy.",
           "sourceId": "vakron-item-data"
         },
         {
           "id": "guard-preview",
           "title": "Preview your existing +{guardUpgrade} on the candidate",
-          "instruction": "Keep both items. Unequip the old guard and remove it from presets. Open Enhancement \u2192 Transfer. Set the candidate Vakron Guard as destination and the bound Spiritforged Guard as material. The cited first-transfer row accepts this donor only when the target has zero prior transfers and uses one Transfer Stone (Unique). Check that the actual preview preserves your intended +{guardUpgrade} and the destination lines you want. Confirm only if it matches; the source is consumed.",
+          "instruction": "Keep both items. Unequip the old guard and remove it from presets. Open Enhancement → Transfer. Set the candidate Vakron Guard as destination and the bound Spiritforged Guard as material. The cited first-transfer row accepts this donor only when the target has zero prior transfers and uses one Transfer Stone (Unique). Check that the actual preview preserves your intended +{guardUpgrade} and the destination lines you want. Confirm only if it matches; the source is consumed.",
           "reason": "The current fixed-source rule transfers enhancement only, not its fixed Soul Binding lines. Enhancement levels are not added together. A preview that rejects the source or loses a keeper line is a reason to stop.",
           "sourceId": "succession"
         },
         {
           "id": "guard-later15",
           "title": "Consider +15 later as a complete donor-and-transfer budget",
-          "instruction": "If you later choose a +15 destination, compare enhancing the cheaper low-level donor before transfer with enhancing the destination directly. For the +10\u2192+15 Spiritforged example, the reviewed client model estimates roughly 6.2 million Kina and 68,000 Enhance Stones for only 26 extra flat Attack before transfer. Actual spending varies with failed attempts. Compare that cost with skill and other gear milestones before committing.",
+          "instruction": "If you later choose a +15 destination, compare enhancing the cheaper low-level donor before transfer with enhancing the destination directly. For the +10→+15 Spiritforged example, the reviewed client model estimates roughly 6.2 million Kina and 68,000 Enhance Stones for only 26 extra flat Attack before transfer. Actual spending varies with failed attempts. Compare that cost with skill and other gear milestones before committing.",
           "reason": "Transferred enhancement can retain value, so upgrading a low-level donor is not automatically wasted. That savings argument does not establish that +15 is the best next use of your budget.",
           "sourceId": "spiritforged-item-data",
           "when": "starter-guard-below-cap"
         }
       ]
+    },
+    {
+      "id": "cleric-group-support",
+      "strategy": "loadout-review",
+      "title": "Review a group-healing Cleric setup",
+      "classes": [
+        "Cleric"
+      ],
+      "sourceIds": [
+        "cleric-build",
+        "cleric-condemnation",
+        "cleric-earth-punishment",
+        "cleric-board-guide",
+        "cleric-nightmare-shop"
+      ],
+      "priority": "high",
+      "minimumLevel": 45,
+      "action": "If you are healing a group, inspect this setup in game. The armory cannot prove your selected specialties, active preset or party needs.",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "evidence": "Community Cleric PvE baseline; skill mechanics checked against client references. Selected specialties, resources and preferred role require an in-game check.",
+      "steps": [
+        {
+          "id": "group-heals",
+          "title": "Review the three group-healing buttons",
+          "instruction": "In Skills, keep Radiant Recovery, Healing Light and Light of Regeneration available in the preset you use for healing. Inspect Healing Light's extra-use option and Radiant Recovery's cooldown/cleanse options. Choose specialties for the encounter; an unlocked option must still be selected.",
+          "reason": "Public levels do not establish selected specialties or a preferred role. These are group-support choices, not compulsory solo changes.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "group-stigmas",
+          "title": "Inspect four stigma choices for the group",
+          "instruction": "Open Skills → Stigma and compare Prayer of Amplification, Light of Protection, Earth Punishment and Absolution. Review acquisition and allocated shards there. If a resurrection is needed, compare Summon Resurrection as a fourth-slot alternative. Do not automatically remove a useful existing setup.",
+          "reason": "The guide's healing fourth option is Absolution; the API can return equip flags on level0/unacquired entries, so this is an inspection, not a claim about the current four slots.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "group-rhythm",
+          "title": "Use attack windows while responding to healing",
+          "instruction": "Check Light of Protection's toggle before the pull. Use Radiant Recovery for party damage/cleanse, Healing Light for the lowest member, and Light of Regeneration ahead of sustained damage. Attack between urgent heals; Radiant Benediction links attacks to party healing. For damage between heals, inspect the Condemnation level 12 critical-reset specialty and Earth Punishment’s level 5 tier, then use Chain of Torment → Earth Punishment → Condemnation while their effects remain active. Check those prerequisites in game; they are not assumed for every level 45 Cleric.",
+          "reason": "The role needs encounter judgement. Neither optimal uptime nor actual group health is public.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "group-board",
+          "title": "Use the support board comparison without a respec",
+          "instruction": "Open Daevanion and compare only missing heal/passive targets on the four white boards. Follow the shown connected route and check your actual crystals. Do not copy a fully maxed example or remove already-owned nodes solely to imitate a guide.",
+          "reason": "The class-specific public boards are71–74. Their current detail response, not the Gladiator board IDs, establishes which targets are owned.",
+          "sourceId": "cleric-board-guide"
+        },
+        {
+          "id": "stigma-points",
+          "title": "Check Stigma points before farming more shards",
+          "instruction": "Open Skills → Stigma and inspect acquisition, bought ranks, unspent points and your current four-slot plan. Compare reallocating existing points in the actual reset preview first. If extra points are still needed, review eligible Nightmare attempts and their rewards. Save Phantasmal Fragments, then inspect the Nightmare Trade Shop: a Stigma Shard (Bound) costs 1,500 fragments, with a permanent allowance of 35 per character. Buy only after checking your actual remaining allowance and balance; this is not a weekly refill.",
+          "reason": "The armory does not show unspent Stigma points, fragments or shop purchases. The guide’s target ranks do not prove you need to farm or buy more points.",
+          "sourceId": "cleric-nightmare-shop"
+        }
+      ],
+      "requiredSkillIds": [
+        17120000,
+        17100000,
+        17090000,
+        17430000,
+        17410000,
+        17400000,
+        17290000,
+        17070000,
+        17350000
+      ],
+      "focus": "group"
+    },
+    {
+      "id": "cleric-solo-damage",
+      "strategy": "loadout-review",
+      "title": "Review a solo and damage-window Cleric setup",
+      "classes": [
+        "Cleric"
+      ],
+      "sourceIds": [
+        "cleric-build",
+        "cleric-condemnation",
+        "cleric-earth-punishment",
+        "cleric-nightmare-shop"
+      ],
+      "priority": "medium",
+      "minimumLevel": 45,
+      "action": "If soloing or contributing damage, review this alternative while preserving the healing your group needs.",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "evidence": "Community Cleric PvE baseline; skill mechanics checked against client references. Selected specialties, resources and preferred role require an in-game check.",
+      "steps": [
+        {
+          "id": "solo-choice",
+          "title": "Compare the solo preset and fourth stigma",
+          "instruction": "The reviewed solo core is Earth's Retribution, Condemnation, Chain of Torment and Bolt. Its four stigmas are Prayer of Amplification, Light of Protection, Earth Punishment and Noble Aura. Keep an emergency heal and choose the preset for the activity rather than inferring it from equipped gear.",
+          "reason": "Solo and group healing are distinct community setups; no role is selected automatically.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "crit-reset",
+          "title": "Check the critical-reset combination and its prerequisites",
+          "instruction": "In Condemnation, select the level 12 critical-hit cooldown-reset specialty if using this loop. Earth Punishment must be at least stigma level 5 for its automatic Condemnation critical-hit tier. Apply Chain of Torment, then Earth Punishment, then Condemnation while both effects remain on the target.",
+          "reason": "Condemnation needs Chain of Torment. The loop depends on the selected specialty and active effects, not a generic unconditional zero cooldown. A character already above12/5 does not need to acquire those levels again.",
+          "sourceId": "cleric-condemnation"
+        },
+        {
+          "id": "solo-mana",
+          "title": "Use the resource chain between windows",
+          "instruction": "Use Earth's Retribution and its follow-up chain when MP is needed; keep heals available manually. Condemnation is not available outside its mark condition. Review the chosen Chain of Torment specialty and debuffs before starting the next window.",
+          "reason": "MP, target debuffs, actual rotation and selected specialties are not public state.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "stigma-points",
+          "title": "Check Stigma points before farming more shards",
+          "instruction": "Open Skills → Stigma and inspect acquisition, bought ranks, unspent points and your current four-slot plan. Compare reallocating existing points in the actual reset preview first. If extra points are still needed, review eligible Nightmare attempts and their rewards. Save Phantasmal Fragments, then inspect the Nightmare Trade Shop: a Stigma Shard (Bound) costs 1,500 fragments, with a permanent allowance of 35 per character. Buy only after checking your actual remaining allowance and balance; this is not a weekly refill.",
+          "reason": "The armory does not show unspent Stigma points, fragments or shop purchases. The guide’s target ranks do not prove you need to farm or buy more points.",
+          "sourceId": "cleric-nightmare-shop"
+        }
+      ],
+      "requiredSkillIds": [
+        17010000,
+        17350000,
+        17070000,
+        17060000,
+        17430000,
+        17410000,
+        17400000,
+        17440000
+      ],
+      "focus": "solo"
+    },
+    {
+      "id": "cleric-radiant-recovery",
+      "strategy": "skill-target",
+      "title": "Group healing: compare Radiant Recovery level {nextLevel}",
+      "classes": [
+        "Cleric"
+      ],
+      "sourceIds": [
+        "cleric-build",
+        "cleric-board-guide",
+        "cleric-radiant-recovery-skill",
+        "arcana-guide",
+        "shattered"
+      ],
+      "priority": "medium",
+      "minimumLevel": 45,
+      "action": "For group healing, compare level16's additional HP-restoration option and later20's third specialty slot. This is not a universal spending priority.",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "evidence": "Community Cleric PvE baseline; skill mechanics checked against client references. Selected specialties, resources and preferred role require an in-game check.",
+      "steps": [
+        {
+          "id": "recovery-bought-rank",
+          "title": "Check bought Radiant Recovery ranks first",
+          "instruction": "Open Skills → Radiant Recovery and inspect its bought rank and unspent Skill Points. Ordinary skill points buy up to rank 10; the total level shown by the armory can already include board, gear and Arcana bonuses. Use available points before pursuing random bonus rolls.",
+          "reason": "Effective skill level does not reveal the bought rank or your unspent points.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "recovery-white-boards",
+          "title": "Take only missing Radiant Recovery board bonuses",
+          "instruction": "Open the Cleric Daevanion comparison for the four white boards. Verified contribution: {boardBonus}. Take only missing connected targets; the Triniel Radiant Recovery node is 740107. Check your actual crystal balance against the shown route before unlocking it.",
+          "reason": "Owned bonus nodes are preserved. A missing node can supply one level; it does not guarantee the rest of the level 16 or 20 target.",
+          "sourceId": "cleric-board-guide",
+          "when": "boards-incomplete"
+        },
+        {
+          "id": "recovery-owned-cards",
+          "title": "Inspect owned Chalice or Parchment cards first",
+          "instruction": "Look through equipped Arcana, inventory, storage and unopened bags for Radiant Recovery on Chalice or Parchment. Compare complete cards and preserve useful skill lines. A missing armory row does not prove that the slot or inventory is empty.",
+          "reason": "These families can roll Radiant Recovery. Skill rolls and enhancement outcomes are not guaranteed.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "recovery-farm",
+          "title": "Use an eligible Shattered Arkanis tier if cards are still needed",
+          "instruction": "If owned cards do not cover the chosen healing goal, open Transcendence → Shattered Arkanis → Stage 1 (level {activityLevel}, {activityGearScore} Gear Score; normal cube {activityCost} Odyle). Its bags can supply Parchment and Chalice, which can roll Radiant Recovery, plus Mirror, which cannot roll this skill. Inspect the actual stage unlock, remaining reward claims and energy first. Compare a higher unlocked tier only if you can clear it reliably.",
+          "reason": "A sufficient Gear Score does not prove a stage unlock, available reward claims, an energy balance or a desired skill roll.",
+          "sourceId": "shattered",
+          "activityId": "shattered-stage1"
+        },
+        {
+          "id": "recovery-specialty",
+          "title": "Choose the healing specialty after reaching the level",
+          "instruction": "At 16 inspect Radiant Recovery's additional HP-restoration option; at 20 choose a third specialty alongside your encounter's cooldown, cleanse or consecutive-use needs. Confirm the actual skill screen before committing random-roll resources.",
+          "reason": "Unlocking a specialty does not select it, and its importance depends on the encounter and healing role.",
+          "sourceId": "cleric-radiant-recovery-skill"
+        }
+      ],
+      "skillId": 17120000,
+      "target": 20,
+      "milestones": [
+        16,
+        20
+      ],
+      "focus": "group"
+    },
+    {
+      "id": "cleric-healing-light",
+      "strategy": "skill-target",
+      "title": "Group healing: compare Healing Light level {nextLevel}",
+      "classes": [
+        "Cleric"
+      ],
+      "sourceIds": [
+        "cleric-build",
+        "cleric-healing-light",
+        "cleric-board-guide",
+        "deus-stage1",
+        "arcana-guide"
+      ],
+      "priority": "medium",
+      "minimumLevel": 45,
+      "action": "For a group-healing route, inspect Healing Light16's cooldown specialty after cheaper rank and board checks.",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "evidence": "Community Cleric PvE baseline; skill mechanics checked against client references. Selected specialties, resources and preferred role require an in-game check.",
+      "steps": [
+        {
+          "id": "light-bought-rank",
+          "title": "Check bought Healing Light ranks before bonus rolls",
+          "instruction": "In Skills → Healing Light, inspect the bought rank and your available Skill Points. Compare the skill screen with the armory total; do not assume a total above 10 means every bought rank is already allocated.",
+          "reason": "The public armory does not reveal the bought-rank allocation or unused Skill Points.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "light-white-boards",
+          "title": "Take only missing Healing Light board bonuses",
+          "instruction": "Verified white-board contribution: {boardBonus}. In the Cleric board comparison, follow connected paths only to missing Healing Light nodes. The Triniel target is 740070. Check the actual crystal balance and price before unlocking nodes.",
+          "reason": "The route preserves owned nodes and includes connectors. It is not an instruction to fill or reset the whole board.",
+          "sourceId": "cleric-board-guide",
+          "when": "boards-incomplete"
+        },
+        {
+          "id": "light-cards",
+          "title": "Compare owned Compass and Chalice cards before farming",
+          "instruction": "Inspect owned Compass and Chalice cards for Healing Light before farming. If another reward claim is justified, open Transcendence → Deus Research Base → Stage 1 (level {activityLevel}, {activityGearScore} Gear Score; normal cube {activityCost} Odyle). Its bags can supply Compass, Chalice and Bell. Verify the stage unlock, available claims and budget in game; a desired skill is random.",
+          "reason": "Parchment cannot roll Healing Light. No exact desired roll, existing inventory or energy balance is assumed.",
+          "sourceId": "deus-stage1",
+          "activityId": "deus-stage1"
+        },
+        {
+          "id": "light-specialty",
+          "title": "Select the level16 cooldown option when unlocked",
+          "instruction": "At Healing Light16, open its specialties and compare the cooldown-reduction option with the extra-use and emergency-healing choices already available. Select the options that fit the encounter.",
+          "reason": "The verified level16 option reduces the skill cooldown by2seconds; the helper cannot inspect selected specialties.",
+          "sourceId": "cleric-healing-light"
+        }
+      ],
+      "skillId": 17100000,
+      "target": 16,
+      "milestones": [
+        16
+      ],
+      "focus": "group"
+    },
+    {
+      "id": "cleric-condemnation",
+      "strategy": "skill-target",
+      "title": "Optional damage: compare Condemnation level {nextLevel}",
+      "classes": [
+        "Cleric"
+      ],
+      "sourceIds": [
+        "cleric-build",
+        "cleric-condemnation",
+        "cleric-earth-punishment",
+        "arcana-guide",
+        "shattered",
+        "ring-pool"
+      ],
+      "priority": "low",
+      "minimumLevel": 45,
+      "action": "The critical-reset combination is available from Condemnation 12 with Earth Punishment 5. If this is your chosen damage goal, compare level 16’s Multi-Hit option and level 20’s third slot against your actual budget and other priorities.",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "evidence": "Community Cleric PvE baseline; skill mechanics checked against client references. Selected specialties, resources and preferred role require an in-game check.",
+      "steps": [
+        {
+          "id": "condemnation-bought-rank",
+          "title": "Inspect bought Condemnation ranks first",
+          "instruction": "In Skills → Condemnation, inspect the bought rank and unspent Skill Points. The level 12 critical-reset option is already available once your effective level reaches 12, but it still needs to be selected. Compare the later level 16 Multi-Hit choice or level 20 third slot only if this is your chosen damage goal.",
+          "reason": "Do not repeat an achieved level 12 goal or assume selected specialties from total skill level.",
+          "sourceId": "cleric-condemnation"
+        },
+        {
+          "id": "condemnation-white-boards",
+          "title": "Take only missing Condemnation board bonuses",
+          "instruction": "Verified white-board contribution: {boardBonus}. Take only missing Condemnation targets along the shown connected route. If all four bonuses are owned, continue with card or gear comparisons instead of allocating those nodes again.",
+          "reason": "The helper uses actual board-detail data; already-owned targets are excluded from the route.",
+          "sourceId": "cleric-board-guide",
+          "when": "boards-incomplete"
+        },
+        {
+          "id": "condemnation-cards",
+          "title": "Compare owned Parchment or Chalice before more cubes",
+          "instruction": "Look through equipped cards, storage and unopened bags for Condemnation on Parchment or Chalice. If another farm is justified, open Transcendence → Shattered Arkanis → Stage 1 (level {activityLevel}, {activityGearScore} Gear Score; normal cube {activityCost} Odyle). Preserve useful existing cards and inspect every outcome before feeding duplicates.",
+          "reason": "Compass,Bell andMirror cannot roll Condemnation. Enhancement does not guarantee a desired skill increase.",
+          "sourceId": "shattered",
+          "activityId": "shattered-stage1"
+        },
+        {
+          "id": "condemnation-ring",
+          "title": "Use an exact reviewed random ring as an alternative only",
+          "instruction": "If gear is the better use of your materials, inspect an owned random-line Aulamus Ring in the Gear comparison. Condemnation is in its reviewed Cleric active-skill pool. Use the current Soul Binding → Sync window to compare one unwanted line while preserving healing or damage keepers for your chosen focus. Confirm accepted material, costs and the actual replacement preview first. Fixed rings, the Spiritforged Mace and the Spiritforged Guard cannot be treated as random-line candidates.",
+          "reason": "A missing line is not an instruction to spend until it appears. MP and defensive lines are not automatically useless on a healer.",
+          "sourceId": "cleric-build"
+        },
+        {
+          "id": "condemnation-specialties",
+          "title": "Review the16/20 choices while preserving the reset",
+          "instruction": "At 16 compare the Multi-Hit specialty. At 20 a third slot can combine the level 12 critical reset with another appropriate option. Keep Chain of Torment and Earth Punishment conditions in the damage loop.",
+          "reason": "The level16 option is not Gladiator's cooldown removal; no exact DPS gain or unconditional reset is promised.",
+          "sourceId": "cleric-condemnation"
+        }
+      ],
+      "skillId": 17350000,
+      "target": 20,
+      "milestones": [
+        12,
+        16,
+        20
+      ],
+      "focus": "solo"
+    },
+    {
+      "id": "cleric-fixed-mace",
+      "strategy": "fixed-weapon",
+      "classes": [
+        "Cleric"
+      ],
+      "sourceIds": [
+        "official-armory",
+        "cleric-mace-candidate",
+        "urugugu",
+        "succession",
+        "cleric-build",
+        "kanon"
+      ],
+      "priority": "medium",
+      "minimumLevel": 45,
+      "itemIds": [
+        110730048
+      ],
+      "action": "Compare an owned random-line mace before spending more on the fixed story weapon. Keep its current enhancement while inspecting a complete destination and transfer preview.",
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "evidence": "Official fixed-item capability with a reviewed client-reference replacement route; not a guaranteed drop or best purchase.",
+      "steps": [
+        {
+          "id": "mace-compare",
+          "title": "Check owned mace candidates and your chosen role first",
+          "instruction": "Inspect inventory and storage before using more Odyle. Compare a candidate’s actual Attack, current enhancement and useful Cleric skill/stat lines with the equipped mace. Aulamus Mace is one reviewed early-progression candidate; compare higher eligible drops or an affordable crafted option rather than buying an item solely for one skill line.",
+          "reason": "The current Spiritforged Mace has fixed Soul Binding effects. It cannot be turned into a random-line mace with Sync.",
+          "sourceId": "cleric-mace-candidate"
+        },
+        {
+          "id": "mace-farm",
+          "title": "Use regular Urugugu Conquest only if a mace farm is justified",
+          "instruction": "If no owned candidate is suitable, open Expedition → Urugugu Canyon → Conquest (level {activityLevel}, {activityGearScore} Gear Score; normal cube {activityCost} Odyle). Aulamus Mace can drop there, but it is rare. Check current reward charges and energy first. The regular guaranteed selection is a voucher/accessory selection, not a guaranteed direct mace; inspect the actual reward and any complete Morph recipe before committing to a long farm.",
+          "reason": "This is regular Conquest, not Exploration or a Hard-mode claim. A drop is not guaranteed by a particular number of runs.",
+          "sourceId": "urugugu",
+          "activityId": "urugugu-conquest"
+        },
+        {
+          "id": "mace-transfer",
+          "title": "Preview the existing +{weaponUpgrade} before replacing it",
+          "instruction": "Keep both items. Unequip the Spiritforged Mace and remove it from presets. Open Enhancement → Transfer with the candidate as destination and the fixed story mace as material. For the reviewed Aulamus Mace destination, the cited reference lists eligible Tier 1 Mace donors, a destination with no prior transfers and one Transfer Stone (Unique). A higher-tier candidate can use different donor groups or costs. Verify the actual window accepts this exact pair, preserves the intended +{weaponUpgrade} and retains the destination lines you want. Confirm only after checking the preview; the material is consumed.",
+          "reason": "Fixed-source Soul Binding effects do not transfer; enhancement is not added to the destination’s level. The preview decides the result for the actual pair.",
+          "sourceId": "succession"
+        },
+        {
+          "id": "mace-polish",
+          "title": "Polish only a verified random-line destination",
+          "instruction": "Once the destination and transfer are settled, open its Gear comparison under your chosen Cleric focus. In Soul Binding → Sync, compare one unwanted line using accepted material shown in game. Preserve useful active skills, Combat Speed, Attack/Might or role-appropriate lines. Bind improves values after choosing lines; Reset changes the whole set. Check the actual cost and spending limit first.",
+          "reason": "The desired roll is random. Do not discard MP or defensive lines automatically, or assume a skill outcome from enhancement.",
+          "sourceId": "cleric-build"
+        }
+      ]
     }
   ],
   "limitations": [
-    "PvE guidance for Global regions. Character tracking supports every class; the curated skill target currently covers Gladiator only.",
+    "PvE guidance for Global regions. Character tracking supports every class; reviewed class-specific progression currently covers Gladiator and Cleric. Choose a Cleric focus; the armory does not establish your preferred role.",
     "Currencies, inventory, Odyle, daily entries, quest completion and full pet Genus progress are unavailable from the public armory.",
     "Step plans are conditional on unseen inventory, reward charges and currency. Client-data references are labeled separately from live official character observations.",
     "Investment order is conservative community guidance. An enhancement cap does not imply good value; unknown inventory, spending budget and actual rolls can change the best next action."
@@ -712,12 +1179,184 @@
         13,
         14
       ]
+    },
+    {
+      "id": "cleric-group-support-skills",
+      "className": "Cleric",
+      "label": "Cleric group support: heals and core passives first",
+      "sourceIds": [
+        "cleric-build",
+        "cleric-board-guide"
+      ],
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "boardIds": [
+        71,
+        72,
+        73,
+        74
+      ],
+      "targets": [
+        {
+          "effect": "Radiant Recovery",
+          "reason": "Party healing and cleansing; a group-support bonus-level target before optional damage corners."
+        },
+        {
+          "effect": "Healing Light",
+          "reason": "Short-cooldown healing for the lowest-HP ally; useful for a group-healing focus."
+        },
+        {
+          "effect": "Light of Regeneration",
+          "reason": "Sustained party healing; compare uptime and encounter needs before optional damage nodes."
+        },
+        {
+          "effect": "Condemnation",
+          "reason": "Core marked-target damage action; preserve owned bonuses and check its critical-reset specialty."
+        },
+        {
+          "effect": "Chain of Torment",
+          "reason": "Enables Condemnation and provides a group damage debuff; keep the mark condition in the rotation."
+        },
+        {
+          "effect": "Healing Enhancement",
+          "reason": "Connects Attack investment to healing; no numerical healing formula is assumed."
+        },
+        {
+          "effect": "Radiant Benediction",
+          "reason": "Attacks contribute to party healing; keep attacking when urgent healing does not take priority."
+        },
+        {
+          "effect": "Empyrean Lord's Grace",
+          "reason": "On-hit damage passive used by the reviewed Cleric route; compare the chosen stigma setup."
+        },
+        {
+          "effect": "Earth's Grace",
+          "reason": "Damage passive in the reviewed route; compare the chosen stigma setup and role."
+        },
+        {
+          "effect": "Cooldown Reduction",
+          "reason": "Availability of healing, debuff and damage actions; a common corner after chosen skill targets."
+        },
+        {
+          "effect": "Combat Speed",
+          "reason": "Faster action windows after the chosen skill and passive targets."
+        },
+        {
+          "effect": "Damage Boost",
+          "reason": "Offensive corner for damage contribution; not a promise of a direct healing increase."
+        },
+        {
+          "effect": "Critical Damage Boost",
+          "reason": "Conditional damage corner after the chosen skill targets; no universal critical cap is assumed."
+        },
+        {
+          "effect": "Multi-Hit Chance",
+          "reason": "Offensive corner after the chosen skill route; not a measured damage or healing optimum."
+        },
+        {
+          "effect": "Damage Tolerance",
+          "reason": "Personal survival option after core targets, depending on the content and incoming damage."
+        }
+      ],
+      "pathModel": {
+        "adjacency": "orthogonal-grid",
+        "startKind": "Start",
+        "sourceId": "cleric-board-guide",
+        "nodeCosts": {
+          "Common": 1,
+          "Rare": 2,
+          "Legend": 3,
+          "Unique": 4,
+          "Epic": 3
+        }
+      },
+      "focus": "group"
+    },
+    {
+      "id": "cleric-solo-damage-skills",
+      "className": "Cleric",
+      "label": "Cleric solo damage: core attacks first",
+      "sourceIds": [
+        "cleric-build",
+        "cleric-board-guide"
+      ],
+      "reviewedAt": "2026-10-24",
+      "expiresAt": "2026-10-28",
+      "boardIds": [
+        71,
+        72,
+        73,
+        74
+      ],
+      "targets": [
+        {
+          "effect": "Condemnation",
+          "reason": "Core marked-target damage action; preserve owned bonuses and check its critical-reset specialty."
+        },
+        {
+          "effect": "Chain of Torment",
+          "reason": "Enables Condemnation and provides a group damage debuff; keep the mark condition in the rotation."
+        },
+        {
+          "effect": "Earth's Retribution",
+          "reason": "Basic attack and resource recovery between damage or healing actions."
+        },
+        {
+          "effect": "Bolt",
+          "reason": "Optional solo damage target after the core marked-target combination."
+        },
+        {
+          "effect": "Empyrean Lord's Grace",
+          "reason": "On-hit damage passive used by the reviewed Cleric route; compare the chosen stigma setup."
+        },
+        {
+          "effect": "Earth's Grace",
+          "reason": "Damage passive in the reviewed route; compare the chosen stigma setup and role."
+        },
+        {
+          "effect": "Radiant Benediction",
+          "reason": "Attacks contribute to party healing; keep attacking when urgent healing does not take priority."
+        },
+        {
+          "effect": "Cooldown Reduction",
+          "reason": "Availability of healing, debuff and damage actions; a common corner after chosen skill targets."
+        },
+        {
+          "effect": "Combat Speed",
+          "reason": "Faster action windows after the chosen skill and passive targets."
+        },
+        {
+          "effect": "Damage Boost",
+          "reason": "Offensive corner for damage contribution; not a promise of a direct healing increase."
+        },
+        {
+          "effect": "Critical Damage Boost",
+          "reason": "Conditional damage corner after the chosen skill targets; no universal critical cap is assumed."
+        },
+        {
+          "effect": "Multi-Hit Chance",
+          "reason": "Offensive corner after the chosen skill route; not a measured damage or healing optimum."
+        }
+      ],
+      "pathModel": {
+        "adjacency": "orthogonal-grid",
+        "startKind": "Start",
+        "sourceId": "cleric-board-guide",
+        "nodeCosts": {
+          "Common": 1,
+          "Rare": 2,
+          "Legend": 3,
+          "Unique": 4,
+          "Epic": 3
+        }
+      },
+      "focus": "solo"
     }
   ],
   "activities": [
     {
       "id": "shattered-stage1",
-      "name": "Shattered Arkanis \u2014 Transcendence Stage 1",
+      "name": "Shattered Arkanis — Transcendence Stage 1",
       "minimumLevel": 45,
       "minimumGearScore": 1600,
       "odylePerClaim": 40,
@@ -729,7 +1368,7 @@
     },
     {
       "id": "urugugu-conquest",
-      "name": "Urugugu Canyon \u2014 Conquest",
+      "name": "Urugugu Canyon — Conquest",
       "minimumLevel": 45,
       "minimumGearScore": 1400,
       "odylePerClaim": 40,
@@ -741,7 +1380,7 @@
     },
     {
       "id": "vakron-conquest",
-      "name": "Vakron Sky Island \u2014 regular Conquest",
+      "name": "Vakron Sky Island — regular Conquest",
       "minimumLevel": 45,
       "minimumGearScore": 1400,
       "odylePerClaim": 40,
@@ -753,7 +1392,7 @@
     },
     {
       "id": "deus-stage1",
-      "name": "Deus Research Base \u2014 Transcendence Stage 1",
+      "name": "Deus Research Base — Transcendence Stage 1",
       "minimumLevel": 45,
       "minimumGearScore": 1600,
       "odylePerClaim": 40,

@@ -37,6 +37,7 @@ export type AionBoard = {
 };
 export type AionBoardComparison = {
   boardId: number; label: string; source: string;
+  focus?: "group" | "solo";
   targets: { nodeId: number; reason: string }[];
   pathNodeIds: number[]; missingNodeIds: number[]; cost: number | null; notices: string[];
   nodeCosts?: { nodeId: number; cost: number }[];
@@ -61,6 +62,7 @@ export type AionSnapshot = {
 };
 export type AionRecommendation = {
   id: string; priority: "high" | "medium" | "low";
+  focus?: "group" | "solo";
   title: string; evidence: string; action: string; source: string;
   steps?: AionActionStep[];
   budget?: { available: number | null; costPerRun: number | null; affordableRuns: number | null; updatedAt: string | null };
@@ -86,7 +88,7 @@ export type AionChecklist = {
   items: AionChecklistItem[]; revision: string;
 };
 export type AionHistoryPoint = { observedAt: string; combatPower: number | null; gearScore: number | null };
-export type AionGearPriority = { id: string; label: string; kind: "stat" | "skill"; rank: number; reason: string };
+export type AionGearPriority = { id: string; label: string; kind: "stat" | "skill"; rank: number; reason: string; focus?: "group" | "solo" };
 export type AionGearPriorityItem = {
   slot: number; slotName: string; itemId: number; itemName: string; basis: string;
   status: "fixed" | "item-pool-verified" | "item-pool-reference" | "slot-reference" | "unverified" | "unsupported";

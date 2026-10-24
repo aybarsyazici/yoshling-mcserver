@@ -86,7 +86,7 @@ embedding is similar. Rules and source expiry still control whether advice is sh
 6. Deploy through the documented process. No index rebuild runs on site requests or
    application startup. The saved vectors continue working after credentials expire.
 
-The builder limits a batch to 128 chunks/queries and two concurrent invocations.
+The builder limits a reviewed batch to 256 chunks/queries and two concurrent invocations.
 Unchanged text vectors are reused when the model/dimensions match. The October 24
 source/checklist review reused all 60 vectors with zero model calls and zero input
 tokens; source metadata changes alone did not require new embeddings. Failed or expired
@@ -108,8 +108,9 @@ Read [current progression and checklist behavior](AION2-PROGRESSION-AND-CHECKLIS
 
 ## Adding coverage
 
-Class coverage is explicit. Tracking is class-independent; the first detailed skill
-route and board preset are Gladiator PvE. Add another class's reviewed targets,
+Class coverage is explicit. Tracking is class-independent; reviewed class routes
+currently cover Gladiator and Cleric PvE. Cleric users choose group healing, solo
+damage or both; see [Cleric guidance](AION2-CLERIC.md). Add another class's reviewed targets,
 milestones, loot/card sources, recipes and tests before advertising its build advice.
 The existing `skill-target` and conditional-step renderer support additional class
 data. New mechanics or condition types need a reviewed implementation as well.

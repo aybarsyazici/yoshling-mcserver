@@ -53,8 +53,36 @@ async function miss() {
   await writeFile(file, JSON.stringify(value));
 }
 async function legacy() { await writeFile(path.join(folder, ".env"), "aws_access_key_id=SYNTHETIC_LEGACY_KEY\naws_secret_access_key=SYNTHETIC_SECRET_MUST_STAY_PRIVATE\naws_session_token=SYNTHETIC_EXPIRED_TOKEN\naws_region=us-east-2\n", { mode: 0o600 }); }
+async function reviewedBatch(count: number) {
+  const file = path.join(folder, "src/data/aion2/knowledge.json"), value = JSON.parse(await readFile(file, "utf8"));
+  const base = value.rules.find((rule: { strategy: string }) => rule.strategy === "skill-target");
+  value.rules = Array.from({ length: count }, (_, i) => ({ ...base, id: `fixture-skill-${i}`, steps: [base.steps[0]] }));
+  value.activities = []; value.boardPresets = [];
+  await writeFile(file, JSON.stringify(value));
+  const gearFile = path.join(folder, "src/data/aion2/gear-priorities.json"), gear = JSON.parse(await readFile(gearFile, "utf8"));
+  gear.classes = ["Gladiator"]; gear.slotRules = [gear.slotRules.find((rule: { className: string }) => rule.className === "Gladiator")];
+  gear.itemPools = [gear.itemPools.find((pool: { classes?: string[] }) => !pool.classes || pool.classes.includes("Gladiator"))];
+  await writeFile(gearFile, JSON.stringify(gear));
+}
 
 describe("offline embedding CLI credentials and cache", () => {
+  it("allows a reviewed multi-class batch above 128 entries within the 256-entry limit without invoking AWS in a dry run", async () => {
+    await reviewedBatch(60); const result = await run([]);
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.chunks + output.queries).toBeGreaterThan(128);
+    expect(output.chunks + output.queries).toBeLessThanOrEqual(256);
+    expect(await calls()).toEqual([]);
+    expect(await readFile(indexFile, "utf8")).toBe(originalIndex);
+  });
+
+  it("refuses an over-budget batch before credentials or AWS and preserves the published index", async () => {
+    await reviewedBatch(90); const result = await run(["--build"], { FIXTURE_AWS_FAIL: "must-never-run" });
+    expect(result.code).not.toBe(0); expect(result.stderr).toContain("256-item");
+    expect(await calls()).toEqual([]);
+    expect(await readFile(indexFile, "utf8")).toBe(originalIndex);
+  });
+
   it("rebuilds a complete cache without .env or any AWS invocation", async () => {
     const result = await run(["--build"], { FIXTURE_AWS_FAIL: "must-never-run" });
     expect(result.code).toBe(0); expect(await calls()).toEqual([]);

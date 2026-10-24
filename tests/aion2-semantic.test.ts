@@ -6,7 +6,7 @@ import gear from "@/data/aion2/gear-priorities.json";
 import realIndex from "@/data/aion2/semantic-index.json";
 import { semanticHash, semanticKnowledgeDigest, aionEvidenceCorpus, unitVector, cosine, relatedEvidence, evidenceClusters, validSemanticIndex } from "../scripts/aion2-semantic-core.mjs";
 
-type Chunk = { id: string; ruleId: string | null; kind: string; classes: string[]; sourceIds: string[]; text: string; textHash: string; vector: number[] };
+type Chunk = { id: string; ruleId: string | null; kind: string; classes: string[]; sourceIds: string[]; text: string; textHash: string; vector: number[]; focus?: string };
 type CorpusChunk = Omit<Chunk, "vector">;
 type Query = { id: string; ruleId: string; classes: string[]; text: string; textHash: string; vector: number[]; matches: { id: string; score: number }[] };
 type Index = { schemaVersion: number; knowledgeVersion: string; knowledgeDigest: string; generatedAt: string; model: string; region: string; dimensions: number; chunks: Chunk[]; queries: Query[] };
@@ -100,9 +100,43 @@ describe("semantic corpus and fingerprints", () => {
     const step = { ...chunk("step:glad:fixture", ["Gladiator"], [0.8, 0.6]), kind: "step" };
     expect(relatedEvidence([gearChunk, step], { ruleId: "glad", classes: ["Gladiator"], vector: [1, 0] }, 1)).toEqual([{ id: step.id, score: 0.8 }]);
   });
+
+  it("keeps duplicate item pools separated by their reviewed class scope", () => {
+    const legacy = structuredClone(gear.itemPools[0]);
+    const cleric = { ...structuredClone(legacy), classes: ["Cleric"] };
+    const candidate = { ...gear, classes: ["Gladiator", "Cleric"], itemPools: [legacy, cleric] };
+    const pools = aionEvidenceCorpus(knowledge, candidate).filter((value: CorpusChunk) => value.kind === "gear-pool");
+    expect(pools.map((value: CorpusChunk) => value.classes)).toEqual([["Gladiator"], ["Cleric"]]);
+    expect(new Set(pools.map((value: CorpusChunk) => value.id)).size).toBe(2);
+    expect(pools[0].id).toBe(`gear-pool:${legacy.itemId}`);
+    expect(pools[1].id).not.toBe(pools[0].id);
+  });
+
+  it("carries authored role focus into rule, step and board evidence", () => {
+    const rule = { ...knowledge.rules[0], id: "focus-fixture", classes: ["Cleric"], focus: "group" };
+    const preset = { ...knowledge.boardPresets[0], id: "focus-board-fixture", className: "Cleric", focus: "group" };
+    const rows = aionEvidenceCorpus({ ...knowledge, rules: [rule], boardPresets: [preset] });
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows.filter((value: CorpusChunk) => value.kind !== "activity")) {
+      expect(row.focus).toBe("group");
+      expect(row.text).toContain("Group healing");
+    }
+  });
 });
 
 describe("embedding normalization and class-safe retrieval", () => {
+  it("rejects unknown role metadata in saved chunks and queries", () => {
+    const chunkRole = index(); Object.assign(chunkRole.chunks[0], { focus: "unknown" });
+    expect(validSemanticIndex(chunkRole, digest)).toBe(false);
+    const queryRole = index(); Object.assign(queryRole.queries[0], { focus: "unknown" });
+    expect(validSemanticIndex(queryRole, digest)).toBe(false);
+  });
+  it("filters an explicitly selected role without excluding common evidence", () => {
+    const rows = [{ ...chunk("group", ["Cleric"]), focus: "group" }, { ...chunk("solo", ["Cleric"]), focus: "solo" }, chunk("common", ["Cleric"])];
+    const matches = relatedEvidence(rows, { classes: ["Cleric"], focus: "group", vector: [1,0] }, 6);
+    expect(matches.map((value: { id: string }) => value.id)).toEqual(["common", "group"]);
+    expect(relatedEvidence(rows, { classes: ["Cleric"], vector: [1,0] }, 6)).toHaveLength(3);
+  });
   it("normalizes finite nonzero vectors without mutating the source", () => {
     const values = [3, 4], normalized = unitVector(values, 2);
     expect(normalized).toEqual([0.6, 0.8]); expect(values).toEqual([3, 4]);

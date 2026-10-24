@@ -5,7 +5,7 @@ import { ArrowRight, BookOpen, Check, ChevronRight, CircleAlert, Clock3, Externa
 import { Button } from "@/components/ui/button";
 import { AionAsset, aionImageSource } from "@/components/aion2-asset";
 import { AionBoards } from "@/components/aion2-board-map";
-import { AionGearPriorities } from "@/components/aion2-gear-priorities";
+import { AionGearPriorities, type AionClericFocus } from "@/components/aion2-gear-priorities";
 import { isAionGearPriorityReport } from "@/lib/aion2-gear-validation";
 import { AionTimerPanel } from "@/components/aion2-timer-panel";
 import { AionChecklistPanel } from "@/components/aion2-checklist";
@@ -20,6 +20,7 @@ const finite = (v: unknown): v is number => typeof v === "number" && Number.isFi
 const time = (v: unknown): v is string => typeof v === "string" && Number.isFinite(Date.parse(v));
 const nullableNumber = (v: unknown) => v === null || finite(v);
 const nullableTime = (v: unknown) => v === null || time(v);
+const focusValue = (v: unknown) => v === undefined || v === "group" || v === "solo";
 const sourceLink = (value: unknown): value is string => {
   if (typeof value !== "string") return false;
   try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password && !url.port && ["docs.google.com", "aion2.plaync.com", "aion2.gg", "aion2data.com"].includes(url.hostname); } catch { return false; }
@@ -44,6 +45,7 @@ function snapshot(v: unknown): v is AionSnapshot {
 }
 function recommendation(v: unknown): v is AionRecommendation {
   if (!object(v) || typeof v.id !== "string" || !["high", "medium", "low"].includes(String(v.priority)) || typeof v.title !== "string" || typeof v.evidence !== "string" || typeof v.action !== "string" || !sourceLink(v.source)) return false;
+  if (!focusValue(v.focus)) return false;
   if (v.steps !== undefined && (!Array.isArray(v.steps) || v.steps.length > 30 || !v.steps.every(s => object(s) && typeof s.id === "string" && typeof s.title === "string" && typeof s.instruction === "string" && (s.reason === undefined || typeof s.reason === "string") && (s.source === undefined || sourceLink(s.source)) && (s.status === undefined || ["ready", "blocked", "manual-check"].includes(String(s.status))) && (s.cost === undefined || (object(s.cost) && s.cost.resource === "odyle" && Number.isSafeInteger(s.cost.amount) && Number(s.cost.amount) >= 0))))) return false;
   if (Array.isArray(v.steps) && !v.steps.every(s => object(s) && (s.checklistActivityIds === undefined || (Array.isArray(s.checklistActivityIds) && s.checklistActivityIds.length <= 30 && s.checklistActivityIds.every(id => typeof id === "string" && id.length > 0))) && (s.reportedDone === undefined || typeof s.reportedDone === "boolean") && (s.progressNote === undefined || typeof s.progressNote === "string"))) return false;
   if (v.budget !== undefined && (!object(v.budget) || !nullableNumber(v.budget.available) || !nullableNumber(v.budget.costPerRun) || !nullableNumber(v.budget.affordableRuns) || !nullableTime(v.budget.updatedAt))) return false;
@@ -63,7 +65,7 @@ export function isAionTrackedCharacter(v: unknown): v is AionTrackedCharacter {
     const c = v.checklist;
     if (!object(c) || !["current", "review-required", "unverified"].includes(String(c.status)) || typeof c.notice !== "string" || typeof c.revision !== "string" || !c.revision || !Array.isArray(c.items) || c.items.length > 100 || !c.items.every(i => object(i) && typeof i.id === "string" && !!i.id && typeof i.name === "string" && ["daily", "weekly"].includes(String(i.cadence)) && ["character", "server"].includes(String(i.scope)) && typeof i.instruction === "string" && Array.isArray(i.rewardTags) && i.rewardTags.every(t => typeof t === "string") && sourceLink(i.source) && typeof i.completed === "boolean" && nullableTime(i.completedAt) && typeof i.periodKey === "string" && !!i.periodKey && nullableTime(i.nextResetAt)) || new Set(c.items.map(i => (i as Record<string, unknown>).id)).size !== c.items.length) return false;
   }
-  if (v.boardPlans !== undefined && (!Array.isArray(v.boardPlans) || v.boardPlans.length > 30 || !v.boardPlans.every(p => object(p) && Number.isSafeInteger(p.boardId) && typeof p.label === "string" && sourceLink(p.source) && Array.isArray(p.targets) && p.targets.every(t => object(t) && Number.isSafeInteger(t.nodeId) && typeof t.reason === "string") && Array.isArray(p.pathNodeIds) && p.pathNodeIds.every(Number.isSafeInteger) && Array.isArray(p.missingNodeIds) && p.missingNodeIds.every(Number.isSafeInteger) && (p.cost === null || (finite(p.cost) && p.cost >= 0)) && Array.isArray(p.notices) && p.notices.every(n => typeof n === "string") && (p.nodeCosts === undefined || (Array.isArray(p.nodeCosts) && p.nodeCosts.every(c => object(c) && Number.isSafeInteger(c.nodeId) && finite(c.cost) && c.cost >= 0)))))) return false;
+  if (v.boardPlans !== undefined && (!Array.isArray(v.boardPlans) || v.boardPlans.length > 30 || !v.boardPlans.every(p => object(p) && focusValue(p.focus) && Number.isSafeInteger(p.boardId) && typeof p.label === "string" && sourceLink(p.source) && Array.isArray(p.targets) && p.targets.every(t => object(t) && Number.isSafeInteger(t.nodeId) && typeof t.reason === "string") && Array.isArray(p.pathNodeIds) && p.pathNodeIds.every(Number.isSafeInteger) && Array.isArray(p.missingNodeIds) && p.missingNodeIds.every(Number.isSafeInteger) && (p.cost === null || (finite(p.cost) && p.cost >= 0)) && Array.isArray(p.notices) && p.notices.every(n => typeof n === "string") && (p.nodeCosts === undefined || (Array.isArray(p.nodeCosts) && p.nodeCosts.every(c => object(c) && Number.isSafeInteger(c.nodeId) && finite(c.cost) && c.cost >= 0)))))) return false;
   return Array.isArray(v.history) && v.history.length <= 250 && v.history.every(i => object(i) && time(i.observedAt) && nullableNumber(i.combatPower) && nullableNumber(i.gearScore))
     && Array.isArray(v.recommendations) && v.recommendations.length <= 100 && v.recommendations.every(recommendation);
 }
@@ -273,10 +275,44 @@ function recommendationHold(c: AionTrackedCharacter, knowledge: AionKnowledgeSta
   return null;
 }
 
+function useClericFocus(id: string, enabled: boolean) {
+  const [focus, setFocus] = useState<AionClericFocus>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const revision = useRef(0);
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const generation = revision.current;
+    let saved: AionClericFocus = null, error: string | null = null;
+    try { const value = localStorage.getItem(`aion2:cleric-focus:${id}`); if (value === "group" || value === "solo" || value === "all") saved = value; }
+    catch { error = "This browser could not read your saved choice. Choose a focus for this visit."; }
+    queueMicrotask(() => { if (active && revision.current === generation) { setFocus(saved); setStorageError(error); } });
+    return () => { active = false; };
+  }, [id, enabled]);
+  function choose(value: Exclude<AionClericFocus, null>) {
+    revision.current += 1;
+    setFocus(value);
+    try {
+      const key = `aion2:cleric-focus:${id}`;
+      localStorage.setItem(key, value);
+      if (localStorage.getItem(key) !== value) throw new Error("Preference readback did not match.");
+      setStorageError(null);
+    }
+    catch { setStorageError("This browser could not save this choice. It applies for this visit."); }
+  }
+  return { focus, choose, storageError };
+}
+
 function CharacterDetail({ character: c, now, knowledge, readFailed, disabled, busy, removeConfirm, onRemoveConfirm, onRemoveCancel, onRemove, onPause, onRefresh, onResources, onChecklist }: { character: AionTrackedCharacter; now: number; knowledge?: AionKnowledgeStatus; readFailed: boolean; disabled: boolean; busy: boolean; removeConfirm: boolean; onRemoveConfirm: () => void; onRemoveCancel: () => void; onRemove: () => void; onPause: () => void; onRefresh: () => void; onResources: (odyleEnergy: number | null) => void; onChecklist: (item: AionChecklistItem, completed: boolean) => void }) {
   const [view, setView] = useState("gear");
   const detailsPanel = useRef<HTMLElement | null>(null);
   const s = c.snapshot;
+  const cleric = s?.profile.className === "Cleric";
+  const { focus, choose, storageError } = useClericFocus(c.id, cleric);
+  const applies = (value: { focus?: "group" | "solo" }) => !cleric || !value.focus || focus === "all" || value.focus === focus;
+  const recommendations = c.recommendations.filter(applies);
+  const boardPlans = c.boardPlans?.filter(applies);
+  const focusNotice = cleric && focus === null ? "Choose a Cleric focus above to compare a role-specific Daevanion preset." : null;
   const stale = readFailed || !!c.lastError || !c.lastSuccessAt || now - Date.parse(c.lastSuccessAt) > 30 * 60_000 || now - Date.parse(c.lastSuccessAt) < -5 * 60_000 || !s || now - Date.parse(s.observedAt) > 30 * 60_000 || now - Date.parse(s.observedAt) < -5 * 60_000;
   const held = recommendationHold(c, knowledge, now, readFailed);
   return <div className="min-w-0 space-y-5">
@@ -290,17 +326,18 @@ function CharacterDetail({ character: c, now, knowledge, readFailed, disabled, b
       {c.lastError && <div role="alert" className="border-t border-border bg-[var(--chart-5)]/10 px-5 py-3 text-xs leading-relaxed">Latest check failed: {c.lastError}{s && " Your last successful snapshot is still shown."}</div>}
       {removeConfirm && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-destructive/5 px-5 py-4"><p className="text-sm">Remove {c.name} and its saved history?</p><div className="flex gap-2"><Button variant="outline" size="sm" onClick={onRemoveCancel}>Keep character</Button><Button variant="destructive" size="sm" disabled={disabled} onClick={onRemove}>Remove character</Button></div></div>}
     </section>
+    {cleric && <section className="rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/10 via-card/85 to-[var(--chart-2)]/8 p-4 sm:p-5" aria-labelledby="cleric-focus-title"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 id="cleric-focus-title" className="text-sm font-semibold">Cleric focus</h3><p className="mt-1 text-xs text-muted-foreground">{focus === null ? "Choose how you want to play to see matching skill and Daevanion advice." : "Your focus applies to the plans, gear skill bonuses and Daevanion comparison."}</p></div><div role="group" aria-label="Cleric focus" className="flex flex-wrap gap-1.5">{([['group', 'Group healing'], ['solo', 'Solo damage'], ['all', 'Both']] as const).map(([value, label]) => <button key={value} aria-pressed={focus === value} onClick={() => choose(value)} className={cn("rounded-lg border px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring", focus === value ? "border-primary/40 bg-primary/15 text-foreground" : "border-border/70 bg-background/60 text-muted-foreground hover:bg-primary/5")}>{label}</button>)}</div></div><p className="mt-2 text-[11px] text-muted-foreground">{storageError || (focus === null ? `This browser will remember your choice for ${c.name}.` : `Saved in this browser for ${c.name}. You can change it at any time.`)}</p></section>}
     <AionChecklistPanel character={c} knowledge={knowledge} now={now} readFailed={readFailed} disabled={disabled} busy={busy} onToggle={onChecklist} />
     <section className="rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/6 via-card/85 to-card/65 p-5 shadow-sm sm:p-6" aria-labelledby="aion-priority-title"><div className="mb-4 flex items-center gap-2"><Sparkles className="size-4 text-primary" /><h3 id="aion-priority-title" className="font-display text-base font-semibold">What to work on next</h3></div>
       {held && <p className="text-sm leading-relaxed text-muted-foreground">{held}</p>}
-      {!held && c.recommendations.length === 0 && <p className="text-sm leading-relaxed text-muted-foreground">No applicable recommendations are available from the reviewed rules and this snapshot.</p>}
-      {!held && <div className="space-y-3">{c.recommendations.map((r, i) => <RecommendationPlan key={r.id} recommendation={r} order={i} />)}</div>}
-      {!held && !!c.boardPlans?.length && <Button variant="outline" size="sm" className="mt-4" onClick={() => { setView("boards"); detailsPanel.current?.scrollIntoView?.({ block: "start" }); }}>Compare Daevanion<ArrowRight className="size-3.5" /></Button>}
+      {!held && recommendations.length === 0 && <p className="text-sm leading-relaxed text-muted-foreground">{cleric && focus === null ? "Choose a Cleric focus above to see role-specific plans." : "No applicable recommendations are available from the reviewed rules and this snapshot."}</p>}
+      {!held && <div className="space-y-3">{recommendations.map((r, i) => <RecommendationPlan key={r.id} recommendation={r} order={i} />)}</div>}
+      {!held && !!boardPlans?.length && !focusNotice && <Button variant="outline" size="sm" className="mt-4" onClick={() => { setView("boards"); detailsPanel.current?.scrollIntoView?.({ block: "start" }); }}>Compare Daevanion<ArrowRight className="size-3.5" /></Button>}
       <p className="mt-4 text-xs leading-relaxed text-muted-foreground">Recommendations use the public snapshot and the linked guides. Quest completion, currencies, inventory and daily entries are not available from the armory.</p>
     </section>
     <OdyleResources key={`${c.id}:${c.resources?.updatedAt}:${c.resources?.odyleEnergy}`} value={c.resources?.odyleEnergy ?? null} updatedAt={c.resources?.updatedAt ?? null} now={now} disabled={disabled} busy={busy} onSave={onResources} />
     <Progress history={c.history} />
-    {s && <section ref={detailsPanel} className="scroll-mt-24 overflow-hidden rounded-2xl border border-[var(--chart-2)]/20 bg-card/80 shadow-sm"><div className="flex flex-wrap items-center gap-1 border-b border-[var(--chart-2)]/15 bg-[var(--chart-2)]/5 p-2" role="group" aria-label="Character details">{["gear", "skills", "boards"].map(v => <button key={v} aria-pressed={view === v} onClick={() => setView(v)} className={cn("rounded-lg px-4 py-2 text-sm capitalize transition-colors focus-visible:outline-2 focus-visible:outline-ring", view === v ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-muted/40")}>{v}</button>)}</div><div className="p-4 sm:p-5">{view === "gear" ? <Gear snapshot={s} report={c.gearPriorities} holdReason={held} /> : view === "skills" ? <Skills snapshot={s} /> : s.coverage.boards ? <AionBoards boards={s.boards} characterClass={s.profile.className} plans={held ? undefined : c.boardPlans} planNotice={held} /> : <Unavailable subject="Daevanion boards" />}</div></section>}
+    {s && <section ref={detailsPanel} className="scroll-mt-24 overflow-hidden rounded-2xl border border-[var(--chart-2)]/20 bg-card/80 shadow-sm"><div className="flex flex-wrap items-center gap-1 border-b border-[var(--chart-2)]/15 bg-[var(--chart-2)]/5 p-2" role="group" aria-label="Character details">{["gear", "skills", "boards"].map(v => <button key={v} aria-pressed={view === v} onClick={() => setView(v)} className={cn("rounded-lg px-4 py-2 text-sm capitalize transition-colors focus-visible:outline-2 focus-visible:outline-ring", view === v ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-muted/40")}>{v}</button>)}</div><div className="p-4 sm:p-5">{view === "gear" ? <Gear snapshot={s} report={c.gearPriorities} holdReason={held} focus={focus} /> : view === "skills" ? <Skills snapshot={s} /> : s.coverage.boards ? <AionBoards boards={s.boards} characterClass={s.profile.className} plans={held ? undefined : boardPlans} planNotice={held || focusNotice} planNoticeTitle={!held && focusNotice ? "Choose a Cleric focus" : undefined} /> : <Unavailable subject="Daevanion boards" />}</div></section>}
     {!held && <Routine />}
   </div>;
 }
@@ -310,7 +347,7 @@ function RecommendationPlan({ recommendation: r, order }: { recommendation: Aion
   const nextResource = linked.find(step => step.reportedDone === false);
   const accent = r.priority === "high" ? "var(--chart-5)" : r.priority === "medium" ? "var(--chart-2)" : "var(--chart-3)";
   return <article className="rounded-xl border border-l-[3px] p-4 shadow-sm sm:p-5" style={{ borderColor: `color-mix(in oklab, ${accent} 32%, var(--border))`, borderLeftColor: accent, background: `linear-gradient(120deg, color-mix(in oklab, ${accent} 7%, transparent), transparent 70%), var(--background)` }}>
-    <div className="flex items-start gap-3"><span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg font-mono text-xs font-semibold text-foreground" style={{ background: `color-mix(in oklab, ${accent} 20%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${accent} 25%, transparent)` }}>{order + 1}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-semibold">{r.title}</h4><span className="rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-foreground" style={{ background: `color-mix(in oklab, ${accent} 14%, transparent)` }}>{r.priority} priority</span></div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{r.evidence}</p><p className="mt-2 text-sm leading-relaxed">{r.action}</p></div></div>
+    <div className="flex items-start gap-3"><span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg font-mono text-xs font-semibold text-foreground" style={{ background: `color-mix(in oklab, ${accent} 20%, transparent)`, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${accent} 25%, transparent)` }}>{order + 1}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-semibold">{r.title}</h4>{r.focus && <span className="rounded-full border border-primary/20 bg-primary/8 px-2 py-0.5 text-[10px] text-muted-foreground">{r.focus === "group" ? "Group healing" : "Solo damage"}</span>}<span className="rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-foreground" style={{ background: `color-mix(in oklab, ${accent} 14%, transparent)` }}>{r.priority} priority</span></div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{r.evidence}</p><p className="mt-2 text-sm leading-relaxed">{r.action}</p></div></div>
     {linked.length > 0 && <p className="mt-3 rounded-lg border border-[var(--chart-2)]/20 bg-[var(--chart-2)]/5 px-3 py-2 text-xs leading-relaxed">{nextResource ? <><span className="font-semibold">Next resource check:</span> {nextResource.title}</> : "Linked activities reported done. Continue the upgrade steps and verify the actual result in game."}</p>}
     {!!r.steps?.length && <details open={order === 0} className="mt-4 border-t border-border/60 pt-3"><summary className="cursor-pointer text-xs font-semibold text-primary">Follow this plan <span className="font-normal text-muted-foreground">({r.steps.length} steps)</span></summary><ol aria-label={`${r.title} steps`} className="mt-4 space-y-4">{r.steps.map((step, index) => <li key={step.id} className="flex gap-3"><span className={cn("flex size-5 shrink-0 items-center justify-center rounded-full border font-mono text-[10px]", step.reportedDone ? "border-[var(--chart-4)]/30 bg-[var(--chart-4)]/12 text-foreground" : "border-border text-muted-foreground")}>{step.reportedDone ? <Check className="size-3" aria-hidden /> : index + 1}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h5 className="text-sm font-semibold">{step.title}</h5>{step.reportedDone && <span className="rounded-md border border-[var(--chart-4)]/20 bg-[var(--chart-4)]/10 px-1.5 py-0.5 text-[10px] text-foreground">Activity reported done</span>}{step.cost && <span className="rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{number(step.cost.amount)} Odyle</span>}{step.status && step.status !== "ready" && <span className="text-[10px] font-medium text-muted-foreground">{step.status === "blocked" ? "Prerequisite" : "Check in game"}</span>}</div><p className="mt-1 whitespace-pre-line text-sm leading-relaxed">{step.instruction}</p>{step.progressNote && <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{step.progressNote}</p>}{step.reason && <details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">Why this step?</summary><p className="mt-1.5 leading-relaxed">{step.reason}</p></details>}{step.source && <a href={step.source} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-[11px] text-primary hover:underline">Step source<ExternalLink className="size-2.5" /></a>}</div></li>)}</ol></details>}
     {r.budget && <div className="mt-4 rounded-lg border border-border/60 bg-card/50 px-3 py-2.5 text-xs leading-relaxed"><p className="flex items-center gap-1.5 font-medium"><Zap className="size-3" />Odyle planning</p>{r.budget.costPerRun === null ? <p className="mt-1 text-muted-foreground">The current reward cost is unconfirmed. Check it in game before claiming rewards.</p> : <p className="mt-1 text-muted-foreground">{number(r.budget.costPerRun)} Odyle per reward claim. {r.budget.available === null || r.budget.affordableRuns === null ? "Follow the plan’s in-game balance check; entering a balance here is optional." : `Based on your last entry of ${number(r.budget.available)}: ${number(r.budget.affordableRuns)} reward claims at this cost.`}</p>}{r.budget.updatedAt && <p className="mt-1 text-[10px] text-muted-foreground">Balance entered {date(r.budget.updatedAt)}; spending and recharge since then are not tracked.</p>}</div>}
@@ -358,9 +395,9 @@ function Progress({ history }: { history: AionHistoryPoint[] }) {
   </section>;
 }
 
-function Gear({ snapshot: s, report, holdReason }: { snapshot: AionSnapshot; report?: AionTrackedCharacter["gearPriorities"]; holdReason?: string | null }) {
+function Gear({ snapshot: s, report, holdReason, focus }: { snapshot: AionSnapshot; report?: AionTrackedCharacter["gearPriorities"]; holdReason?: string | null; focus?: AionClericFocus }) {
   if (!s.coverage.equipment) return <Unavailable subject="Equipment" />;
-  return <AionGearPriorities snapshot={s} report={report} holdReason={holdReason} />;
+  return <AionGearPriorities snapshot={s} report={report} holdReason={holdReason} focus={focus} />;
 }
 function Skills({ snapshot: s }: { snapshot: AionSnapshot }) {
   if (!s.coverage.skills) return <Unavailable subject="Skills" />;

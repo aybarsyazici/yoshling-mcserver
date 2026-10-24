@@ -73,7 +73,7 @@ safe fallbacks. The helper does not request NCSOFT credentials or reuse account 
 
 The gear view now provides item cards with observed lines and ranked substat
 comparisons. [Gear priorities](AION2-GEAR-PRIORITIES.md) explains the reviewed
-Gladiator/item-pool scope, tied groups, fixed/unknown items and source gates.
+Gladiator/Cleric item-pool scope, tied groups, fixed/unknown items and source gates.
 `gear-priorities.json` joins source validation and the offline index digest.
 Read [source fingerprints](AION2-SOURCE-CHECKS.md) for the exact Overhead Slam
 content scope and the review required before changing any source's hash input.
@@ -83,8 +83,11 @@ content scope and the review required before changing any source's hash input.
 `src/data/aion2/knowledge.json` is the reviewed, versioned knowledge base. Each rule
 names its strategy, class scope (empty means general), thresholds, exact source IDs,
 evidence, review date and expiry. It currently contains general equipment/progression
-goals, ordered action recipes and a curated Gladiator skill route. It is not a complete build optimizer;
-other classes have general guidance while their skill builds await curation.
+goals, ordered action recipes and curated Gladiator and Cleric routes. It is not a
+complete build optimizer; other classes retain general guidance until reviewed.
+Cleric characters choose Group healing, Solo damage or Both in a per-character
+browser preference. [Cleric coverage](AION2-CLERIC.md) records skills, gear, boards,
+sources and limits. Preferences do not alter the game's preset or bypass freshness.
 
 [Knowledge/index maintenance](AION2-KNOWLEDGE.md) describes the optional offline
 Bedrock embedding build, source matching and temporary-credential workflow. AWS is
@@ -130,7 +133,8 @@ only enhancement transfers. The recipe still requires checking the actual previe
 ### Daevanion comparison
 
 `boardPresets` declares reviewed class targets and an explicit, sourced path model.
-The current Gladiator PvE preset covers white boards 11–14 only. Nodes/effects/owned
+Gladiator uses white boards 11–14; Cleric uses 71–74 with separate group/solo
+comparisons. A shared reviewed class map governs detail fetching and paths. Nodes/effects/owned
 state come from the official armory; orthogonal adjacency and grade-based crystal
 costs come from a reviewed client-data reference. `Legend` in the official board API
 corresponds to that reference's 3-crystal tier. The free Start node is a graph root

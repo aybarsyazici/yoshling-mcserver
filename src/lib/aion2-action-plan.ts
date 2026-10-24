@@ -1,5 +1,6 @@
 import { aionKnowledge } from "./aion2-knowledge";
 import type { AionActionStep, AionRecommendation, AionSnapshot } from "./aion2-types";
+import { aionWhiteBoardIds } from "./aion2-knowledge-validation";
 
 export type AionResourceContext = { odyleEnergy?: number | null; resourcesUpdatedAt?: string | null };
 type RecipeStep = { id: string; title: string; instruction: string; reason?: string; sourceId: string; when?: string; activityId?: string; checklistActivityIds?: string[]; cost?: { resource: "odyle"; amount: number } };
@@ -18,23 +19,35 @@ export function aionMissingArcana(snapshot: AionSnapshot): string[] | null {
   return ARCANA_FAMILIES.filter(family => !equipped.has(family));
 }
 
+/** Public acquired/equipped flags describe the armory observation. They do not
+ * establish selected Specialties, a complete hotbar or a working rotation. */
+export function aionLoadoutSummary(snapshot: AionSnapshot, skillIds: readonly number[]): string {
+  if (!snapshot.coverage.skills) return "Skill observations are unavailable; check the loadout in game.";
+  return skillIds.map(id => {
+    const skill = snapshot.skills.find(value => value.id === id);
+    return skill ? `${skill.name}: ${skill.acquired ? `level ${skill.level}` : "not acquired in the armory"}, ${skill.equipped ? "marked equipped" : "not marked equipped"}` : `Skill ${id}: not returned; check in game`;
+  }).join("; ");
+}
+
 export function aionActionPlan(snapshot: AionSnapshot, ruleId: string, resources: AionResourceContext = {}): Pick<AionRecommendation, "steps" | "budget"> {
   const rule = aionKnowledge.rules.find((value) => value.id === ruleId);
   if (!rule || !("steps" in rule) || !Array.isArray(rule.steps)) return {};
+  if (rule.classes.length && !(rule.classes as readonly string[]).includes(snapshot.profile.className)) return {};
   const recipe = rule.steps as unknown as RecipeStep[];
   const activity = (id?: string) => aionKnowledge.activities.find((value) => value.id === id);
   const primaryCost = activity(recipe.find((step) => step.activityId)?.activityId)?.odylePerClaim ?? null;
   const eligible = (id: string) => { const content = activity(id); return !!content && snapshot.profile.level >= content.minimumLevel && snapshot.profile.gearScore !== null && snapshot.profile.gearScore >= content.minimumGearScore; };
-  const primary = "skillId" in rule ? rule : aionKnowledge.rules.find((value) => value.strategy === "skill-target" && (value.classes as string[]).includes(snapshot.profile.className));
-  const skillId = primary && "skillId" in primary ? primary.skillId : undefined;
+  const loadoutSkillIds = "requiredSkillIds" in rule && Array.isArray(rule.requiredSkillIds) ? rule.requiredSkillIds as number[] : [];
+  const primary = "skillId" in rule ? rule : rule.strategy === "loadout-review" ? undefined : aionKnowledge.rules.find((value) => value.strategy === "skill-target" && (value.classes as string[]).includes(snapshot.profile.className));
+  const skillId = primary && "skillId" in primary ? primary.skillId : loadoutSkillIds[0];
   const skill = snapshot.skills.find((value) => value.id === skillId);
   const milestones = primary && "milestones" in primary && Array.isArray(primary.milestones) ? primary.milestones : [];
   const firstMilestone = milestones[0] ?? (primary && "target" in primary ? primary.target : 20) ?? 20;
   const nextMilestone = milestones.find((level) => level > (skill?.level ?? 0)) ?? (primary && "target" in primary ? primary.target : 20) ?? 20;
-  const white = snapshot.boards.filter((board) => [11, 12, 13, 14].includes(board.id));
-  const boardsKnown = white.length === 4 && white.every((board) => Array.isArray(board.skillBonuses));
+  const white = snapshot.boards.filter((board) => aionWhiteBoardIds(snapshot.profile.className).includes(board.id));
+  const boardsKnown = snapshot.coverage.boards && white.length === 4 && white.every((board) => Array.isArray(board.skillBonuses));
   const boardBonus = boardsKnown ? white.reduce((sum, board) => sum + (board.skillBonuses?.find((value) => value.id === skillId)?.levels ?? 0), 0) : null;
-  const rings = snapshot.equipment.filter((item) => [13, 14].includes(item.slot) && item.details?.randomStats === true && !item.details.skills.some(value => value.id === skillId && value.level > 0));
+  const rings = snapshot.profile.className === "Gladiator" ? snapshot.equipment.filter((item) => [13, 14].includes(item.slot) && item.details?.randomStats === true && !item.details.skills.some(value => value.id === skillId && value.level > 0)) : [];
   const ringPlan = rings.map(ring => {
     const line = ring.details?.stats.find(stat => /flight power|^mp$/i.test(stat.name))?.name ?? "an unwanted non-skill line actually shown on this ring";
     const keepers = ring.details?.skills.map(value => `${value.name} +${value.level}`).join(", ") || "any useful existing skill lines";
@@ -48,6 +61,8 @@ export function aionActionPlan(snapshot: AionSnapshot, ruleId: string, resources
   const fresh = Number.isFinite(stamp) && Date.now() - stamp <= 30 * 60_000 && Date.now() >= stamp - 60_000;
   const energy = fresh && Number.isInteger(resources.odyleEnergy) && resources.odyleEnergy! >= 0 && resources.odyleEnergy! <= 10000 ? resources.odyleEnergy! : null;
   const vars: Record<string, string> = {
+    skillName: skill?.name ?? "the reviewed skill", skillLevel: skill ? String(skill.level) : "unavailable",
+    loadoutSummary: aionLoadoutSummary(snapshot, loadoutSkillIds),
     nextLevel: String(nextMilestone), missingLevels: String(Math.max(0, nextMilestone - (skill?.level ?? 0))),
     gearScore: snapshot.profile.gearScore === null ? "unavailable Gear Score" : snapshot.profile.gearScore.toLocaleString(),
     boardBonus: boardBonus === null ? "not fully available" : `+${boardBonus} levels`,
@@ -67,7 +82,7 @@ export function aionActionPlan(snapshot: AionSnapshot, ruleId: string, resources
       case "below-first-milestone": return !!skill && skill.level < firstMilestone;
       case "at-least-first-milestone": return !!skill && skill.level >= firstMilestone;
       case "energy-not-confirmed": return energy === null || primaryCost === null || energy < primaryCost;
-      case "rage-burst-missing": return !rage?.acquired || !rage.equipped;
+      case "rage-burst-missing": return snapshot.profile.className === "Gladiator" && (!rage?.acquired || !rage.equipped);
       case "shattered-pool-missing": return missingArcana === null || missingArcana.some(family => ["Parchment", "Mirror"].includes(family)) || missingArcana.includes("Chalice") && !missingArcana.some(family => ["Compass", "Bell"].includes(family));
       case "deus-pool-missing": return missingArcana === null || missingArcana.some(family => ["Compass", "Bell"].includes(family));
       case "starter-guard-below-target": return !!guard && guard.enchantLevel < 10;
@@ -92,7 +107,7 @@ export function aionActionPlan(snapshot: AionSnapshot, ruleId: string, resources
 }
 
 export function aionSkillBoardContribution(snapshot: AionSnapshot, skillId: number): number | null {
-  const white = snapshot.boards.filter((board) => [11, 12, 13, 14].includes(board.id));
-  return white.length === 4 && white.every((board) => board.skillBonuses !== undefined)
+  const white = snapshot.boards.filter((board) => aionWhiteBoardIds(snapshot.profile.className).includes(board.id));
+  return snapshot.coverage.boards && white.length === 4 && white.every((board) => board.skillBonuses !== undefined)
     ? white.reduce((sum, board) => sum + (board.skillBonuses?.find((skill) => skill.id === skillId)?.levels ?? 0), 0) : null;
 }

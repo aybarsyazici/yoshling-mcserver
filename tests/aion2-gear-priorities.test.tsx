@@ -168,3 +168,58 @@ it("identifies a missing optional gear report and points to Check saved characte
   expect(screen.queryByText(/Current reviewed guidance is unavailable|needs a current review/)).toBeNull();
   expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
 });
+
+function clericComparison() {
+  const data = snapshot(); data.profile.className = "Cleric";
+  data.equipment[0].details!.skills = [{ id: 17120000, name: "Radiant Recovery", level: 1 }, { id: 17350000, name: "Condemnation", level: 1 }];
+  const guide = report(); guide.items[0].priorities = [
+    { id: "17120000", label: "Radiant Recovery (group healing)", kind: "skill", rank: 1, reason: "Party recovery.", focus: "group" },
+    { id: "17350000", label: "Condemnation (damage)", kind: "skill", rank: 1, reason: "Damage window.", focus: "solo" },
+    { id: "attack", label: "Attack", kind: "stat", rank: 2, reason: "Common attack scaling." },
+  ];
+  guide.items[0].currentLines = [{ label: "Radiant Recovery", value: "+1", kind: "skill", priorityRank: 1 }, { label: "Condemnation", value: "+1", kind: "skill", priorityRank: 1 }, { label: "Attack", value: "55", kind: "stat", priorityRank: 2 }];
+  return { data, guide };
+}
+
+it("keeps Cleric role-specific skill priorities hidden until a focus is chosen while preserving observed lines and common stats", () => {
+  const { data, guide } = clericComparison();
+  guide.items[0].priorities.push({ id: "17750000", label: "Immortal Veil common skill", kind: "skill", rank: 1, reason: "Shared survival." });
+  data.equipment[0].details!.skills.push({ id: 17750000, name: "Immortal Veil", level: 1 });
+  guide.items[0].currentLines.push({ label: "Immortal Veil", value: "+1", kind: "skill", priorityRank: 1 });
+  render(<AionGearPriorities snapshot={data} report={guide} focus={null} />); open();
+  const priorities = within(screen.getByRole("list", { name: "Example Greatsword substat priorities" }));
+  expect(priorities.queryByText("Radiant Recovery (group healing)")).toBeNull(); expect(priorities.queryByText("Condemnation (damage)")).toBeNull(); expect(priorities.queryByText("Immortal Veil common skill")).toBeNull();
+  expect(priorities.getByText("Attack")).toBeTruthy();
+  const observed = within(screen.getByRole("list", { name: "Example Greatsword observed stats" }));
+  expect(observed.getByText("Radiant Recovery")).toBeTruthy(); expect(observed.getByText("Condemnation")).toBeTruthy();
+  expect(observed.queryByText("Reviewed priority 1")).toBeNull();
+});
+
+it.each(["group", "solo"] as const)("filters Cleric %s choices and badges by exact skill ID despite equal ranks", focus => {
+  const { data, guide } = clericComparison();
+  render(<AionGearPriorities snapshot={data} report={guide} focus={focus} />); open();
+  const selected = focus === "group" ? "Radiant Recovery" : "Condemnation", hidden = focus === "group" ? "Condemnation" : "Radiant Recovery";
+  const observed = within(screen.getByRole("list", { name: "Example Greatsword observed stats" }));
+  expect(within(observed.getByText(selected).closest("li")!).getByText("Reviewed priority 1")).toBeTruthy();
+  expect(within(observed.getByText(hidden).closest("li")!).queryByText(/Reviewed priority/)).toBeNull();
+  const priorities = within(screen.getByRole("list", { name: "Example Greatsword substat priorities" }));
+  expect(priorities.queryByText(new RegExp(`^${hidden} \\(`))).toBeNull(); expect(priorities.getByText("Attack")).toBeTruthy();
+  expect(priorities.queryByText(new RegExp(`${hidden} \\+1`))).toBeNull();
+});
+
+it("shows both labeled Cleric skill alternatives only when Both is selected and still honors source holds", () => {
+  const { data, guide } = clericComparison();
+  const ui = render(<AionGearPriorities snapshot={data} report={guide} focus="all" />); open();
+  expect(screen.getByText("Radiant Recovery (group healing) / Condemnation (damage)")).toBeTruthy();
+  ui.rerender(<AionGearPriorities snapshot={data} report={guide} focus="all" holdReason="Source review is held." />);
+  expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull(); expect(screen.queryByText(/Reviewed priority/)).toBeNull();
+});
+
+it("identifies an empty selected-role comparison without claiming the exact item pool is unverified", () => {
+  const { data, guide } = clericComparison(); guide.items[0].priorities = guide.items[0].priorities.filter(priority => priority.focus === "solo");
+  render(<AionGearPriorities snapshot={data} report={guide} focus="group" />); open();
+  expect(screen.getByText("No reviewed priorities for this focus. Choose Both to compare the other role.")).toBeTruthy();
+  expect(screen.queryByText(/exact item pool has not been verified/)).toBeNull();
+  expect(screen.getByRole("list", { name: "Example Greatsword observed stats" })).toBeTruthy();
+  expect(screen.queryByRole("list", { name: "Example Greatsword substat priorities" })).toBeNull();
+});
