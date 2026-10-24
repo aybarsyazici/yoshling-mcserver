@@ -1129,3 +1129,29 @@ errors or invitation-policy refusals since the corrected web image started.
 This confirms the reported real-account login path. Denial/revocation, explicit
 logout invalidation readback, helper mutations and OS notification delivery remain
 unverified.
+
+## 2026-10-24 — Reviewed reference corrections and AWS profile rebuilds
+
+Published knowledge/checklist/timers `2026.10.24.1` after reviewing 17 changed source
+pins. Official Global patch bodies remained unchanged. Corrected the shared,
+continuously recharging Conquest/Transcendence reference models, removed an
+unsupported character Shugo bank and retained every previous review expiry.
+The counter-table corroboration is scoped; it does not inherit the older guide's
+outdated content-availability statements. Main Gladiator recipes and timer event
+definitions remained unchanged.
+
+The embedding builder now supports explicit profiles and lazy credential setup.
+It ignores expired copied keys when a profile is selected and needs neither `.env`
+nor an AWS process for a fully cached rebuild. The current index reused all 60
+vectors with zero model calls. No SSO configuration/login or recurring compiler was
+enabled; required SSO portal values remain missing. Supported authentication choices
+and the proposed collect/diff/draft/review/publish workflow are documented in
+`AION2-KNOWLEDGE.md`.
+
+All 3,787 tests, TypeScript, production build, lint and live source checks passed,
+with the existing warnings. Mutation checks proved the new credential/counter
+regressions fail without their protections. Feature commit `5662c60` was deployed
+through the web script; the new version and counter text were read back from the
+running image, and its source check passed. All game container metadata matched
+the pre-deployment baseline. Detailed claims, evidence, current profile readback,
+coverage limits and image identity: [AION2-REVIEW-2026-10-24.md](AION2-REVIEW-2026-10-24.md).

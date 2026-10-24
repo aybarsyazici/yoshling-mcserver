@@ -101,3 +101,20 @@ Raw review captures, per-source diffs, repeated HTTP hashes and readback metadat
 are retained locally under `/tmp/aion2-update-20261024/`. Reviewed pins are in the
 versioned catalogs. Local checks and production rollout evidence are recorded in
 `CLOSED.md` after completion; a local review is not a deployed update.
+
+## Verified rollout
+
+All 211 test files / 3,787 tests passed, as did TypeScript, lint and the production
+build. Lint retained seven existing warnings; build retained thirteen existing
+tracing warnings. New builder and corrected-catalog regressions were proved red
+with their protections removed and green after restoration.
+
+Feature commit `5662c60970ed1443ae4d3da8b61bf8084f9d0af4` was deployed through the
+normal web script with literal `2026.10.24.1`. The running image is
+`sha256:ed2af5e9a434f6eefaca4314b4d86a2f63d8a07cd67c77f57a1c7957ee48ac14`,
+started at 09:10:31 UTC with restart count zero. Readback verified the new version,
+corrected shared-pool copy and absence of the retired Shugo character activity ID
+in the running server bundle. The source checker passed from the production
+container; public login/authorization-gate HTTP checks passed at 09:10:57 UTC.
+Game container IDs, images, states, start/finish times and restart counts matched
+the fresh pre-deployment baseline. No migration or AWS configuration change was made.
