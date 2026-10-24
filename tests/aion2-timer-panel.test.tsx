@@ -6,6 +6,16 @@ import type { AionBossReport } from "@/lib/aion2-boss-report";
 import type { AionKnowledgeStatus } from "@/lib/aion2-types";
 import timerData from "@/data/aion2/timers.json";
 
+// Calendar fixtures intentionally exercise Oct23 and the DST weekend. Give only
+// this test copy a matching review window; production retains its actual review.
+vi.mock("@/data/aion2/timers.json", async (original) => {
+  const imported = await original<{ default: typeof import("@/data/aion2/timers.json") }>();
+  const data = structuredClone(imported.default);
+  data.reviewedAt = "2026-10-23";
+  for (const source of data.sources) source.reviewedAt = "2026-10-23";
+  return { default: data };
+});
+
 const NOW = "2026-10-23T12:00:00.000Z";
 const knowledge: AionKnowledgeStatus = { version: "test-review", status: "current", reviewedAt: "2026-10-23", expiresAt: "2026-10-28", checkedAt: NOW, supportedClasses: ["Gladiator"], notices: [] };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });

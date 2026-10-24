@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "2026.10.23.2",
-  "reviewedAt": "2026-10-23",
+  "version": "2026.10.24.1",
+  "reviewedAt": "2026-10-24",
   "expiresAt": "2026-10-28",
   "regions": ["eu"],
   "sources": [
@@ -10,7 +10,7 @@
     { "id": "shugo-entry", "label": "Aion2.gg client-data event reference", "url": "https://aion2.gg/tools/event-timer/shugo-festival", "fetchUrl": "https://aion2.gg/tools/event-timer/shugo-festival", "sha256": "36eabc4068a01689cdf87ed6ce7e74992d7915d3772d02f88e4c8f07d66c02d3", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
     { "id": "invasion-entry", "label": "Aion2.gg client-data event reference", "url": "https://aion2.gg/tools/event-timer/dimensional-invasion", "fetchUrl": "https://aion2.gg/tools/event-timer/dimensional-invasion", "sha256": "5abd84d9fbb3cc5037d7841fa45f5ba911e58ad0c3ae1a562acf27a6905c4e32", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
     { "id": "rift-entry", "label": "Aion2.gg client-data rift entry reference", "url": "https://aion2.gg/tools/event-timer/spacetime-rift", "fetchUrl": "https://aion2.gg/tools/event-timer/spacetime-rift", "sha256": "cde29bf357cb460cf6091834aac0cc717f0b9174d5dc4f504d1035814f277397", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
-    { "id": "tracker-schedule", "label": "Aion2Timers reviewed Global client schedule reference", "url": "https://www.aion2timers.com/schedule.json", "fetchUrl": "https://www.aion2timers.com/schedule.json", "sha256": "8803c07472296667963290c3242c60cf8f6ac760d7349b70324a3ec8abeb54aa", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
+    { "id": "tracker-schedule", "label": "Aion2Timers reviewed Global client schedule reference", "url": "https://www.aion2timers.com/schedule.json", "fetchUrl": "https://www.aion2timers.com/schedule.json", "sha256": "73db99738780ef33b0bb67ce457f2df163d718e956c57c4697258a8aa7b34d31", "kind": "client-data-reference", "reviewedAt": "2026-10-24", "expiresAt": "2026-10-28" },
     { "id": "reset-clock", "label": "Aion2Data reset-clock reference", "url": "https://aion2data.com/timers", "kind": "client-data-reference", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" },
     { "id": "gartua-reports", "label": "Community field-boss tracker; not official live status", "url": "https://aion2timers.com/", "kind": "community-reports", "reviewedAt": "2026-10-23", "expiresAt": "2026-10-28" }
   ],

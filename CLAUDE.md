@@ -63,6 +63,9 @@ Pages: `/home`, per-game `/{minecraft,7dtd,zomboid}` overview/server/backups/set
 
 `/aion2` is a separate authenticated character helper. Lists are account-owned, with public armory polling, history and reviewed PvE guidance. Its three-table tracking migration was applied on 2026-10-23; no migration runs on boot. Versioned knowledge has source/patch pins, expiry and change detection; see `docs/AION2-HELPER.md` before modifying advice or deploying it.
 
+Embedding rebuilds honor AWS profiles; cache-only runs need no AWS access.
+Open guidance gap: standalone belt Morph inspection at +10; see the October 24 source review.
+
 ## Required safety and success rules
 
 - Prove writes and operations succeeded with readback. Unknown, refused, partial and unchanged results must remain distinct.

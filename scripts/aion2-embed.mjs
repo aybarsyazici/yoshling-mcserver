@@ -3,13 +3,13 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { validateAionKnowledge, validateAionChecklistLinks } from "../src/lib/aion2-knowledge-validation.ts";
 import { validateAionChecklistManifest } from "../src/lib/aion2-checklist-validation.ts";
 import { aionEvidenceCorpus, semanticHash, unitVector, relatedEvidence, evidenceClusters, validSemanticIndex } from "./aion2-semantic-core.mjs";
+import { embeddingArguments, embeddingAwsConfiguration } from "./aion2-embedding-aws.mjs";
 
-const execute = promisify(execFile), require = createRequire(import.meta.url);
+const execute = promisify(execFile), options = embeddingArguments(process.argv.slice(2));
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const knowledge = JSON.parse(await readFile(path.join(root, "src/data/aion2/knowledge.json"), "utf8"));
 const checklist = JSON.parse(await readFile(path.join(root, "src/data/aion2/checklist.json"), "utf8"));
@@ -20,37 +20,28 @@ const queries = knowledge.rules.map((rule) => ({ id: `query:${rule.id}`, ruleId:
 for (const query of queries) query.textHash = semanticHash(query.text);
 if (chunks.length + queries.length > 128 || [...chunks, ...queries].some((item) => item.text.length > 12000)) throw new Error("Embedding batch exceeds the reviewed 128-item/12000-character limits");
 const destination = path.join(root, "src/data/aion2/semantic-index.json");
-if (!process.argv.includes("--build")) {
+if (!options.build) {
   console.log(JSON.stringify({ dryRun: true, chunks: chunks.length, queries: queries.length, model: "amazon.titan-embed-text-v2:0", dimensions: 512, sendsOnly: "Reviewed authored game facts, never character snapshots or credentials" }));
   process.exit(0);
 }
 
-// Credentials are read only by this explicit build command, never by the website.
-const variables = require("dotenv").parse(await readFile(path.join(root, ".env")));
-const env = { ...process.env, AWS_PAGER: "", AWS_CLI_AUTO_PROMPT: "off" };
-for (const [lower, upper] of [["aws_access_key_id", "AWS_ACCESS_KEY_ID"], ["aws_secret_access_key", "AWS_SECRET_ACCESS_KEY"], ["aws_session_token", "AWS_SESSION_TOKEN"]]) if (variables[lower] || variables[upper]) env[upper] = variables[lower] || variables[upper];
-if (env.AWS_ACCESS_KEY_ID || env.AWS_SECRET_ACCESS_KEY || env.AWS_SESSION_TOKEN) {
-  if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) throw new Error("AWS credentials are incomplete");
-  delete env.AWS_PROFILE;
-}
-const argRegion = process.argv.indexOf("--region");
-let configured = "";
-try { configured = (await execute("aws", ["configure", "get", "region"], { encoding: "utf8", timeout: 5000 })).stdout.trim(); } catch { /* Explicit region below remains available. */ }
-const region = (argRegion >= 0 ? process.argv[argRegion + 1] : null) || variables.aws_region || variables.AWS_REGION || env.AWS_REGION || env.AWS_DEFAULT_REGION || configured || "us-west-2";
-if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(region)) throw new Error("Choose a valid AWS Region");
 const model = "amazon.titan-embed-text-v2:0", dimensions = 512;
 let previous = null;
 try { previous = JSON.parse(await readFile(destination, "utf8")); } catch { /* First build. */ }
 const cache = new Map(previous?.model === model && previous?.dimensions === dimensions && validSemanticIndex(previous, previous.knowledgeDigest) ? [...previous.chunks, ...previous.queries].map((item) => [item.textHash, item.vector]) : []);
+const awsConfiguration = embeddingAwsConfiguration({ root, options, execute });
+let region = options.region ?? previous?.region ?? "us-west-2";
 const temporary = await mkdtemp(path.join(os.tmpdir(), "yoshling-aion2-embed-"));
 let invoked = 0, reused = 0, tokens = 0, cursor = 0, failure = null;
 async function embed(item, index) {
   const cached = cache.get(item.textHash);
   if (cached) { reused++; return unitVector(cached, dimensions); }
+  const aws = await awsConfiguration();
+  region = aws.region;
   const request = path.join(temporary, `request-${index}.json`), response = path.join(temporary, `response-${index}.json`);
   await writeFile(request, JSON.stringify({ inputText: item.text, dimensions, normalize: true }), { mode: 0o600 });
   try {
-    await execute("aws", ["bedrock-runtime", "invoke-model", "--region", region, "--model-id", model, "--content-type", "application/json", "--accept", "application/json", "--body", `fileb://${request}`, "--no-cli-pager", response], { env, encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 });
+    await execute("aws", ["bedrock-runtime", "invoke-model", ...aws.profileArgs, "--region", aws.region, "--model-id", model, "--content-type", "application/json", "--accept", "application/json", "--body", `fileb://${request}`, "--no-cli-pager", response], { env: aws.env, encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 });
   } catch (error) {
     const code = String(error.stderr ?? "").match(/\(([A-Za-z0-9_.-]+)\) when calling/)?.[1] ?? "BedrockRequestFailed";
     throw new Error(`Embedding stopped: ${code}. Existing published index was preserved.`);

@@ -93,6 +93,10 @@ The cap-only guard spending rule was removed; replacement and donor planning are
 scoped to reviewed items/classes. Amulet and belt scrolls supplement stones and Kina.
 See [current progression and checklist behavior](AION2-PROGRESSION-AND-CHECKLIST.md)
 and [the dated evidence matrix](AION2-REVIEW-2026-10-23.md) for the detailed review.
+The [October 24 review](AION2-REVIEW-2026-10-24.md) corrects shared continuous dungeon
+reward counters and removes an unsupported Shugo character-bank task. It refreshes
+reviewed source pins without extending the October 28 expiry or changing the
+Gladiator investment order. Automated knowledge compilation is not yet enabled.
 For Gladiator, 14 first targets 16's cooldown option, then 20's third Specialty slot.
 All four owned Overhead board bonuses suppress repeated board allocation, but not
 the bought-SP-rank check. Boss use also requires the appropriate Rage Burst window.

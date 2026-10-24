@@ -1,6 +1,6 @@
 # Progression and reset checklist
 
-This describes the reviewed 2026.10.23.3 guidance. The dated audit and its source
+This describes the reviewed 2026.10.24.1 guidance. The dated audit and its source
 matrix are in [AION2-REVIEW-2026-10-23.md](AION2-REVIEW-2026-10-23.md).
 
 ## Spending and farm choices
@@ -30,11 +30,18 @@ matrix are in [AION2-REVIEW-2026-10-23.md](AION2-REVIEW-2026-10-23.md).
 
 ## Actual daily and weekly activities
 
-`src/data/aion2/checklist.json` contains 13 reviewed EU activities from the supplied
+`src/data/aion2/checklist.json` contains 12 reviewed EU activities from the supplied
 Checklist tab (gid 1177705857), current client references and patch review. Daily
 Dungeon has a base 14 weekly server entries. Home Command 12 and Lower Abyss Command
 20 describe weekly scroll purchases, not quest completion caps. Recharge banks and
-character/server ownership remain separate. Stale Odyle quotas and unresolved
+character/server ownership remain separate. The corrected client-reference model
+uses one Conquest pool across its dungeons (1 claim every 8 hours, storage 21) and
+one Transcendence pool across its dungeons (1 every 12 hours, storage 14). Recharge
+is continuous, not a daily-reset refill. These are scoped client-reference models;
+the actual game counter and unseen remaining balance take priority. The unsupported
+separate character Shugo bank is omitted; its old raw row does not establish a live
+entitlement. The server Shugo task remains. See the [October 24 review](AION2-REVIEW-2026-10-24.md).
+Stale Odyle quotas and unresolved
 activities are excluded. Catalog/source dates expire on October 28 unless reviewed.
 
 Today / This week show manual reports, reward types, sources and reset times. Reports

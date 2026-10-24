@@ -1,8 +1,18 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { aionNotificationTargets } from "@/lib/aion2-notification-targets";
 import { DEFAULT_AION_NOTIFICATION_SETTING, emptyAionNotificationState, planAionNotifications } from "@/lib/aion2-notifications";
 import type { AionKnowledgeStatus } from "@/lib/aion2-types";
 import type { AionBossReport } from "@/lib/aion2-boss-report";
+
+// Calendar fixtures intentionally exercise Oct23 and the DST weekend. Give only
+// this test copy a matching review window; production retains its actual review.
+vi.mock("@/data/aion2/timers.json", async (original) => {
+  const imported = await original<{ default: typeof import("@/data/aion2/timers.json") }>();
+  const data = structuredClone(imported.default);
+  data.reviewedAt = "2026-10-23";
+  for (const source of data.sources) source.reviewedAt = "2026-10-23";
+  return { default: data };
+});
 
 const now = Date.parse("2026-10-23T12:00:00Z");
 const knowledge: AionKnowledgeStatus = { version: "review", status: "current", reviewedAt: "2026-10-23", expiresAt: "2026-10-28", checkedAt: new Date(now).toISOString(), supportedClasses: [], notices: [] };

@@ -16,7 +16,7 @@ vi.mock("@/lib/db", () => ({ db: new Proxy({}, { get: (_target, property) => {
 vi.mock("@/lib/auth", () => ({ auth: () => fixture.session }));
 vi.mock("@/lib/aion2-api", async (original) => ({ ...await original<typeof import("@/lib/aion2-api")>(), aionSnapshot: fixture.observe }));
 vi.mock("@/lib/aion2-knowledge", () => {
-  const status = (): AionKnowledgeStatus => ({ version: "fixture", reviewedAt: "2026-10-23", expiresAt: "2026-10-28", status: fixture.current ? "current" : "review-required", supportedClasses: ["Gladiator"], notices: [] });
+  const status = (): AionKnowledgeStatus => ({ version: "fixture", reviewedAt: "2026-10-24", expiresAt: "2026-10-28", status: fixture.current ? "current" : "review-required", supportedClasses: ["Gladiator"], notices: [] });
   return { aionKnowledgeStatus: status, refreshAionKnowledgeStatus: async () => status() };
 });
 vi.mock("@/lib/aion2-recommendations", () => ({ aionRecommendations: () => [{ id: "materials", priority: "medium", title: "Review materials", evidence: "Fixture", action: "Check", source: "https://example.test/", steps: [{ id: "farm", title: "Daily Dungeon", instruction: "Check the remaining entries and actual rewards.", checklistActivityIds: ["daily-dungeon"] }, { id: "enhance", title: "Inspect upgrade", instruction: "Inspect actual costs in game." }] }] }));
@@ -27,7 +27,7 @@ import { validateAionChecklistManifest } from "@/lib/aion2-checklist-validation"
 import { addAionCharacter, listAionCharacters, removeAionCharacter, setAionChecklist, setAionResources } from "@/lib/aion2-store";
 import { PATCH as patchRoute } from "@/app/api/aion2/characters/[id]/checklist/route";
 
-const now = new Date("2026-10-23T12:00:00Z");
+const now = new Date("2026-10-24T12:00:00Z");
 const ref: AionCharacterRef = { region: "eu", serverId: 2322, characterId: "checklist-character-one" };
 const profile = { level: 45 };
 const checklist = (at = now, current = true, character = ref) => aionChecklist(character, [], at, current, profile);
@@ -48,12 +48,32 @@ describe("reviewed reset activity catalog", () => {
     expect(list.items.some((value) => /Odyle Energy16|Kina Farm|Subscriber/i.test(value.name))).toBe(false);
   });
 
-  it("keeps the two Shugo pools distinct, with different completion scopes", () => {
+  it("keeps only the supported shared-server Shugo pool", () => {
     const list = checklist();
     expect(item(list, "shugo-festival-server").scope).toBe("server");
-    expect(item(list, "shugo-festival-character").scope).toBe("character");
     expect(item(list, "shugo-festival-server").instruction).toContain("3 keys");
-    expect(item(list, "shugo-festival-character").instruction).toContain("4 keys");
+    expect(item(list, "shugo-festival-server").instruction).toContain("12");
+    expect(list.items.some((value) => value.id === "shugo-festival-character")).toBe(false);
+    expect(manifest.excluded.some((value) => /Shugo.*character/i.test(value.name) && /raw.*row|entitlement/i.test(value.reason))).toBe(true);
+  });
+
+  it.each([
+    ["conquest-reward-pools", "Conquest", "8 hours", "3 per day", "21"],
+    ["transcendence-reward-pools", "Transcendence", "12 hours", "2 per day", "14"],
+  ])("models %s as a shared continuously recharging character pool", (id, kind, interval, perDay, cap) => {
+    const activity = item(checklist(), id);
+    expect(activity).toMatchObject({ cadence: "daily", scope: "character" });
+    expect(activity.instruction).toMatch(/current Global client reference models/);
+    expect(activity.instruction).toContain(`shared across all ${kind} dungeons`);
+    expect(activity.instruction).toContain(`1 claim every ${interval}`);
+    expect(activity.instruction).toContain(perDay);
+    expect(activity.instruction).toContain(`up to ${cap} stored`);
+    expect(activity.instruction).toMatch(/continuously.*not.*daily reset/i);
+    expect(activity.instruction).toContain("40 Odyle");
+    expect(activity.instruction).toMatch(/separate.*shared-server.*unclaimed/i);
+    expect(activity.instruction).toMatch(/actual available.*unknown/i);
+    expect(activity.instruction).not.toMatch(/per-dungeon bank|free entries|35.*week|28.*week/i);
+    expect(manifest.activities.find((value) => value.id === id)!.sourceIds).toContain("endgame-pve");
   });
 
   it.each([
@@ -80,7 +100,7 @@ describe("reviewed reset activity catalog", () => {
     const task = item(base, "nightmare");
     const report = { scopeKey: aionChecklistScope(ref, "character"), activityId: task.id, periodKey: task.periodKey, revision: 1, completedAt: now };
     expect(item(aionChecklist(ref, [report], now, true, profile), task.id).completed).toBe(true);
-    expect(item(aionChecklist(ref, [report], new Date("2026-10-24T07:00:00Z"), true, profile), task.id).completed).toBe(false);
+    expect(item(aionChecklist(ref, [report], new Date("2026-10-25T07:00:00Z"), true, profile), task.id).completed).toBe(false);
     expect(item(aionChecklist({ ...ref, characterId: "different-character" }, [report], now, true, profile), task.id).completed).toBe(false);
   });
 
@@ -95,7 +115,7 @@ describe("reviewed reset activity catalog", () => {
     expect(checklist(now, false).status).toBe("review-required");
     expect(checklist(now, false).items.every((value) => value.nextResetAt === null)).toBe(true);
     expect(checklist(new Date("2026-10-28T00:00:00Z")).status).toBe("review-required");
-    expect(checklist(new Date("2026-10-22T23:59:59Z")).status).toBe("review-required");
+    expect(checklist(new Date(Date.parse(manifest.reviewedAt) - 1)).status).toBe("review-required");
     expect(checklist(now, true, { ...ref, region: "nae" })).toMatchObject({ status: "unverified", items: [] });
     expect(aionChecklist(ref, [], new Date(NaN), true, profile)).toMatchObject({ status: "review-required", items: [] });
   });
@@ -217,11 +237,11 @@ describe("owned durable reset reports", () => {
     const a = await addAionCharacter("owner-a", ref);
     await setAionChecklist("owner-a", a.id, change(a.checklist!));
     const old = (await current(a.id)).checklist!;
-    vi.setSystemTime(new Date("2026-10-24T07:00:00Z"));
+    vi.setSystemTime(new Date("2026-10-25T07:00:00Z"));
     await expect(setAionChecklist("owner-a", a.id, change(old))).rejects.toThrow("has reset");
     const reset = (await current(a.id)).checklist!;
     expect(item(reset).completed).toBe(false);
-    expect(item(reset).periodKey).toBe("daily:2026-10-24T07:00:00.000Z");
+    expect(item(reset).periodKey).toBe("daily:2026-10-25T07:00:00.000Z");
   });
 
   it("keeps a weekly report over a daily reset and DST without changing the weekly UTC boundary", async () => {

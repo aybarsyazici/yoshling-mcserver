@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "2026.10.23.3",
-  "reviewedAt": "2026-10-23",
+  "version": "2026.10.24.1",
+  "reviewedAt": "2026-10-24",
   "expiresAt": "2026-10-28",
   "regions": [
     "eu",
@@ -66,8 +66,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/dungeons/shattered-arkanis",
       "fetchUrl": "https://aion2data.com/dungeons/shattered-arkanis",
-      "sha256": "d253d53e072eed855a2385061ee517801ad17696326eb8e289a1409bb1d9bb01",
-      "reviewedAt": "2026-10-23",
+      "sha256": "ef02eda201559892f54ee524270a1b11317267eb502d32fdec7352c1c4f4ae39",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
     },
@@ -77,8 +77,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/dungeons/urugugu-canyon",
       "fetchUrl": "https://aion2data.com/dungeons/urugugu-canyon",
-      "sha256": "f6e63d41013a58e6cecf5f1510c92dec44f47f3e3f753916665bcb79b5ba8cb3",
-      "reviewedAt": "2026-10-23",
+      "sha256": "d92aaf1ecf40811ef8c28f896a311c78d1aa79a073b71ac0812cbb07afa8267d",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
     },
@@ -88,8 +88,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/tools/succession",
       "fetchUrl": "https://aion2data.com/tools/succession",
-      "sha256": "aa68b66450f983b83e0d3c0bb6db21156fdf7c6852f71343756848352aed0e71",
-      "reviewedAt": "2026-10-23",
+      "sha256": "9b86531b87614716e15b1dfaaddd1ac60da90ffd741d38df07921ffc609bffcb",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Scoped to the cited mechanic. Client reference, not NC-authored documentation. White-board model excludes stale board availability and shop-limit claims."
     },
@@ -143,8 +143,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/dungeons/vakron-sky-island",
       "fetchUrl": "https://aion2data.com/dungeons/vakron-sky-island",
-      "sha256": "a0323406e3239447130beb2f4422b87d9d9d392290b10ed80790158f1b1379f6",
-      "reviewedAt": "2026-10-23",
+      "sha256": "54d6af722141b1ce2a2782fefd1b554a5c90b949db2a7893ec3fdb85dd0b3ff9",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
     },
@@ -165,8 +165,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/items/115030052-vakron-guard",
       "fetchUrl": "https://aion2data.com/items/115030052-vakron-guard",
-      "sha256": "0101f5e33f38a6cc47138e1844467bc6c79e1048cb39dd5002abc5ac9a3d2b96",
-      "reviewedAt": "2026-10-23",
+      "sha256": "845ecdd8e6ed056af856b91d7c3b04e460a22cf54e96ea1369fae7bf45087ab3",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
     },
@@ -176,8 +176,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/items/115030041-spiritforged-guard",
       "fetchUrl": "https://aion2data.com/items/115030041-spiritforged-guard",
-      "sha256": "fc3e6bdab51e40f9a8c6d130e6822548750a5c5571e4df13240856b0dbddae82",
-      "reviewedAt": "2026-10-23",
+      "sha256": "4c5cc959104d444b1444d35ccc172e0bec4d66a50303c1585af8869740f6f73b",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
     },
@@ -187,8 +187,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/dungeons/deus-research-base",
       "fetchUrl": "https://aion2data.com/dungeons/deus-research-base",
-      "sha256": "ac69bdd755b31fcfbf9c163fc4b97410e5e5d641a21f7f380f8b749b78fc0f34",
-      "reviewedAt": "2026-10-23",
+      "sha256": "7bd9d04e73f9a7c7b6f6981f16e6ee012b214420c3e472a14ebee45276700852",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
     },
@@ -198,8 +198,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/items/311030001-revelation-amulet",
       "fetchUrl": "https://aion2data.com/items/311030001-revelation-amulet",
-      "sha256": "064aeecc52c4fcf1e1fd5a5b47b53fde05d0cf1b2c6039cd82d921a9a5708c5a",
-      "reviewedAt": "2026-10-23",
+      "sha256": "814ff7dfa4dba04be8c47b96873b260266191f01f5a3a0c95f333ab72d3531ad",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
     },
@@ -209,8 +209,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/items/215240001-noble-belt",
       "fetchUrl": "https://aion2data.com/items/215240001-noble-belt",
-      "sha256": "2d53b3946ddd5c7d70428c88084023f2eec303faf85b4ebf192dfa85e7c17a03",
-      "reviewedAt": "2026-10-23",
+      "sha256": "2907e36fdfce15790313513ef51879ec1e7edf65dfb06cd5f5605876420c8a75",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Only the reviewed claim is used. Community strategy is not a proven DPS optimum; client references do not expose personal inventory, entries or affordability."
     },
@@ -231,8 +231,8 @@
       "kind": "client-data",
       "url": "https://aion2data.com/items/310330052-aulamus-ring",
       "fetchUrl": "https://aion2data.com/items/310330052-aulamus-ring",
-      "sha256": "6480606038d4390bbc535b8474e7cdc2b3a6156c3ca1b8589228046576286ae7",
-      "reviewedAt": "2026-10-23",
+      "sha256": "7fa59cb45d65c7af2c80f46ed2e4cd95174a8e918b89f195905052156c43b7fc",
+      "reviewedAt": "2026-10-24",
       "expiresAt": "2026-10-28",
       "notes": "Gladiator pool includes Overhead Slam +1 and Rending Blow +1. Multiple distinct skills were corroborated by an official same-item sample; duplicate-same-skill prohibition is a client-reference rule. Material acceptance remains an in-game check."
     }

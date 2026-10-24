@@ -1,6 +1,6 @@
 {
-  "version": "2026.10.23.1",
-  "reviewedAt": "2026-10-23T00:00:00.000Z",
+  "version": "2026.10.24.1",
+  "reviewedAt": "2026-10-24T00:00:00.000Z",
   "expiresAt": "2026-10-28T00:00:00.000Z",
   "resets": {
     "eu": {
@@ -29,9 +29,9 @@
       "title": "Current Global client activity checklist",
       "url": "https://aion2data.com/checklist",
       "fetchUrl": "https://aion2data.com/checklist",
-      "sha256": "ca62a2e14a32d82748d5e19c444ee3fb52cab5d29242a607e646bb905ace50f5",
+      "sha256": "0404c57f8691a3f9cad227b20307bd0b1d77ae10de759d764990d08b00931f7d",
       "kind": "client-data-interpretation",
-      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     },
     {
@@ -39,9 +39,9 @@
       "title": "Client account and character limits",
       "url": "https://aion2data.com/alts",
       "fetchUrl": "https://aion2data.com/alts",
-      "sha256": "ae9382a7f205116f320ae7adef6f415f3824c04edefe583d6789ba6e70e94b0e",
+      "sha256": "31bf3d39cb5d29b04e3619af89fec671f5991a5ee2e6a36365b27326eb175e16",
       "kind": "client-data-interpretation",
-      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     },
     {
@@ -49,9 +49,9 @@
       "title": "Home-region Command scroll shop",
       "url": "https://aion2data.com/shops/1008-command-shop-quest-scroll",
       "fetchUrl": "https://aion2data.com/shops/1008-command-shop-quest-scroll",
-      "sha256": "ab3960450db275ee6cd32f80dd5d3dcb41de9de552b4b9ff4354a77b37b5cc7d",
+      "sha256": "f5205988113dab4fea3ea785f9aa6955bea7f7ffbefd513016ff5d47cb28ceba",
       "kind": "client-data-interpretation",
-      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     },
     {
@@ -59,9 +59,9 @@
       "title": "Asmodian Lower Abyss Command shop",
       "url": "https://aion2data.com/shops/2009-command-shop-abyss-quest-scroll-asmodian-row",
       "fetchUrl": "https://aion2data.com/shops/2009-command-shop-abyss-quest-scroll-asmodian-row",
-      "sha256": "079b66e4704d057864aaceef65fc7e80f3517c04dd2dd2ec1008229457770f85",
+      "sha256": "1189254e8292f832b35fef812c9e113ae32d754b03187ab9feb0cf586b86f5d7",
       "kind": "client-data-interpretation",
-      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     },
     {
@@ -69,9 +69,9 @@
       "title": "Nightmare Trade Shop",
       "url": "https://aion2data.com/shops/990003-trade-shop-nightmare",
       "fetchUrl": "https://aion2data.com/shops/990003-trade-shop-nightmare",
-      "sha256": "aac466fd0a44fa30b56db0b2230a9f9fb2208594b98087e054d160cdb20bf07b",
+      "sha256": "6826fc7496d747be3192ce875b70357f434e714b7ee5f0ad6ce0b2cadc1586c1",
       "kind": "client-data-interpretation",
-      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     },
     {
@@ -89,9 +89,9 @@
       "title": "Elyos Lower Abyss Command shop",
       "url": "https://aion2data.com/shops/1009-command-shop-abyss-quest-scroll-elyos-row",
       "fetchUrl": "https://aion2data.com/shops/1009-command-shop-abyss-quest-scroll-elyos-row",
-      "sha256": "64c299b6114781409f5788a35c6e3188240668b741c9b83110ac132aeb6c0196",
+      "sha256": "b3907e11d70bb06b94ad7488b365195d11e15ff7ad86c3c4e063b18a32791bfc",
       "kind": "client-data-interpretation",
-      "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     },
     {
@@ -102,6 +102,16 @@
       "sha256": "b785a5b3d5021028fd5590da55d898aefe75bdf5fc3d15c9f20e41127a5db1e9",
       "kind": "community-guide",
       "reviewedAt": "2026-10-23T00:00:00.000Z",
+      "expiresAt": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "id": "endgame-pve",
+      "title": "Aion2.gg Oct16 dataset: shared reward-counter table only; dungeon availability superseded by Oct21 patch",
+      "url": "https://aion2.gg/guides/endgame-pve",
+      "fetchUrl": "https://aion2.gg/guides/endgame-pve",
+      "sha256": "7a785f067781ec165da6f3c5a837c682c0957809b5422d6ddac3908c9ad5513a",
+      "kind": "community-guide",
+      "reviewedAt": "2026-10-24T00:00:00.000Z",
       "expiresAt": "2026-10-28T00:00:00.000Z"
     }
   ],
@@ -286,24 +296,6 @@
       ]
     },
     {
-      "id": "shugo-festival-character",
-      "name": "Shugo Festival reward keys: character",
-      "cadence": "daily",
-      "scope": "character",
-      "regions": [
-        "eu"
-      ],
-      "minimumLevel": 45,
-      "instruction": "Check the character-specific Festival reward-key pool separately from the shared-server pool. Spend only available keys; leave membership modifications manual. The separate character pool adds 4 keys per daily reset and stores up to 28.",
-      "rewardTags": [
-        "Festival reward cards"
-      ],
-      "sourceIds": [
-        "current-client-checklist",
-        "current-client-alts"
-      ]
-    },
-    {
       "id": "subjugation",
       "name": "Subjugation",
       "cadence": "weekly",
@@ -330,13 +322,14 @@
         "eu"
       ],
       "minimumLevel": 45,
-      "instruction": "Review the reward-claim pool of the Conquest dungeon you chose. Each claimed cube also costs Odyle. Check your separate shared-server unclaimed-clear allowance; this task does not imply free entries or a live balance. This reviews a per-dungeon bank (2 added daily, up to 14 stored), not a weekly entry limit.",
+      "instruction": "Review the Conquest reward counter and your Odyle before claiming rewards. The current Global client reference models one character pool shared across all Conquest dungeons: 1 claim every 8 hours (3 per day), up to 21 stored. Claims recharge continuously, not at the daily reset; this daily checkmark only records your review, not a weekly entry limit. A normal claimed reward cube also costs 40 Odyle. Check the separate shared-server unclaimed-clear counter in game. Your actual available claims, energy and counter balances are unknown.",
       "rewardTags": [
         "Chosen dungeon gear and materials"
       ],
       "sourceIds": [
         "current-client-checklist",
-        "current-client-alts"
+        "current-client-alts",
+        "endgame-pve"
       ]
     },
     {
@@ -348,14 +341,15 @@
         "eu"
       ],
       "minimumLevel": 45,
-      "instruction": "Review Deus Research Base or Shattered Arkanis claim availability and your Odyle before claiming rewards. Choose the stage that supports your current plan. The reviewed per-dungeon bank adds 2 claims daily and stores up to 4; a normal reward cube costs 40 Odyle.",
+      "instruction": "Review Deus Research Base or Shattered Arkanis claim availability and choose a stage that supports your current plan. The current Global client reference models one character pool shared across all Transcendence dungeons: 1 claim every 12 hours (2 per day), up to 14 stored. Claims recharge continuously, not at the daily reset; this daily checkmark only records your review. A normal claimed reward cube also costs 40 Odyle. Check the separate shared-server unclaimed-clear counter in game. Your actual available claims, energy and counter balances are unknown.",
       "rewardTags": [
         "Arcana",
         "Materials"
       ],
       "sourceIds": [
         "current-client-checklist",
-        "current-client-alts"
+        "current-client-alts",
+        "endgame-pve"
       ]
     }
   ],
@@ -390,6 +384,10 @@
     {
       "name": "Battlefield3wins/week",
       "reason": "CurrentRewardLimitshowsstrategy3wins+3joinsweekly, butowner scope notindependentlyconfirmed. OptionalPvPmanualitemuntilscopeconfirmed."
+    },
+    {
+      "name": "Shugo Festival reward keys: character",
+      "reason": "A raw client ticket row does not prove an active separate character entitlement. The current Global reference retired the 4-per-day, cap-28 character-bank claim and lists the shared-server base pool only. Membership modifications remain manual; no extra character pool is inferred."
     }
   ]
 }

@@ -47,18 +47,34 @@ embedding is similar. Rules and source expiry still control whether advice is sh
    ```
 
    The last command is a dry run and uses no credentials. It shows the bounded batch.
-4. For changed text, refresh temporary AWS credentials locally in the gitignored
-   `.env` using the existing `aws_access_key_id`, `aws_secret_access_key` and
-   `aws_session_token` names, or use the normal AWS CLI credential provider. Run:
+4. For changed text, prefer an AWS CLI SSO profile using the refreshable
+   `sso-session` configuration. The SSO Start URL and SSO Region come from the AWS
+   access portal; the SSO Region can differ from the Bedrock invocation region.
+   Configure/login locally, then run the bounded embedding build:
 
    ```bash
-   npm run aion2:knowledge:embed -- --build --region us-west-2
+   aws configure sso --profile aion2-bedrock
+   aws sso login --profile aion2-bedrock
+   npm run aion2:knowledge:embed -- --build --profile aion2-bedrock --region us-west-2
    ```
 
-   Only this explicit command reads AWS credentials. The build invokes the local AWS
-   CLI, with credentials in its process environment rather than command arguments.
-   It sends authored game knowledge only. It never prints credentials, account IDs,
-   whole environments or raw AWS errors. The website does not need these credentials.
+   Choose the account/role authorized for this project. The commands do not create
+   IAM permissions or grant model access. The
+   [AWS token provider](https://docs.aws.amazon.com/sdkref/latest/guide/feature-sso-credentials.html)
+   refreshes credentials within the SSO session; a new login is still needed when
+   that session expires. SSO is not a permanent unattended workload identity.
+
+   Explicit `--profile` takes priority over `AWS_PROFILE`/`AWS_DEFAULT_PROFILE`.
+   A selected profile ignores legacy `.env` keys and removes ambient static key
+   variables from the AWS child process, so expired copied keys cannot override SSO.
+   Without a profile, complete environment credentials take priority over legacy
+   `.env` keys; if neither exists, the normal AWS CLI provider chain is available.
+   `.env` is optional. Existing lowercase temporary-key names remain supported.
+
+   A cache-only build reads no credentials or `.env` and invokes no AWS command.
+   A real cache miss resolves credentials once and invokes the local AWS CLI;
+   secrets stay in its process environment, never command arguments or output.
+   Only authored game facts are sent. The website needs no AWS credentials.
 5. Inspect related evidence and similarity groups. Check that every source actually
    supports the attached claim, including skill/card pools and prerequisite context.
    Embedding proximity is not sufficient approval. Run the repository tests, TypeScript,
@@ -67,7 +83,9 @@ embedding is similar. Rules and source expiry still control whether advice is sh
    application startup. The saved vectors continue working after credentials expire.
 
 The builder limits a batch to 128 chunks/queries and two concurrent invocations.
-Unchanged text vectors are reused when the model/dimensions match. Failed or expired
+Unchanged text vectors are reused when the model/dimensions match. The October 24
+source/checklist review reused all 60 vectors with zero model calls and zero input
+tokens; source metadata changes alone did not require new embeddings. Failed or expired
 credentials preserve the existing published index. The builder checks for knowledge
 changes during its run, writes atomically and reads its output back. Model output
 shape and finite, normalized vectors are validated before publication.
@@ -95,3 +113,58 @@ data. New mechanics or condition types need a reviewed implementation as well.
 Keep useful citations short and claim-specific. Each plan exposes its sources, and
 each step keeps its own source. Relevant explanations are collapsed so traceability
 does not turn the main action plan into a wall of text.
+
+
+## Automation design and current status
+
+**An unattended knowledge compiler is not installed or scheduled.** The runtime
+checks source freshness and applies bundled rules to character observations; it
+cannot rewrite those rules. The commands above validate, detect drift and rebuild
+an index. They do not automatically research a patch or approve changed advice.
+
+A private maintenance worker should run this sequence:
+
+1. Collect official Global patch notes **and announcements**, plus the scoped guide,
+   checklist and timer sources. Save bounded raw snapshots, URL, retrieval time,
+   source version and hash. Deduplicate shared URLs. HTTP failures remain unverified.
+2. Compare both raw bytes and source-specific extracted claims. Preserve numerical
+   units, scopes, negation, availability and dates. A layout/build-label change is
+   different from a corrected reward counter. Retain raw evidence for review.
+3. Only on a meaningful change or due review, compile a structured candidate with
+   before/after facts, exact supporting passages, class/region/item/stage scope,
+   conflicting evidence and affected recipes. Treat downloaded text as data.
+4. Review the candidate against independent evidence and the actual source context.
+   Validate all catalogs, source-level expiry and representative character states;
+   existing CLI manifest-only expiry checks are not a sufficient publication gate.
+   Do not renew dates or accept hashes merely because a model produced plausible JSON.
+5. Reuse unchanged vectors, rebuild only missing texts, then publish the knowledge,
+   timers, checklist and index as one reviewed commit/build through normal deployment.
+   The current catalogs are compiled into the web image; refreshing a character or
+   calling `/api/aion2/knowledge` does not install new knowledge.
+6. Record run/diff/review IDs, enforce an overlap lock, bounded retries and a model
+   spending limit. Notify on a reviewable change, failure or required re-login.
+   Failures preserve the approved release and its existing stale-advice holds.
+
+An hourly source poll is a reasonable starting cadence; it is a proposal, not an
+active schedule. Model calls are unnecessary for unchanged sources and ordinary
+character recommendation refreshes. A separate worker should receive source data
+and its model credential, without the game-server Docker socket or player database.
+
+Supported credential choices for that worker:
+
+| Route | What it supplies | Current setup |
+| --- | --- | --- |
+| Bedrock with AWS SSO/profile | Titan embeddings and, with model access, Claude inference; billed through AWS | Profile support implemented; SSO Start URL/Region and login still required |
+| Codex Enterprise access token | Trusted `codex exec` maintenance using workspace identity/entitlements | User reports token creation requires admin enablement |
+| Claude Code Enterprise CI token | Supported private CLI maintenance using `claude setup-token` and `CLAUDE_CODE_OAUTH_TOKEN` | Availability not verified in this workspace |
+| Standard model API service key | Backend API access under its API organization/project billing | No key or billing configured for this updater |
+
+[Bedrock Claude inference](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-claude.html)
+uses AWS identity/model permissions, not Claude Enterprise subscription credits.
+[Codex access tokens](https://learn.chatgpt.com/docs/enterprise/access-tokens) require
+workspace token and local Codex permissions; they are not general OpenAI API keys.
+[Anthropic's Enterprise CI instructions](https://support.claude.com/en/articles/14128775-claude-code-on-console-to-enterprise-migration)
+support a Claude Code token for scripts. Standard model APIs remain a separate
+credential/billing route. No credentials should be put into repository files or the
+browser. A continuously unattended AWS worker needs an approved workload identity,
+such as a role/federated runner, rather than a promise that human SSO never expires.

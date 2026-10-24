@@ -3,6 +3,16 @@ import timerData from "@/data/aion2/timers.json";
 import { aionTimers } from "@/lib/aion2-timers";
 import type { AionRegion } from "@/lib/aion2-types";
 
+// Calendar fixtures intentionally exercise Oct23 and the DST weekend. Give only
+// this test copy a matching review window; production retains its actual review.
+vi.mock("@/data/aion2/timers.json", async (original) => {
+  const imported = await original<{ default: typeof import("@/data/aion2/timers.json") }>();
+  const data = structuredClone(imported.default);
+  data.reviewedAt = "2026-10-23";
+  for (const source of data.sources) source.reviewedAt = "2026-10-23";
+  return { default: data };
+});
+
 const original = structuredClone(timerData);
 function timer(id: string, iso: string, current = true, region: AionRegion = "eu") {
   const value = aionTimers(region, new Date(iso), current).find((event) => event.id === id);
