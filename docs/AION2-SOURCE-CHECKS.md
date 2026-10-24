@@ -83,3 +83,20 @@ interaction or inspect the earlier web process's latched state.
 The metadata-only index rebuild reused all 96 vectors with zero model calls or
 input tokens. No game fact, progression instruction, timer, checklist or gear
 catalog entry changed, and the October 28 review expiry remains unchanged.
+
+### Production rollout
+
+Commit `9f5debf` was pushed and deployed through
+`scripts/deploy.sh --service web --verify '2026.10.24.3'`. Web image
+`sha256:d3cf8a82cbd38f6308b2bb9804e6f1cf9009c10af096dc4ba2c5c72df7f46691`
+started at 10:58:58 UTC. The new version, scoped-source implementation and gear
+status labels were read back from the running built files.
+
+At 10:59 UTC, the post-deployment isolated runtime probe matched all 51 requests
+in 3.23 seconds and returned current knowledge, a valid current 23-row gear report
+and three progression plans. The native source CLI inside the running container
+also passed all four catalogs. Anonymous live HTTP checks returned login 200,
+helper 307 to login and protected APIs 401 with private/no-store caching. All game
+container IDs, image IDs, states and start times matched the pre-deploy baseline.
+No migration, account authorization or game lifecycle change was made. Signed-in
+browser interaction remains a verification limit.

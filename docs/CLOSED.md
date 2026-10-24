@@ -1180,3 +1180,30 @@ Signed-in visual verification was unavailable because the browser URL policy
 refused the localhost preview. Detailed scope, model review disposition, public
 probe, image identity and verification limits:
 [AION2-GEAR-PRIORITIES.md](AION2-GEAR-PRIORITIES.md).
+
+## 2026-10-24 — False Aion source-change hold
+
+Reproduced the live site's hold after earlier source probes passed. Aion2.gg's
+Overhead Slam URL intermittently returned two equally sized pages with different
+Next.js transport record IDs/order. The complete skill main content and all 62
+resolved data records were identical. Raw whole-page hashing falsely required a
+new guide review.
+
+The reviewed `2026.10.24.3` catalog opts only that exact URL into hashing its
+complete inner main HTML. Other sources keep raw-byte fingerprints. Unsupported
+or malformed scoped content immediately withholds guidance; real changes remain
+latched. Known official patch-feed changes now latch before unrelated downloads,
+so partial failures cannot leave a known new patch marked current. Gear warnings
+also preserve their actual hold reason and distinguish missing reports.
+
+All 3,939 tests, TypeScript, build/artifact verification and lint passed with the
+existing warnings. Five deliberately broken protections produced failures and
+were restored. Both actual response variants matched the reviewed content hash.
+The metadata-only index rebuild reused all 96 vectors without model calls.
+
+Commit `9f5debf` was deployed. The running image contained the new implementation;
+post-deploy source CLI and 51-request runtime checks passed, producing current
+knowledge, 23 gear entries and three plans for the example. Authentication/cache
+HTTP checks passed and all game container metadata remained unchanged. Signed-in
+browser interaction was not verified. Evidence, scope and image identity:
+[AION2-SOURCE-CHECKS.md](AION2-SOURCE-CHECKS.md).
